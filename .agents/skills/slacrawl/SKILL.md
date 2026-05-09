@@ -1,6 +1,6 @@
 ---
 name: slacrawl
-description: Use for local Slack archive search, desktop/API sync, threads/DMs, and Slacrawl repo work.
+description: "Slack archive: search, sync, threads/DMs, Slacrawl repo work."
 ---
 
 # Slacrawl
