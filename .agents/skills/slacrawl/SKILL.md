@@ -44,6 +44,10 @@ Use `--full` only for deliberate historical backfills.
 3. Prefer CLI search/messages for slices; use read-only SQL for exact counts.
 4. Report workspace/channel names, date spans, counts, and token/source limits.
 
+Use root `slacrawl --help` for command list. Some subcommand help exits `1`
+after printing usage. `slacrawl search` has no `--limit`; use `messages
+--limit` or SQL for bounded samples.
+
 Common commands:
 
 ```bash
@@ -65,5 +69,5 @@ Use a small CLI smoke such as:
 
 ```bash
 slacrawl doctor
-slacrawl search test --limit 5
+slacrawl search test
 ```
