@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/golang/snappy v1.0.0
-	github.com/slack-go/slack v0.23.0
+	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0
 	golang.org/x/text v0.36.0
