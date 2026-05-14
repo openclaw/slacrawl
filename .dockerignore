@@ -1,0 +1,10 @@
+.git
+.github
+.DS_Store
+.env
+*.out
+*.test
+bin/
+dist/
+slacrawl
+screenshot.png

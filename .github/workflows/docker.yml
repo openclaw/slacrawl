@@ -1,0 +1,29 @@
+name: docker
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build image
+        run: docker build --pull -t slacrawl:ci .
+
+      - name: Smoke test image
+        run: |
+          set -euo pipefail
+          output="$(docker run --rm slacrawl:ci --help 2>&1 || true)"
+          printf '%s\n' "$output"
+          printf '%s' "$output" | grep -q "Usage of slacrawl:"
+          docker run --rm --entrypoint git slacrawl:ci --version
+          docker run --rm --entrypoint node slacrawl:ci --version
+          docker run --rm --entrypoint npm slacrawl:ci --version

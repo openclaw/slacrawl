@@ -114,6 +114,19 @@ go build -o bin/slacrawl ./cmd/slacrawl
 </details>
 
 <details>
+<summary>Docker</summary>
+
+```bash
+docker build -t slacrawl .
+docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/.slacrawl:/data" slacrawl doctor
+docker run --rm -e SLACK_BOT_TOKEN -e SLACK_APP_TOKEN -v "$PWD/.slacrawl:/data" slacrawl tail
+```
+
+The image stores config, SQLite data, cache, and Git snapshot state under `/data`. Desktop/wiretap mode needs an explicit host mount to the Slack Desktop data directory.
+
+</details>
+
+<details>
 <summary>Run without building a binary</summary>
 
 ```bash

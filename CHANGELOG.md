@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Docker: add a local image with `/data` persistence, Node support for desktop decoding, and CI smoke coverage.
 - Moved top-level CLI parsing and the `search`, `messages`, and `sql` read commands onto Kong while preserving existing output and config behavior.
 
 ### Fixes
