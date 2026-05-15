@@ -360,7 +360,7 @@ func toStoreMessage(workspaceID, channelID string, raw map[string]any, now time.
 	if ts == "" {
 		return store.Message{}, nil, false
 	}
-	text := stringValue(raw["text"])
+	text := rawStringValue(raw["text"])
 	subtype := stringValue(raw["subtype"])
 	if subtype == "" {
 		if messageType := stringValue(raw["type"]); messageType != "" && messageType != "message" {
@@ -493,6 +493,14 @@ func stringValue(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
+}
+
+func rawStringValue(value any) string {
+	s, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return s
 }
 
 func intValue(value any) int {

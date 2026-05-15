@@ -31,6 +31,7 @@ func TestImportCommandJSON(t *testing.T) {
 		"general/2026-01-01.json": `[
 			{"type":"message","user":"U1","text":"keep-existing","ts":"1735689600.000001"},
 			{"type":"message","user":"U1","text":"new-message","ts":"1735689600.000002"},
+			{"type":"message","user":"U1","text":"  indented\n","ts":"1735689600.000006"},
 			{"type":"message","user":"U1","text":"","ts":"1735689600.000003","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"block only payload"}}],"attachments":[{"title":"attachment title","text":"attachment body"}]},
 			{"type":"message","user":"U1","text":"","ts":"1735689600.000004","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"supported block before unknown"}},{"type":"actions","elements":[{"type":"unknown_new","text":{"type":"plain_text","text":"unknown action label"}}]}]},
 			{"type":"message","user":"U1","text":"","ts":"1735689600.000005","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"section with accessory"},"accessory":{"type":"icon_button","text":{"type":"plain_text","text":"Delete response"},"accessibility_label":"Remove response","value":"delete","url":"https://hidden.example/delete","confirm":{"title":{"type":"plain_text","text":"Hidden confirm title"},"text":{"type":"mrkdwn","text":"Hidden confirm body"},"confirm":{"type":"plain_text","text":"Hidden yes"},"deny":{"type":"plain_text","text":"Hidden no"}}}}]}
@@ -64,7 +65,7 @@ func TestImportCommandJSON(t *testing.T) {
 	require.Equal(t, "T123", report.Workspace)
 	require.Equal(t, 1, report.Users)
 	require.Equal(t, 1, report.Channels)
-	require.Equal(t, 4, report.Messages)
+	require.Equal(t, 5, report.Messages)
 	require.Equal(t, 1, report.Skipped)
 	require.False(t, report.DryRun)
 
@@ -78,7 +79,7 @@ from messages
 where channel_id = 'C1'
 order by ts asc`)
 	require.NoError(t, err)
-	require.Len(t, rows, 5)
+	require.Len(t, rows, 6)
 	require.Equal(t, "api-bot", rows[0]["source_name"])
 	require.Equal(t, int64(2), rows[0]["source_rank"])
 	require.Equal(t, "slack-export", rows[1]["source_name"])
@@ -94,6 +95,7 @@ order by ts asc`)
 	require.NotContains(t, rows[4]["normalized_text"], "delete")
 	require.NotContains(t, rows[4]["normalized_text"], "https://hidden.example/delete")
 	require.NotContains(t, rows[4]["normalized_text"], "Hidden confirm")
+	require.Equal(t, "  indented\n", rows[5]["text"])
 }
 
 func TestImportRejectsSameChannelTimestampInDifferentWorkspaces(t *testing.T) {

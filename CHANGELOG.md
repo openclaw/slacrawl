@@ -17,6 +17,7 @@
 - Digest reports now exclude messages after the advertised `until` timestamp.
 - Digest totals now count active authors per workspace when aggregating multiple workspaces.
 - Slack export imports now reject cross-workspace channel/timestamp collisions instead of silently skipping or overwriting messages.
+- Slack export imports now preserve leading and trailing whitespace in message text.
 - Message search indexing now includes visible Slack block and attachment text.
 - Share imports now validate manifest tables, shard paths, columns, and row counts before replacing snapshots.
 - Git-share pulls now preserve local commits instead of resetting the branch to `origin`.
