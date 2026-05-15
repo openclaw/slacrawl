@@ -16,6 +16,7 @@
 - `analytics quiet` and `analytics trends` now reject unexpected positional arguments instead of ignoring them.
 - Digest reports now exclude messages after the advertised `until` timestamp.
 - Digest totals now count active authors per workspace when aggregating multiple workspaces.
+- Desktop draft ingest now preserves the workspace and user from Slack's local draft keys.
 - Slack export directory imports now reject traversal-style channel names before reading message files.
 - Slack export imports now reject cross-workspace channel/timestamp collisions instead of silently skipping or overwriting messages.
 - Slack export imports now preserve leading and trailing whitespace in message text.

@@ -118,6 +118,8 @@ type DraftsState struct {
 }
 
 type Draft struct {
+	WorkspaceID    string             `json:"workspace_id,omitempty"`
+	UserID         string             `json:"user_id,omitempty"`
 	ID             string             `json:"id"`
 	ClientDraftID  string             `json:"client_draft_id"`
 	IsFromComposer bool               `json:"is_from_composer"`
@@ -389,7 +391,10 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 			continue
 		}
 		channelID := draft.Destinations[0].ChannelID
-		workspaceID := workspaceForDraft(extracted.LocalConfig.Teams, channelID, draft)
+		workspaceID := draft.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = workspaceForDraft(extracted.LocalConfig.Teams, channelID, draft)
+		}
 		if workspaceID == "" {
 			workspaceID = firstWorkspaceID(extracted.LocalConfig.Teams)
 		}
@@ -410,7 +415,7 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 			ChannelID:      channelID,
 			TS:             draftTS(draft),
 			WorkspaceID:    workspaceID,
-			UserID:         extracted.LocalConfig.Teams[workspaceID].UserID,
+			UserID:         fallback(draft.UserID, extracted.LocalConfig.Teams[workspaceID].UserID),
 			Subtype:        "desktop_draft",
 			ClientMsgID:    draft.ClientDraftID,
 			ThreadTS:       draft.Destinations[0].ThreadTS,
@@ -613,6 +618,10 @@ func ParseLocalStorage(path string) (localStorageData, error) {
 				configData.Teams = payload.Teams
 			}
 		case strings.Contains(key, "persist-v1::") && strings.HasSuffix(key, "::drafts"):
+			workspaceID, userID, ok := persistContext(key)
+			if !ok {
+				continue
+			}
 			var payload DraftsState
 			if err := json.Unmarshal(value, &payload); err == nil {
 				for id, draft := range payload.UnifiedDrafts {
@@ -622,6 +631,8 @@ func ParseLocalStorage(path string) (localStorageData, error) {
 					if draft.ID == "" {
 						draft.ID = id
 					}
+					draft.WorkspaceID = workspaceID
+					draft.UserID = userID
 					drafts = append(drafts, draft)
 				}
 			}

@@ -51,6 +51,8 @@ func TestParseLocalStorage(t *testing.T) {
 	require.Equal(t, 2, data.Summary.ExpandableCount)
 	require.Equal(t, "Team One", data.LocalConfig.Teams["T111"].Name)
 	require.Equal(t, "hello world", draftText(data.Drafts[0]))
+	require.Equal(t, "T111", data.Drafts[0].WorkspaceID)
+	require.Equal(t, "U111", data.Drafts[0].UserID)
 	require.Len(t, data.ReadMarkers, 1)
 	require.Equal(t, "C111", data.ReadMarkers[0].ChannelID)
 	require.Len(t, data.Statuses, 1)
@@ -117,6 +119,30 @@ func TestIngestDesktopState(t *testing.T) {
 	expandableCount, err := st.GetSyncState(context.Background(), sourceName, "expandables", "T111:U111")
 	require.NoError(t, err)
 	require.Equal(t, "1", expandableCount)
+}
+
+func TestIngestDesktopDraftUsesPersistWorkspace(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
+
+	localDB, err := leveldb.OpenFile(filepath.Join(root, "Local Storage", "leveldb"), nil)
+	require.NoError(t, err)
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.comlocalConfig_v2"), []byte(`{"teams":{"T111":{"id":"T111","name":"Team One","domain":"team-one","user_id":"U111","token":"xoxc-secret"}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T222::U222::drafts"), []byte(`{"unifiedDrafts":{"draft-1":{"id":"draft-1","client_draft_id":"draft-1","destinations":[{"channel_id":"C111"}],"ops":[{"insert":"draft body"}],"last_updated_ts":1710000001.000200}}}`), nil))
+	require.NoError(t, localDB.Close())
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	_, err = Ingest(context.Background(), st, root)
+	require.NoError(t, err)
+
+	messages, err := st.Messages(context.Background(), "", "C111", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "T222", messages[0].WorkspaceID)
+	require.Equal(t, "U222", messages[0].UserID)
 }
 
 func TestExtractIndexedDBStates(t *testing.T) {
