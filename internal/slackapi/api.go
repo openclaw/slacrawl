@@ -445,10 +445,13 @@ func (c *Client) handleSocketModeEvent(ctx context.Context, st *store.Store, wor
 		if !ok {
 			return nil
 		}
+		if err := c.HandleEventsAPIEvent(ctx, st, workspaceID, eventsAPIEvent); err != nil {
+			return err
+		}
 		if event.Request != nil {
 			socketClient.Ack(*event.Request)
 		}
-		return c.HandleEventsAPIEvent(ctx, st, workspaceID, eventsAPIEvent)
+		return nil
 	default:
 		return nil
 	}

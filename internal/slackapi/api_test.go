@@ -454,6 +454,40 @@ func TestHandleSocketModeEventAcksAndPersists(t *testing.T) {
 	require.Equal(t, "tail message", rows[0].Text)
 }
 
+func TestHandleSocketModeEventDoesNotAckOnStoreError(t *testing.T) {
+	st := mustStore(t)
+	require.NoError(t, st.Close())
+
+	ctx := context.Background()
+	client := New(config.Tokens{Bot: "xoxb-test", App: "xapp-test"})
+
+	rawMessage := []byte(`{
+	  "token":"ignored",
+	  "team_id":"T123",
+	  "api_app_id":"A123",
+	  "type":"event_callback",
+	  "event":{
+	    "type":"message",
+	    "channel":"C123",
+	    "user":"U123",
+	    "text":"tail message",
+	    "ts":"1710000005.000100",
+	    "event_ts":"1710000005.000100"
+	  }
+	}`)
+	event, err := slackevents.ParseEvent(rawMessage, slackevents.OptionNoVerifyToken())
+	require.NoError(t, err)
+
+	socket := &fakeSocketMode{events: make(chan socketmode.Event)}
+	err = client.handleSocketModeEvent(ctx, st, "T123", socket, socketmode.Event{
+		Type:    socketmode.EventTypeEventsAPI,
+		Data:    event,
+		Request: &socketmode.Request{EnvelopeID: "1", Type: "events_api"},
+	})
+	require.Error(t, err)
+	require.Equal(t, 0, socket.acks)
+}
+
 func TestRepairWorkspaceReconcilesIncrementalHistory(t *testing.T) {
 	server := newRepairSlackServer(t)
 	defer server.Close()
