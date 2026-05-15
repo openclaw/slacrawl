@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 pragma foreign_keys = on;
@@ -86,6 +86,40 @@ create index if not exists idx_messages_workspace_ts on messages(workspace_id, t
 create index if not exists idx_messages_workspace_channel_ts on messages(workspace_id, channel_id, ts desc);
 create index if not exists idx_messages_workspace_user_ts on messages(workspace_id, user_id, ts desc);
 create index if not exists idx_messages_key_expr on messages((channel_id || '|' || ts));
+
+create table if not exists message_files (
+  workspace_id text not null,
+  channel_id text not null,
+  ts text not null,
+  file_id text not null,
+  user_id text,
+  name text not null default '',
+  title text not null default '',
+  mimetype text,
+  filetype text,
+  pretty_type text,
+  mode text,
+  size integer not null default 0,
+  url_private text,
+  url_private_download text,
+  permalink text,
+  is_public integer not null default 0,
+  plain_text text not null default '',
+  preview_plain_text text not null default '',
+  media_path text,
+  content_sha256 text,
+  content_size integer not null default 0,
+  fetched_at text,
+  fetch_status text not null default '',
+  fetch_error text not null default '',
+  raw_json text not null,
+  updated_at text not null,
+  primary key (channel_id, ts, file_id)
+);
+
+create index if not exists idx_message_files_workspace_ts on message_files(workspace_id, ts desc);
+create index if not exists idx_message_files_file_id on message_files(file_id);
+create index if not exists idx_message_files_name on message_files(name);
 
 create table if not exists message_events (
   id integer primary key autoincrement,
@@ -190,12 +224,42 @@ type Message struct {
 	SourceName     string
 	RawJSON        string
 	UpdatedAt      time.Time
+	Files          []MessageFile
 }
 
 type Mention struct {
 	Type        string
 	TargetID    string
 	DisplayText string
+}
+
+type MessageFile struct {
+	WorkspaceID        string
+	ChannelID          string
+	TS                 string
+	FileID             string
+	UserID             string
+	Name               string
+	Title              string
+	Mimetype           string
+	Filetype           string
+	PrettyType         string
+	Mode               string
+	Size               int64
+	URLPrivate         string
+	URLPrivateDownload string
+	Permalink          string
+	IsPublic           bool
+	PlainText          string
+	PreviewPlainText   string
+	MediaPath          string
+	ContentSHA256      string
+	ContentSize        int64
+	FetchedAt          string
+	FetchStatus        string
+	FetchError         string
+	RawJSON            string
+	UpdatedAt          time.Time
 }
 
 type Status struct {
@@ -241,6 +305,59 @@ type ChannelRow struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind"`
+}
+
+type FileListOptions struct {
+	WorkspaceID string
+	ChannelID   string
+	UserID      string
+	FileID      string
+	Filename    string
+	ContentType string
+	Since       time.Time
+	Before      time.Time
+	Limit       int
+	MissingOnly bool
+}
+
+type FileRow struct {
+	WorkspaceID        string    `json:"workspace_id"`
+	ChannelID          string    `json:"channel_id"`
+	TS                 string    `json:"ts"`
+	FileID             string    `json:"file_id"`
+	UserID             string    `json:"user_id,omitempty"`
+	Name               string    `json:"name"`
+	Title              string    `json:"title,omitempty"`
+	Mimetype           string    `json:"mimetype,omitempty"`
+	Filetype           string    `json:"filetype,omitempty"`
+	PrettyType         string    `json:"pretty_type,omitempty"`
+	Mode               string    `json:"mode,omitempty"`
+	Size               int64     `json:"size"`
+	URLPrivate         string    `json:"url_private,omitempty"`
+	URLPrivateDownload string    `json:"url_private_download,omitempty"`
+	Permalink          string    `json:"permalink,omitempty"`
+	IsPublic           bool      `json:"is_public"`
+	PlainText          string    `json:"plain_text,omitempty"`
+	PreviewPlainText   string    `json:"preview_plain_text,omitempty"`
+	MediaPath          string    `json:"media_path,omitempty"`
+	ContentSHA256      string    `json:"content_sha256,omitempty"`
+	ContentSize        int64     `json:"content_size,omitempty"`
+	FetchedAt          time.Time `json:"fetched_at,omitzero"`
+	FetchStatus        string    `json:"fetch_status,omitempty"`
+	FetchError         string    `json:"fetch_error,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type FileMediaUpdate struct {
+	ChannelID     string
+	TS            string
+	FileID        string
+	MediaPath     string
+	ContentSHA256 string
+	ContentSize   int64
+	FetchedAt     string
+	FetchStatus   string
+	FetchError    string
 }
 
 type ChannelSyncCursor struct {
@@ -397,10 +514,58 @@ func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []M
 		}
 	}
 
+	filesForSearch := message.Files
+	if message.Files != nil {
+		existingMedia, err := existingFileMedia(ctx, qtx, message.ChannelID, message.TS)
+		if err != nil {
+			return err
+		}
+		if err := qtx.DeleteMessageFiles(ctx, storedb.DeleteMessageFilesParams{ChannelID: message.ChannelID, Ts: message.TS}); err != nil {
+			return err
+		}
+		for i, file := range message.Files {
+			if file.WorkspaceID == "" {
+				file.WorkspaceID = message.WorkspaceID
+			}
+			if file.ChannelID == "" {
+				file.ChannelID = message.ChannelID
+			}
+			if file.TS == "" {
+				file.TS = message.TS
+			}
+			if file.UserID == "" {
+				file.UserID = message.UserID
+			}
+			if file.UpdatedAt.IsZero() {
+				file.UpdatedAt = message.UpdatedAt
+			}
+			if media, ok := existingMedia[file.FileID]; ok && file.MediaPath == "" {
+				file.MediaPath = media.MediaPath
+				file.ContentSHA256 = media.ContentSHA256
+				file.ContentSize = media.ContentSize
+				file.FetchedAt = media.FetchedAt
+				file.FetchStatus = media.FetchStatus
+				file.FetchError = media.FetchError
+			}
+			message.Files[i] = file
+			if err := qtx.InsertMessageFile(ctx, insertMessageFileParams(file)); err != nil {
+				return err
+			}
+		}
+		filesForSearch = message.Files
+	} else {
+		filesForSearch, err = existingFilesForSearch(ctx, tx, message.ChannelID, message.TS)
+		if err != nil {
+			return err
+		}
+	}
+
 	if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
 		return err
 	}
-	if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: message.NormalizedText}); err != nil {
+	searchMessage := message
+	searchMessage.Files = filesForSearch
+	if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
 		return err
 	}
 
@@ -416,6 +581,78 @@ func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []M
 	}
 
 	return tx.Commit()
+}
+
+func existingFileMedia(ctx context.Context, qtx *storedb.Queries, channelID, ts string) (map[string]MessageFile, error) {
+	rows, err := qtx.ListExistingFileMedia(ctx, storedb.ListExistingFileMediaParams{ChannelID: channelID, Ts: ts})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]MessageFile{}
+	for _, row := range rows {
+		out[row.FileID] = MessageFile{
+			FileID:        row.FileID,
+			MediaPath:     row.MediaPath,
+			ContentSHA256: row.ContentSha256,
+			ContentSize:   row.ContentSize,
+			FetchedAt:     row.FetchedAt,
+			FetchStatus:   row.FetchStatus,
+			FetchError:    row.FetchError,
+		}
+	}
+	return out, nil
+}
+
+func existingFilesForSearch(ctx context.Context, tx *sql.Tx, channelID, ts string) ([]MessageFile, error) {
+	rows, err := tx.QueryContext(ctx, `
+select file_id, name, title, plain_text, preview_plain_text
+from message_files
+where channel_id = ? and ts = ?
+`, channelID, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	files := []MessageFile{}
+	for rows.Next() {
+		var file MessageFile
+		if err := rows.Scan(&file.FileID, &file.Name, &file.Title, &file.PlainText, &file.PreviewPlainText); err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
+}
+
+func insertMessageFileParams(file MessageFile) storedb.InsertMessageFileParams {
+	return storedb.InsertMessageFileParams{
+		WorkspaceID:        file.WorkspaceID,
+		ChannelID:          file.ChannelID,
+		Ts:                 file.TS,
+		FileID:             file.FileID,
+		UserID:             dbText(file.UserID),
+		Name:               file.Name,
+		Title:              file.Title,
+		Mimetype:           dbText(file.Mimetype),
+		Filetype:           dbText(file.Filetype),
+		PrettyType:         dbText(file.PrettyType),
+		Mode:               dbText(file.Mode),
+		Size:               file.Size,
+		UrlPrivate:         dbText(file.URLPrivate),
+		UrlPrivateDownload: dbText(file.URLPrivateDownload),
+		Permalink:          dbText(file.Permalink),
+		IsPublic:           boolInt(file.IsPublic),
+		PlainText:          file.PlainText,
+		PreviewPlainText:   file.PreviewPlainText,
+		MediaPath:          dbText(file.MediaPath),
+		ContentSha256:      dbText(file.ContentSHA256),
+		ContentSize:        file.ContentSize,
+		FetchedAt:          dbText(file.FetchedAt),
+		FetchStatus:        file.FetchStatus,
+		FetchError:         file.FetchError,
+		RawJson:            file.RawJSON,
+		UpdatedAt:          formatDBTime(file.UpdatedAt),
+	}
 }
 
 func (s *Store) SetSyncState(ctx context.Context, source, entityType, entityID, value string) error {
@@ -710,6 +947,132 @@ func (s *Store) ChannelsByKind(ctx context.Context, workspaceID string, query st
 	return out, nil
 }
 
+func (s *Store) Files(ctx context.Context, opts FileListOptions) ([]FileRow, error) {
+	args := []any{}
+	clauses := []string{"1=1"}
+	if opts.WorkspaceID != "" {
+		clauses = append(clauses, "workspace_id = ?")
+		args = append(args, opts.WorkspaceID)
+	}
+	if opts.ChannelID != "" {
+		clauses = append(clauses, "channel_id = ?")
+		args = append(args, opts.ChannelID)
+	}
+	if opts.UserID != "" {
+		clauses = append(clauses, "coalesce(user_id, '') = ?")
+		args = append(args, opts.UserID)
+	}
+	if opts.FileID != "" {
+		clauses = append(clauses, "file_id = ?")
+		args = append(args, opts.FileID)
+	}
+	if opts.Filename != "" {
+		clauses = append(clauses, "(name like ? or title like ?)")
+		like := "%" + opts.Filename + "%"
+		args = append(args, like, like)
+	}
+	if opts.ContentType != "" {
+		clauses = append(clauses, "(coalesce(mimetype, '') like ? or coalesce(filetype, '') like ?)")
+		like := "%" + opts.ContentType + "%"
+		args = append(args, like, like)
+	}
+	if !opts.Since.IsZero() {
+		clauses = append(clauses, "ts >= ?")
+		args = append(args, slackTSFromTime(opts.Since))
+	}
+	if !opts.Before.IsZero() {
+		clauses = append(clauses, "ts < ?")
+		args = append(args, slackTSFromTime(opts.Before))
+	}
+	query := `
+select workspace_id, channel_id, ts, file_id, coalesce(user_id, ''), name, title,
+       coalesce(mimetype, ''), coalesce(filetype, ''), coalesce(pretty_type, ''),
+       coalesce(mode, ''), size, coalesce(url_private, ''), coalesce(url_private_download, ''),
+       coalesce(permalink, ''), is_public, plain_text, preview_plain_text,
+       coalesce(media_path, ''), coalesce(content_sha256, ''), content_size,
+       coalesce(fetched_at, ''), fetch_status, fetch_error, updated_at
+from message_files
+where ` + strings.Join(clauses, " and ") + `
+order by ts desc, file_id asc
+`
+	if opts.Limit > 0 {
+		query += ` limit ?`
+		args = append(args, opts.Limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []FileRow{}
+	for rows.Next() {
+		var row FileRow
+		var isPublic int64
+		var fetchedAt, updatedAt string
+		if err := rows.Scan(
+			&row.WorkspaceID,
+			&row.ChannelID,
+			&row.TS,
+			&row.FileID,
+			&row.UserID,
+			&row.Name,
+			&row.Title,
+			&row.Mimetype,
+			&row.Filetype,
+			&row.PrettyType,
+			&row.Mode,
+			&row.Size,
+			&row.URLPrivate,
+			&row.URLPrivateDownload,
+			&row.Permalink,
+			&isPublic,
+			&row.PlainText,
+			&row.PreviewPlainText,
+			&row.MediaPath,
+			&row.ContentSHA256,
+			&row.ContentSize,
+			&fetchedAt,
+			&row.FetchStatus,
+			&row.FetchError,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		row.IsPublic = isPublic != 0
+		row.FetchedAt = parseDBTime(fetchedAt)
+		row.UpdatedAt = parseDBTime(updatedAt)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateFileMedia(ctx context.Context, update FileMediaUpdate) error {
+	return s.q.UpdateFileMedia(ctx, storedb.UpdateFileMediaParams{
+		MediaPath:     dbText(update.MediaPath),
+		ContentSha256: dbText(update.ContentSHA256),
+		ContentSize:   update.ContentSize,
+		FetchedAt:     dbText(update.FetchedAt),
+		FetchStatus:   update.FetchStatus,
+		FetchError:    update.FetchError,
+		UpdatedAt:     formatDBTime(time.Now().UTC()),
+		ChannelID:     update.ChannelID,
+		Ts:            update.TS,
+		FileID:        update.FileID,
+	})
+}
+
+func (s *Store) UpdateFileFetchStatus(ctx context.Context, channelID, ts, fileID, fetchedAt, status, message string) error {
+	return s.q.UpdateFileFetchStatus(ctx, storedb.UpdateFileFetchStatusParams{
+		FetchedAt:   dbText(fetchedAt),
+		FetchStatus: status,
+		FetchError:  message,
+		UpdatedAt:   formatDBTime(time.Now().UTC()),
+		ChannelID:   channelID,
+		Ts:          ts,
+		FileID:      fileID,
+	})
+}
+
 func (s *Store) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]ChannelSyncCursor, error) {
 	rows, err := s.q.ChannelSyncCursors(ctx, workspaceID)
 	if err != nil {
@@ -783,8 +1146,13 @@ func (s *Store) RebuildSearchIndexes(ctx context.Context) error {
 	}
 	if _, err := tx.ExecContext(ctx, `
 insert into message_fts (message_key, content)
-select channel_id || '|' || ts, normalized_text
-from messages
+select m.channel_id || '|' || m.ts,
+       trim(m.normalized_text || ' ' || coalesce((
+         select group_concat(trim(f.name || ' ' || f.title || ' ' || f.plain_text || ' ' || f.preview_plain_text), ' ')
+         from message_files f
+         where f.channel_id = m.channel_id and f.ts = m.ts
+       ), ''))
+from messages m
 `); err != nil {
 		return err
 	}
@@ -826,6 +1194,23 @@ func formatDBTime(value time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
+func parseDBTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed
+	}
+	return time.Time{}
+}
+
+func slackTSFromTime(value time.Time) string {
+	return fmt.Sprintf("%d.%06d", value.UTC().Unix(), value.UTC().Nanosecond()/1000)
+}
+
 func eventType(message Message) string {
 	switch {
 	case message.DeletedTS != "":
@@ -839,6 +1224,24 @@ func eventType(message Message) string {
 
 func messageKey(channelID string, ts string) string {
 	return channelID + "|" + ts
+}
+
+func messageSearchContent(message Message) string {
+	parts := []string{message.NormalizedText}
+	for _, file := range message.Files {
+		parts = append(parts, file.Name, file.Title, file.PlainText, file.PreviewPlainText)
+	}
+	return strings.Join(filterNonEmpty(parts), " ")
+}
+
+func filterNonEmpty(parts []string) []string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			filtered = append(filtered, strings.TrimSpace(part))
+		}
+	}
+	return filtered
 }
 
 func stringifyDBValue(value any) any {

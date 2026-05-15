@@ -60,6 +60,12 @@ func NormalizeMessage(msg slack.Message) string {
 		if file.Name != "" && file.Name != file.Title {
 			parts = append(parts, sanitizeText(file.Name))
 		}
+		if file.PlainText != "" {
+			parts = append(parts, sanitizeText(file.PlainText))
+		}
+		if file.PreviewPlainText != "" && file.PreviewPlainText != file.PlainText {
+			parts = append(parts, sanitizeText(file.PreviewPlainText))
+		}
 	}
 	if msg.Edited != nil {
 		parts = append(parts, "[edited]")

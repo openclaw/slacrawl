@@ -80,6 +80,67 @@ values (?, ?, ?, ?, ?)
 on conflict(channel_id, ts, mention_type, target_id) do update set
   display_text=excluded.display_text;
 
+-- name: ListExistingFileMedia :many
+select file_id, coalesce(media_path, '') as media_path,
+       coalesce(content_sha256, '') as content_sha256, content_size,
+       coalesce(fetched_at, '') as fetched_at, fetch_status, fetch_error
+from message_files
+where channel_id = ? and ts = ?;
+
+-- name: DeleteMessageFiles :exec
+delete from message_files where channel_id = ? and ts = ?;
+
+-- name: InsertMessageFile :exec
+insert into message_files (
+  workspace_id, channel_id, ts, file_id, user_id, name, title, mimetype, filetype,
+  pretty_type, mode, size, url_private, url_private_download, permalink, is_public,
+  plain_text, preview_plain_text, media_path, content_sha256, content_size, fetched_at,
+  fetch_status, fetch_error, raw_json, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(channel_id, ts, file_id) do update set
+  workspace_id=excluded.workspace_id,
+  user_id=excluded.user_id,
+  name=excluded.name,
+  title=excluded.title,
+  mimetype=excluded.mimetype,
+  filetype=excluded.filetype,
+  pretty_type=excluded.pretty_type,
+  mode=excluded.mode,
+  size=excluded.size,
+  url_private=excluded.url_private,
+  url_private_download=excluded.url_private_download,
+  permalink=excluded.permalink,
+  is_public=excluded.is_public,
+  plain_text=excluded.plain_text,
+  preview_plain_text=excluded.preview_plain_text,
+  media_path=excluded.media_path,
+  content_sha256=excluded.content_sha256,
+  content_size=excluded.content_size,
+  fetched_at=excluded.fetched_at,
+  fetch_status=excluded.fetch_status,
+  fetch_error=excluded.fetch_error,
+  raw_json=excluded.raw_json,
+  updated_at=excluded.updated_at;
+
+-- name: UpdateFileMedia :exec
+update message_files
+set media_path = ?,
+    content_sha256 = ?,
+    content_size = ?,
+    fetched_at = ?,
+    fetch_status = ?,
+    fetch_error = ?,
+    updated_at = ?
+where channel_id = ? and ts = ? and file_id = ?;
+
+-- name: UpdateFileFetchStatus :exec
+update message_files
+set fetched_at = ?,
+    fetch_status = ?,
+    fetch_error = ?,
+    updated_at = ?
+where channel_id = ? and ts = ? and file_id = ?;
+
 -- name: DeleteMessageFTS :exec
 delete from message_fts where message_key = ?;
 

@@ -23,6 +23,7 @@ var (
 		"watch",
 		"search",
 		"messages",
+		"files",
 		"mentions",
 		"sql",
 		"users",
@@ -83,7 +84,7 @@ _slacrawl()
     local i
     for ((i=1; i < ${#words[@]}; i++)); do
         case "${words[i]}" in
-            init|doctor|report|digest|analytics|publish|subscribe|update|sync|import|tail|watch|search|messages|mentions|sql|users|channels|status|completion)
+            init|doctor|report|digest|analytics|publish|subscribe|update|sync|import|tail|watch|search|messages|files|mentions|sql|users|channels|status|completion)
                 command="${words[i]}"
                 break
                 ;;
@@ -152,16 +153,16 @@ _slacrawl()
             esac
             ;;
         publish)
-            COMPREPLY=( $(compgen -W "--repo --remote --branch --message --no-commit --push --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--repo --remote --branch --message --no-commit --push --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         subscribe)
-            COMPREPLY=( $(compgen -W "--repo --db --remote --branch --stale-after --no-auto-update --no-import --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--repo --db --remote --branch --stale-after --no-auto-update --no-import --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         update)
-            COMPREPLY=( $(compgen -W "--repo --remote --branch --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--repo --remote --branch --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         sync)
-            COMPREPLY=( $(compgen -W "--source --workspace --channels --since --full --latest-only --concurrency --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--source --workspace --channels --since --full --latest-only --concurrency --with-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         import)
             COMPREPLY=( $(compgen -W "--workspace --dry-run --force --format --help -h ${global_flags}" -- "${cur}") )
@@ -177,6 +178,13 @@ _slacrawl()
             ;;
         messages)
             COMPREPLY=( $(compgen -W "--workspace --channel --author --limit --help -h ${global_flags}" -- "${cur}") )
+            ;;
+        files)
+            if [[ "${words[i+1]}" == "fetch" || "${prev}" == "fetch" ]]; then
+                COMPREPLY=( $(compgen -W "--workspace --channel --user --file --filename --type --since --before --missing --limit --all --force --max-bytes --help -h ${global_flags}" -- "${cur}") )
+            else
+                COMPREPLY=( $(compgen -W "fetch --workspace --channel --user --file --filename --type --since --before --missing --limit --all --help -h ${global_flags}" -- "${cur}") )
+            fi
             ;;
         mentions)
             COMPREPLY=( $(compgen -W "--workspace --target --limit --help -h ${global_flags}" -- "${cur}") )
@@ -261,16 +269,16 @@ _slacrawl() {
           fi
           ;;
         publish)
-          _arguments '--repo[git repo path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--message[commit message]:message:' '--no-commit[skip git commit]' '--push[push to origin]'
+          _arguments '--repo[git repo path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--message[commit message]:message:' '--no-commit[skip git commit]' '--push[push to origin]' '--no-media[omit cached media files]'
           ;;
         subscribe)
-          _arguments '--repo[local clone path]:path:_files' '--db[database path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--stale-after[auto-refresh age threshold]:duration:' '--no-auto-update[disable read-time auto refresh]' '--no-import[skip initial import]'
+          _arguments '--repo[local clone path]:path:_files' '--db[database path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--stale-after[auto-refresh age threshold]:duration:' '--no-auto-update[disable read-time auto refresh]' '--no-import[skip initial import]' '--no-media[skip restoring cached media]'
           ;;
         update)
-          _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:'
+          _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--no-media[skip restoring cached media]'
           ;;
         sync)
-          _arguments '--source[sync source]:source:(api bot desktop wiretap all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:'
+          _arguments '--source[sync source]:source:(api bot desktop wiretap all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
           ;;
         import)
           _arguments '--workspace[workspace id]:workspace id:' '--dry-run[walk and count without writing]' '--force[overwrite existing slack-export rows at the same rank]' '--format[output format]:format:(text json log)'
@@ -286,6 +294,13 @@ _slacrawl() {
           ;;
         messages)
           _arguments '--workspace[workspace id]:workspace id:' '--channel[channel id]:channel id:' '--author[user id]:user id:' '--limit[row limit]:limit:'
+          ;;
+        files)
+          if [[ $words[3] == fetch ]]; then
+            _arguments '1:subcommand:(fetch)' '--workspace[workspace id]:workspace id:' '--channel[channel id]:channel id:' '--user[user id]:user id:' '--file[file id]:file id:' '--filename[filename filter]:text:' '--type[mimetype or filetype]:text:' '--since[RFC3339 lower bound]:time:' '--before[RFC3339 upper bound]:time:' '--missing[only missing cached media]' '--limit[row limit]:limit:' '--all[return all rows]' '--force[redownload cached files]' '--max-bytes[per-file cap]:bytes:'
+          else
+            _arguments '1:subcommand:(fetch)' '--workspace[workspace id]:workspace id:' '--channel[channel id]:channel id:' '--user[user id]:user id:' '--file[file id]:file id:' '--filename[filename filter]:text:' '--type[mimetype or filetype]:text:' '--since[RFC3339 lower bound]:time:' '--before[RFC3339 upper bound]:time:' '--missing[only missing cached media]' '--limit[row limit]:limit:' '--all[return all rows]'
+          fi
           ;;
         mentions)
           _arguments '--workspace[workspace id]:workspace id:' '--target[target id or label]:target:' '--limit[row limit]:limit:'

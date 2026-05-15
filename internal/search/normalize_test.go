@@ -10,7 +10,7 @@ import (
 func TestNormalizeMessage(t *testing.T) {
 	msg := slack.Message{}
 	msg.Text = "Hello <@U123|alice> in <#C123|eng> <https://example.com|docs>"
-	msg.Files = []slack.File{{Title: "runbook", Name: "runbook.md"}}
+	msg.Files = []slack.File{{Title: "runbook", Name: "runbook.md", PlainText: "deploy notes", PreviewPlainText: "preview copy"}}
 	msg.Edited = &slack.Edited{Timestamp: "123.45"}
 
 	normalized := NormalizeMessage(msg)
@@ -18,6 +18,8 @@ func TestNormalizeMessage(t *testing.T) {
 	require.Contains(t, normalized, "#eng")
 	require.Contains(t, normalized, "docs https://example.com")
 	require.Contains(t, normalized, "runbook")
+	require.Contains(t, normalized, "deploy notes")
+	require.Contains(t, normalized, "preview copy")
 	require.Contains(t, normalized, "[edited]")
 }
 

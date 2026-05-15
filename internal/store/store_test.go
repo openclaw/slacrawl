@@ -128,6 +128,75 @@ func TestUpsertMessagePreservesSourcePrecedenceAndRefreshesSearch(t *testing.T) 
 	require.Empty(t, matches)
 }
 
+func TestUpsertMessageStoresFilesPreservesMediaAndRefreshesSearch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	message := Message{
+		ChannelID:      "C1",
+		TS:             "123.45",
+		WorkspaceID:    "T1",
+		UserID:         "U1",
+		Text:           "file share",
+		NormalizedText: "file share",
+		SourceRank:     2,
+		SourceName:     "api-bot",
+		RawJSON:        "{}",
+		UpdatedAt:      now,
+		Files: []MessageFile{{
+			FileID:     "F1",
+			Name:       "incident.pdf",
+			Title:      "incident report",
+			Mimetype:   "application/pdf",
+			PlainText:  "searchable appendix",
+			URLPrivate: "https://files.example/F1",
+			RawJSON:    "{}",
+		}},
+	}
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+
+	matches, err := s.Search(ctx, "", "appendix", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	require.NoError(t, s.UpdateFileMedia(ctx, FileMediaUpdate{
+		ChannelID:     "C1",
+		TS:            "123.45",
+		FileID:        "F1",
+		MediaPath:     "files/aa/hash-incident.pdf",
+		ContentSHA256: "hash",
+		ContentSize:   42,
+		FetchedAt:     now.Format(time.RFC3339Nano),
+		FetchStatus:   "fetched",
+	}))
+	message.Files[0].Title = "renamed incident report"
+	message.Files[0].MediaPath = ""
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+
+	files, err := s.Files(ctx, FileListOptions{Filename: "incident", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "files/aa/hash-incident.pdf", files[0].MediaPath)
+	require.Equal(t, "fetched", files[0].FetchStatus)
+
+	desktopMessage := message
+	desktopMessage.Text = "desktop copy"
+	desktopMessage.NormalizedText = "desktop copy"
+	desktopMessage.Files = nil
+	require.NoError(t, s.UpsertMessage(ctx, desktopMessage, nil))
+	files, err = s.Files(ctx, FileListOptions{Filename: "incident", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "files/aa/hash-incident.pdf", files[0].MediaPath)
+	matches, err = s.Search(ctx, "", "appendix", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
 func TestWorkspaceFiltersApplyToReadQueries(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)

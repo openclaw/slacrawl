@@ -60,6 +60,8 @@ type SyncConfig struct {
 	DesktopRefreshEvery string `toml:"desktop_refresh_every"`
 	FullHistory         bool   `toml:"full_history"`
 	IncludeDMs          *bool  `toml:"include_dms"`
+	FileMedia           *bool  `toml:"file_media"`
+	MaxFileBytes        int64  `toml:"max_file_bytes"`
 }
 
 type SearchConfig struct {
@@ -72,6 +74,7 @@ type ShareConfig struct {
 	Branch     string `toml:"branch"`
 	AutoUpdate bool   `toml:"auto_update"`
 	StaleAfter string `toml:"stale_after"`
+	Media      *bool  `toml:"media"`
 }
 
 type Tokens struct {
@@ -102,6 +105,7 @@ func Default() Config {
 			RepairEvery:         "30m",
 			DesktopRefreshEvery: "5m",
 			FullHistory:         true,
+			MaxFileBytes:        100 << 20,
 		},
 		Search: SearchConfig{
 			DefaultMode: "fts",
@@ -159,6 +163,9 @@ func (c *Config) Normalize() error {
 	}
 	if c.Sync.Concurrency <= 0 {
 		c.Sync.Concurrency = 4
+	}
+	if c.Sync.MaxFileBytes <= 0 {
+		c.Sync.MaxFileBytes = 100 << 20
 	}
 	if c.Search.DefaultMode == "" {
 		c.Search.DefaultMode = "fts"
@@ -272,6 +279,20 @@ func (c Config) WorkspaceIDs() []string {
 
 func (c Config) ShareEnabled() bool {
 	return strings.TrimSpace(c.Share.Remote) != ""
+}
+
+func (c Config) FileMediaEnabled() bool {
+	if c.Sync.FileMedia == nil {
+		return false
+	}
+	return *c.Sync.FileMedia
+}
+
+func (c Config) ShareMediaEnabled() bool {
+	if c.Share.Media == nil {
+		return true
+	}
+	return *c.Share.Media
 }
 
 func (c Config) IncludeDMsResolved(hasUserToken bool) bool {

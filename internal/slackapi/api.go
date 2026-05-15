@@ -638,7 +638,49 @@ func toStoreMessage(workspaceID string, msg slack.Message, sourceName string, so
 		SourceName:     sourceName,
 		RawJSON:        store.MarshalRaw(msg),
 		UpdatedAt:      now,
+		Files:          toStoreFiles(workspaceID, msg, now),
 	}
+}
+
+func toStoreFiles(workspaceID string, msg slack.Message, now time.Time) []store.MessageFile {
+	files := make([]store.MessageFile, 0, len(msg.Files))
+	for _, file := range msg.Files {
+		if file.ID == "" {
+			continue
+		}
+		files = append(files, store.MessageFile{
+			WorkspaceID:        workspaceID,
+			ChannelID:          msg.Channel,
+			TS:                 msg.Timestamp,
+			FileID:             file.ID,
+			UserID:             firstNonEmpty(file.User, msg.User),
+			Name:               file.Name,
+			Title:              file.Title,
+			Mimetype:           file.Mimetype,
+			Filetype:           file.Filetype,
+			PrettyType:         file.PrettyType,
+			Mode:               file.Mode,
+			Size:               int64(file.Size),
+			URLPrivate:         file.URLPrivate,
+			URLPrivateDownload: file.URLPrivateDownload,
+			Permalink:          file.Permalink,
+			IsPublic:           file.IsPublic,
+			PlainText:          file.PlainText,
+			PreviewPlainText:   file.PreviewPlainText,
+			RawJSON:            store.MarshalRaw(file),
+			UpdatedAt:          now,
+		})
+	}
+	return files
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func toStoreMentions(msg slack.Message) []store.Mention {

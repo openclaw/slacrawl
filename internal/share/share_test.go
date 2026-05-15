@@ -2,12 +2,16 @@ package share
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/vincentkoc/slacrawl/internal/media"
 	"github.com/vincentkoc/slacrawl/internal/store"
 )
 
@@ -62,6 +66,84 @@ func TestImportIfChangedSkipsCurrentManifest(t *testing.T) {
 	_, changed, err = ImportIfChanged(ctx, reader, opts)
 	require.NoError(t, err)
 	require.False(t, changed)
+}
+
+func TestExportImportRestoresMediaFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	body := []byte("cached file")
+	sum := sha256.Sum256(body)
+	hash := hex.EncodeToString(sum[:])
+	mediaPath := "files/" + hash[:2] + "/" + hash + "-incident.txt"
+	fullPath, err := media.LocalPath(cacheDir, mediaPath)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o750))
+	require.NoError(t, os.WriteFile(fullPath, body, 0o600))
+
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+	require.NoError(t, source.UpsertChannel(ctx, store.Channel{
+		ID:          "C1",
+		WorkspaceID: "T1",
+		Name:        "general",
+		Kind:        "desktop_channel",
+		RawJSON:     "{}",
+		UpdatedAt:   time.Now().UTC(),
+	}))
+	require.NoError(t, source.UpsertMessage(ctx, store.Message{
+		ChannelID:      "C1",
+		TS:             "123.789",
+		WorkspaceID:    "T1",
+		UserID:         "U1",
+		Text:           "media backup",
+		NormalizedText: "media backup incident.txt",
+		SourceRank:     2,
+		SourceName:     "api-bot",
+		RawJSON:        "{}",
+		UpdatedAt:      time.Now().UTC(),
+		Files: []store.MessageFile{{
+			FileID:        "F1",
+			Name:          "incident.txt",
+			Mimetype:      "text/plain",
+			MediaPath:     mediaPath,
+			ContentSHA256: hash,
+			ContentSize:   int64(len(body)),
+			FetchStatus:   "fetched",
+			RawJSON:       "{}",
+		}},
+	}, nil))
+
+	opts := Options{RepoPath: filepath.Join(dir, "share"), CacheDir: cacheDir, Branch: "main", IncludeMedia: true}
+	manifest, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+	require.NotNil(t, manifest.Media)
+	require.Len(t, manifest.Media.Items, 1)
+	require.FileExists(t, filepath.Join(opts.RepoPath, filepath.FromSlash(manifest.Media.Items[0].Path)))
+
+	reader, err := store.Open(filepath.Join(dir, "reader.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reader.Close()) }()
+	dstCache := filepath.Join(dir, "dst-cache")
+	imported, err := Import(ctx, reader, Options{RepoPath: opts.RepoPath, CacheDir: dstCache, Branch: "main", IncludeMedia: false})
+	require.NoError(t, err)
+	require.NotNil(t, imported.Media)
+	rows, err := reader.Files(ctx, store.FileListOptions{FileID: "F1"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Empty(t, rows[0].MediaPath)
+
+	imported, changed, err := ImportIfChanged(ctx, reader, Options{RepoPath: opts.RepoPath, CacheDir: dstCache, Branch: "main", IncludeMedia: true})
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.NotNil(t, imported.Media)
+	rows, err = reader.Files(ctx, store.FileListOptions{FileID: "F1"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, mediaPath, rows[0].MediaPath)
+	dstPath, err := media.LocalPath(dstCache, mediaPath)
+	require.NoError(t, err)
+	require.FileExists(t, dstPath)
 }
 
 func TestNeedsImportUsesLastImportTime(t *testing.T) {

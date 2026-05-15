@@ -63,6 +63,40 @@ create index idx_messages_workspace_channel_ts on messages(workspace_id, channel
 create index idx_messages_workspace_user_ts on messages(workspace_id, user_id, ts desc);
 create index idx_messages_key_expr on messages((channel_id || '|' || ts));
 
+create table message_files (
+  workspace_id text not null,
+  channel_id text not null,
+  ts text not null,
+  file_id text not null,
+  user_id text,
+  name text not null default '',
+  title text not null default '',
+  mimetype text,
+  filetype text,
+  pretty_type text,
+  mode text,
+  size integer not null default 0,
+  url_private text,
+  url_private_download text,
+  permalink text,
+  is_public integer not null default 0,
+  plain_text text not null default '',
+  preview_plain_text text not null default '',
+  media_path text,
+  content_sha256 text,
+  content_size integer not null default 0,
+  fetched_at text,
+  fetch_status text not null default '',
+  fetch_error text not null default '',
+  raw_json text not null,
+  updated_at text not null,
+  primary key (channel_id, ts, file_id)
+);
+
+create index idx_message_files_workspace_ts on message_files(workspace_id, ts desc);
+create index idx_message_files_file_id on message_files(file_id);
+create index idx_message_files_name on message_files(name);
+
 create table message_events (
   id integer primary key autoincrement,
   channel_id text not null,

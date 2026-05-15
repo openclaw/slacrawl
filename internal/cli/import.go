@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -326,6 +327,7 @@ func toStoreMessage(workspaceID, channelID string, raw map[string]any, now time.
 	if editedTS != "" {
 		message.Edited = &slack.Edited{Timestamp: editedTS}
 	}
+	message.Files = slackFilesFromRaw(raw["files"])
 
 	rawMentions := search.ExtractMentions(text)
 	mentions := make([]store.Mention, 0, len(rawMentions))
@@ -356,7 +358,59 @@ func toStoreMessage(workspaceID, channelID string, raw map[string]any, now time.
 		SourceName:     slackExportSourceName,
 		RawJSON:        store.MarshalRaw(raw),
 		UpdatedAt:      now,
+		Files:          toStoreFilesFromSlack(workspaceID, message, now),
 	}, mentions, true
+}
+
+func slackFilesFromRaw(value any) []slack.File {
+	if value == nil {
+		return nil
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var files []slack.File
+	if err := json.Unmarshal(body, &files); err != nil {
+		return nil
+	}
+	return files
+}
+
+func toStoreFilesFromSlack(workspaceID string, msg slack.Message, now time.Time) []store.MessageFile {
+	files := make([]store.MessageFile, 0, len(msg.Files))
+	for _, file := range msg.Files {
+		if file.ID == "" {
+			continue
+		}
+		userID := file.User
+		if userID == "" {
+			userID = msg.User
+		}
+		files = append(files, store.MessageFile{
+			WorkspaceID:        workspaceID,
+			ChannelID:          msg.Channel,
+			TS:                 msg.Timestamp,
+			FileID:             file.ID,
+			UserID:             userID,
+			Name:               file.Name,
+			Title:              file.Title,
+			Mimetype:           file.Mimetype,
+			Filetype:           file.Filetype,
+			PrettyType:         file.PrettyType,
+			Mode:               file.Mode,
+			Size:               int64(file.Size),
+			URLPrivate:         file.URLPrivate,
+			URLPrivateDownload: file.URLPrivateDownload,
+			Permalink:          file.Permalink,
+			IsPublic:           file.IsPublic,
+			PlainText:          file.PlainText,
+			PreviewPlainText:   file.PreviewPlainText,
+			RawJSON:            store.MarshalRaw(file),
+			UpdatedAt:          now,
+		})
+	}
+	return files
 }
 
 func editedTimestamp(value any) string {

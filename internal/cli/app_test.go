@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -601,6 +603,190 @@ func TestPublishSubscribeAndSearchGitArchive(t *testing.T) {
 	require.Equal(t, "archive seed message", rows[0]["text"])
 }
 
+func TestSubscribePersistsNoMedia(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	remoteRepo := filepath.Join(dir, "remote.git")
+	runGit(t, dir, "init", "--bare", remoteRepo)
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	configPath := filepath.Join(dir, "reader.toml")
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "subscribe", "--repo", filepath.Join(dir, "reader-share"), "--db", filepath.Join(dir, "reader.db"), "--no-import", "--no-media", remoteRepo}))
+
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Share.Media)
+	require.False(t, *cfg.Share.Media)
+}
+
+func TestFilesListAndFetch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "slacrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.CacheDir = filepath.Join(dir, "cache")
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Enabled = false
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Save(configPath))
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	now := mustTime(t, "2026-03-08T18:20:43Z")
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{
+		ChannelID:      "C1",
+		TS:             "1710000000.000100",
+		WorkspaceID:    "T1",
+		UserID:         "U1",
+		Text:           "file share",
+		NormalizedText: "file share invoice.pdf",
+		SourceRank:     2,
+		SourceName:     "api-bot",
+		RawJSON:        "{}",
+		UpdatedAt:      now,
+		Files: []store.MessageFile{{
+			FileID:   "F1",
+			Name:     "invoice.pdf",
+			Mimetype: "application/pdf",
+			RawJSON:  "{}",
+		}},
+	}, nil))
+	require.NoError(t, st.UpdateFileMedia(ctx, store.FileMediaUpdate{
+		ChannelID:     "C1",
+		TS:            "1710000000.000100",
+		FileID:        "F1",
+		MediaPath:     "files/aa/missing-invoice.pdf",
+		ContentSHA256: "missing",
+		ContentSize:   12,
+		FetchedAt:     now.Format(time.RFC3339Nano),
+		FetchStatus:   "fetched",
+	}))
+	require.NoError(t, st.Close())
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "files", "--filename", "invoice"}))
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	require.Equal(t, "F1", rows[0]["file_id"])
+
+	stdout.Reset()
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "files", "--missing"}))
+	rows = nil
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	require.Equal(t, "F1", rows[0]["file_id"])
+
+	stdout.Reset()
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "files", "fetch", "--missing"}))
+	var stats map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &stats))
+	require.Equal(t, float64(1), stats["skipped"])
+}
+
+func TestFetchMediaForSyncHonorsChannelScope(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.CacheDir = filepath.Join(dir, "cache")
+	cfg.Slack.Bot.Enabled = false
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Enabled = false
+	cfg.Slack.Desktop.Path = ""
+	st, err := store.Open(filepath.Join(dir, "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := mustTime(t, "2026-03-08T18:20:43Z")
+	for _, channelID := range []string{"C1", "C2"} {
+		require.NoError(t, st.UpsertMessage(ctx, store.Message{
+			ChannelID:      channelID,
+			TS:             "1710000000.000100",
+			WorkspaceID:    "T1",
+			UserID:         "U1",
+			Text:           "file share",
+			NormalizedText: "file share",
+			SourceRank:     2,
+			SourceName:     "api-bot",
+			RawJSON:        "{}",
+			UpdatedAt:      now,
+			Files: []store.MessageFile{{
+				FileID:  "F" + channelID,
+				Name:    "invoice.pdf",
+				RawJSON: "{}",
+			}},
+		}, nil))
+	}
+
+	app := &App{}
+	stats, err := app.fetchMediaForSync(ctx, cfg, st, "T1", []string{"C1"})
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Files)
+	require.Equal(t, 1, stats.Skipped)
+}
+
+func TestFilesFetchUsesWorkspaceTokensWhenUnscoped(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("SLACK_T1_BOT_TOKEN", "xoxb-t1")
+	t.Setenv("SLACK_T2_BOT_TOKEN", "xoxb-t2")
+	cfg := config.Default()
+	cfg.CacheDir = filepath.Join(dir, "cache")
+	cfg.WorkspaceID = ""
+	cfg.Workspaces = []config.Workspace{{ID: "T1"}, {ID: "T2"}}
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Enabled = false
+	cfg.Slack.Desktop.Path = ""
+	st, err := store.Open(filepath.Join(dir, "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := mustTime(t, "2026-03-08T18:20:43Z")
+	for _, workspaceID := range []string{"T1", "T2"} {
+		require.NoError(t, st.UpsertMessage(ctx, store.Message{
+			ChannelID:      "C" + workspaceID,
+			TS:             "1710000000.000100",
+			WorkspaceID:    workspaceID,
+			UserID:         "U1",
+			Text:           "file share",
+			NormalizedText: "file share",
+			SourceRank:     2,
+			SourceName:     "api-bot",
+			RawJSON:        "{}",
+			UpdatedAt:      now,
+			Files: []store.MessageFile{{
+				FileID:             "F" + workspaceID,
+				Name:               workspaceID + ".txt",
+				URLPrivateDownload: "https://files.slack.com/" + workspaceID + ".txt",
+				RawJSON:            "{}",
+			}},
+		}, nil))
+	}
+
+	seen := map[string]string{}
+	app := &App{httpClient: &http.Client{Transport: cliRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		seen[strings.TrimPrefix(r.URL.Path, "/")] = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader(r.URL.Path)),
+			ContentLength: int64(len(r.URL.Path)),
+			Request:       r,
+		}, nil
+	})}}
+	stats, err := app.fetchFiles(ctx, cfg, st, store.FileListOptions{MissingOnly: true, Limit: 2}, 1024, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.Fetched)
+	require.Equal(t, "Bearer xoxb-t1", seen["T1.txt"])
+	require.Equal(t, "Bearer xoxb-t2", seen["T2.txt"])
+}
+
 func TestSearchAutoUpdatesStaleGitArchive(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -709,4 +895,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+}
+
+type cliRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn cliRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
 }

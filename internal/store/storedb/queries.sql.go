@@ -100,6 +100,20 @@ func (q *Queries) DeleteMessageFTS(ctx context.Context, messageKey string) error
 	return err
 }
 
+const deleteMessageFiles = `-- name: DeleteMessageFiles :exec
+delete from message_files where channel_id = ? and ts = ?
+`
+
+type DeleteMessageFilesParams struct {
+	ChannelID string `json:"channel_id"`
+	Ts        string `json:"ts"`
+}
+
+func (q *Queries) DeleteMessageFiles(ctx context.Context, arg DeleteMessageFilesParams) error {
+	_, err := q.db.ExecContext(ctx, deleteMessageFiles, arg.ChannelID, arg.Ts)
+	return err
+}
+
 const deleteMessageMentions = `-- name: DeleteMessageMentions :exec
 delete from message_mentions where channel_id = ? and ts = ?
 `
@@ -172,6 +186,100 @@ func (q *Queries) InsertMessageFTS(ctx context.Context, arg InsertMessageFTSPara
 	return err
 }
 
+const insertMessageFile = `-- name: InsertMessageFile :exec
+insert into message_files (
+  workspace_id, channel_id, ts, file_id, user_id, name, title, mimetype, filetype,
+  pretty_type, mode, size, url_private, url_private_download, permalink, is_public,
+  plain_text, preview_plain_text, media_path, content_sha256, content_size, fetched_at,
+  fetch_status, fetch_error, raw_json, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(channel_id, ts, file_id) do update set
+  workspace_id=excluded.workspace_id,
+  user_id=excluded.user_id,
+  name=excluded.name,
+  title=excluded.title,
+  mimetype=excluded.mimetype,
+  filetype=excluded.filetype,
+  pretty_type=excluded.pretty_type,
+  mode=excluded.mode,
+  size=excluded.size,
+  url_private=excluded.url_private,
+  url_private_download=excluded.url_private_download,
+  permalink=excluded.permalink,
+  is_public=excluded.is_public,
+  plain_text=excluded.plain_text,
+  preview_plain_text=excluded.preview_plain_text,
+  media_path=excluded.media_path,
+  content_sha256=excluded.content_sha256,
+  content_size=excluded.content_size,
+  fetched_at=excluded.fetched_at,
+  fetch_status=excluded.fetch_status,
+  fetch_error=excluded.fetch_error,
+  raw_json=excluded.raw_json,
+  updated_at=excluded.updated_at
+`
+
+type InsertMessageFileParams struct {
+	WorkspaceID        string         `json:"workspace_id"`
+	ChannelID          string         `json:"channel_id"`
+	Ts                 string         `json:"ts"`
+	FileID             string         `json:"file_id"`
+	UserID             sql.NullString `json:"user_id"`
+	Name               string         `json:"name"`
+	Title              string         `json:"title"`
+	Mimetype           sql.NullString `json:"mimetype"`
+	Filetype           sql.NullString `json:"filetype"`
+	PrettyType         sql.NullString `json:"pretty_type"`
+	Mode               sql.NullString `json:"mode"`
+	Size               int64          `json:"size"`
+	UrlPrivate         sql.NullString `json:"url_private"`
+	UrlPrivateDownload sql.NullString `json:"url_private_download"`
+	Permalink          sql.NullString `json:"permalink"`
+	IsPublic           int64          `json:"is_public"`
+	PlainText          string         `json:"plain_text"`
+	PreviewPlainText   string         `json:"preview_plain_text"`
+	MediaPath          sql.NullString `json:"media_path"`
+	ContentSha256      sql.NullString `json:"content_sha256"`
+	ContentSize        int64          `json:"content_size"`
+	FetchedAt          sql.NullString `json:"fetched_at"`
+	FetchStatus        string         `json:"fetch_status"`
+	FetchError         string         `json:"fetch_error"`
+	RawJson            string         `json:"raw_json"`
+	UpdatedAt          string         `json:"updated_at"`
+}
+
+func (q *Queries) InsertMessageFile(ctx context.Context, arg InsertMessageFileParams) error {
+	_, err := q.db.ExecContext(ctx, insertMessageFile,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.Ts,
+		arg.FileID,
+		arg.UserID,
+		arg.Name,
+		arg.Title,
+		arg.Mimetype,
+		arg.Filetype,
+		arg.PrettyType,
+		arg.Mode,
+		arg.Size,
+		arg.UrlPrivate,
+		arg.UrlPrivateDownload,
+		arg.Permalink,
+		arg.IsPublic,
+		arg.PlainText,
+		arg.PreviewPlainText,
+		arg.MediaPath,
+		arg.ContentSha256,
+		arg.ContentSize,
+		arg.FetchedAt,
+		arg.FetchStatus,
+		arg.FetchError,
+		arg.RawJson,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const lastSyncAt = `-- name: LastSyncAt :one
 select cast(coalesce(max(updated_at), '') as text) as updated_at from sync_state where source_name != 'doctor'
 `
@@ -228,6 +336,60 @@ func (q *Queries) ListChannelsByKind(ctx context.Context, arg ListChannelsByKind
 			&i.ID,
 			&i.Name,
 			&i.Kind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExistingFileMedia = `-- name: ListExistingFileMedia :many
+select file_id, coalesce(media_path, '') as media_path,
+       coalesce(content_sha256, '') as content_sha256, content_size,
+       coalesce(fetched_at, '') as fetched_at, fetch_status, fetch_error
+from message_files
+where channel_id = ? and ts = ?
+`
+
+type ListExistingFileMediaParams struct {
+	ChannelID string `json:"channel_id"`
+	Ts        string `json:"ts"`
+}
+
+type ListExistingFileMediaRow struct {
+	FileID        string `json:"file_id"`
+	MediaPath     string `json:"media_path"`
+	ContentSha256 string `json:"content_sha256"`
+	ContentSize   int64  `json:"content_size"`
+	FetchedAt     string `json:"fetched_at"`
+	FetchStatus   string `json:"fetch_status"`
+	FetchError    string `json:"fetch_error"`
+}
+
+func (q *Queries) ListExistingFileMedia(ctx context.Context, arg ListExistingFileMediaParams) ([]ListExistingFileMediaRow, error) {
+	rows, err := q.db.QueryContext(ctx, listExistingFileMedia, arg.ChannelID, arg.Ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExistingFileMediaRow
+	for rows.Next() {
+		var i ListExistingFileMediaRow
+		if err := rows.Scan(
+			&i.FileID,
+			&i.MediaPath,
+			&i.ContentSha256,
+			&i.ContentSize,
+			&i.FetchedAt,
+			&i.FetchStatus,
+			&i.FetchError,
 		); err != nil {
 			return nil, err
 		}
@@ -940,6 +1102,79 @@ func (q *Queries) ThreadCoverageState(ctx context.Context) (string, error) {
 	var value string
 	err := row.Scan(&value)
 	return value, err
+}
+
+const updateFileFetchStatus = `-- name: UpdateFileFetchStatus :exec
+update message_files
+set fetched_at = ?,
+    fetch_status = ?,
+    fetch_error = ?,
+    updated_at = ?
+where channel_id = ? and ts = ? and file_id = ?
+`
+
+type UpdateFileFetchStatusParams struct {
+	FetchedAt   sql.NullString `json:"fetched_at"`
+	FetchStatus string         `json:"fetch_status"`
+	FetchError  string         `json:"fetch_error"`
+	UpdatedAt   string         `json:"updated_at"`
+	ChannelID   string         `json:"channel_id"`
+	Ts          string         `json:"ts"`
+	FileID      string         `json:"file_id"`
+}
+
+func (q *Queries) UpdateFileFetchStatus(ctx context.Context, arg UpdateFileFetchStatusParams) error {
+	_, err := q.db.ExecContext(ctx, updateFileFetchStatus,
+		arg.FetchedAt,
+		arg.FetchStatus,
+		arg.FetchError,
+		arg.UpdatedAt,
+		arg.ChannelID,
+		arg.Ts,
+		arg.FileID,
+	)
+	return err
+}
+
+const updateFileMedia = `-- name: UpdateFileMedia :exec
+update message_files
+set media_path = ?,
+    content_sha256 = ?,
+    content_size = ?,
+    fetched_at = ?,
+    fetch_status = ?,
+    fetch_error = ?,
+    updated_at = ?
+where channel_id = ? and ts = ? and file_id = ?
+`
+
+type UpdateFileMediaParams struct {
+	MediaPath     sql.NullString `json:"media_path"`
+	ContentSha256 sql.NullString `json:"content_sha256"`
+	ContentSize   int64          `json:"content_size"`
+	FetchedAt     sql.NullString `json:"fetched_at"`
+	FetchStatus   string         `json:"fetch_status"`
+	FetchError    string         `json:"fetch_error"`
+	UpdatedAt     string         `json:"updated_at"`
+	ChannelID     string         `json:"channel_id"`
+	Ts            string         `json:"ts"`
+	FileID        string         `json:"file_id"`
+}
+
+func (q *Queries) UpdateFileMedia(ctx context.Context, arg UpdateFileMediaParams) error {
+	_, err := q.db.ExecContext(ctx, updateFileMedia,
+		arg.MediaPath,
+		arg.ContentSha256,
+		arg.ContentSize,
+		arg.FetchedAt,
+		arg.FetchStatus,
+		arg.FetchError,
+		arg.UpdatedAt,
+		arg.ChannelID,
+		arg.Ts,
+		arg.FileID,
+	)
+	return err
 }
 
 const upsertChannel = `-- name: UpsertChannel :exec

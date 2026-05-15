@@ -49,10 +49,10 @@ Data stays on your machine. You can run it in API mode, desktop mode, or a hybri
 - local FTS search
 - read-only SQL access
 - macOS Slack Desktop discovery
+- optional Slack file media caching
 
 ## Not Yet Included
 
-- attachment blob downloads
 - write-back actions
 - public Marketplace-style distribution hardening
 - desktop-local message extraction beyond the documented bootstrap surface
@@ -295,6 +295,22 @@ By default, each workspace entry automatically looks for `SLACK_<WORKSPACE_ID>_B
 
 Without `--workspace`, `sync --source bot` and `tail` fan out across every configured workspace entry. Read commands such as `search`, `messages`, `mentions`, `users`, and `channels` accept `--workspace` to scope the shared local database when needed.
 
+File media downloads are opt-in. SQLite stores file metadata and cache pointers; bytes live under `cache_dir/media`.
+
+```toml
+[sync]
+file_media = false
+max_file_bytes = 104857600
+```
+
+Use `sync --with-media` or `files fetch` when you want to populate the local cache.
+
+```bash
+go run ./cmd/slacrawl files --filename runbook
+go run ./cmd/slacrawl files fetch --missing --max-bytes 104857600
+go run ./cmd/slacrawl sync --source bot --latest-only --with-media
+```
+
 ## Git Archive Sharing
 
 Use git-share mode when one machine has Slack credentials and should publish snapshots, while other machines only need a local read-only archive.
@@ -318,6 +334,7 @@ stale_after = "15m"
 Behavior:
 
 - `publish` writes gzipped JSONL shards plus `manifest.json` into `repo_path`
+- cached non-DM/non-private file media is included by default; use `--no-media` to omit it
 - `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
 - pass `--db` to `subscribe` when you want the reader archive to land in a non-default SQLite path
 - `update` pulls and re-imports only when the manifest changes
@@ -342,6 +359,7 @@ Relevant flags:
 - `--message` sets the git commit message
 - `--no-commit` exports files without creating a git commit
 - `--push` pushes the new commit to `origin`
+- `--no-media` omits cached media files from the snapshot
 
 ### `subscribe`
 
@@ -362,6 +380,7 @@ Relevant flags:
 - `--stale-after` controls when read-time refresh considers the local snapshot stale
 - `--no-auto-update` disables read-time refresh for search/status/report-style commands
 - `--no-import` skips the initial snapshot import
+- `--no-media` skips restoring cached media files
 
 ### `update`
 

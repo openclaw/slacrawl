@@ -62,6 +62,35 @@ type MessageEvent struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type MessageFile struct {
+	WorkspaceID        string         `json:"workspace_id"`
+	ChannelID          string         `json:"channel_id"`
+	Ts                 string         `json:"ts"`
+	FileID             string         `json:"file_id"`
+	UserID             sql.NullString `json:"user_id"`
+	Name               string         `json:"name"`
+	Title              string         `json:"title"`
+	Mimetype           sql.NullString `json:"mimetype"`
+	Filetype           sql.NullString `json:"filetype"`
+	PrettyType         sql.NullString `json:"pretty_type"`
+	Mode               sql.NullString `json:"mode"`
+	Size               int64          `json:"size"`
+	UrlPrivate         sql.NullString `json:"url_private"`
+	UrlPrivateDownload sql.NullString `json:"url_private_download"`
+	Permalink          sql.NullString `json:"permalink"`
+	IsPublic           int64          `json:"is_public"`
+	PlainText          string         `json:"plain_text"`
+	PreviewPlainText   string         `json:"preview_plain_text"`
+	MediaPath          sql.NullString `json:"media_path"`
+	ContentSha256      sql.NullString `json:"content_sha256"`
+	ContentSize        int64          `json:"content_size"`
+	FetchedAt          sql.NullString `json:"fetched_at"`
+	FetchStatus        string         `json:"fetch_status"`
+	FetchError         string         `json:"fetch_error"`
+	RawJson            string         `json:"raw_json"`
+	UpdatedAt          string         `json:"updated_at"`
+}
+
 type MessageFt struct {
 	MessageKey string `json:"message_key"`
 	Content    string `json:"content"`
