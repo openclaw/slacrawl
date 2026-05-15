@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vincentkoc/slacrawl/internal/store/storedb"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -129,6 +131,7 @@ create index if not exists idx_sync_state_updated on sync_state(updated_at desc)
 
 type Store struct {
 	db *sql.DB
+	q  *storedb.Queries
 }
 
 type Workspace struct {
@@ -281,7 +284,7 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, q: storedb.New(db)}, nil
 }
 
 func (s *Store) DB() *sql.DB {
@@ -299,55 +302,46 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) UpsertWorkspace(ctx context.Context, workspace Workspace) error {
-	_, err := s.db.ExecContext(ctx, `
-insert into workspaces (id, name, domain, enterprise_id, raw_json, updated_at)
-values (?, ?, ?, ?, ?, ?)
-on conflict(id) do update set
-  name=excluded.name,
-  domain=excluded.domain,
-  enterprise_id=excluded.enterprise_id,
-  raw_json=excluded.raw_json,
-  updated_at=excluded.updated_at
-`, workspace.ID, workspace.Name, workspace.Domain, workspace.EnterpriseID, workspace.RawJSON, workspace.UpdatedAt.Format(time.RFC3339))
-	return err
+	return s.q.UpsertWorkspace(ctx, storedb.UpsertWorkspaceParams{
+		ID:           workspace.ID,
+		Name:         workspace.Name,
+		Domain:       dbText(workspace.Domain),
+		EnterpriseID: dbText(workspace.EnterpriseID),
+		RawJson:      workspace.RawJSON,
+		UpdatedAt:    formatDBTime(workspace.UpdatedAt),
+	})
 }
 
 func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
-	_, err := s.db.ExecContext(ctx, `
-insert into channels (id, workspace_id, name, kind, topic, purpose, is_private, is_archived, is_shared, is_general, raw_json, updated_at)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-on conflict(id) do update set
-  workspace_id=excluded.workspace_id,
-  name=excluded.name,
-  kind=excluded.kind,
-  topic=excluded.topic,
-  purpose=excluded.purpose,
-  is_private=excluded.is_private,
-  is_archived=excluded.is_archived,
-  is_shared=excluded.is_shared,
-  is_general=excluded.is_general,
-  raw_json=excluded.raw_json,
-  updated_at=excluded.updated_at
-`, channel.ID, channel.WorkspaceID, channel.Name, channel.Kind, channel.Topic, channel.Purpose, boolInt(channel.IsPrivate), boolInt(channel.IsArchived), boolInt(channel.IsShared), boolInt(channel.IsGeneral), channel.RawJSON, channel.UpdatedAt.Format(time.RFC3339))
-	return err
+	return s.q.UpsertChannel(ctx, storedb.UpsertChannelParams{
+		ID:          channel.ID,
+		WorkspaceID: channel.WorkspaceID,
+		Name:        channel.Name,
+		Kind:        channel.Kind,
+		Topic:       dbText(channel.Topic),
+		Purpose:     dbText(channel.Purpose),
+		IsPrivate:   boolInt(channel.IsPrivate),
+		IsArchived:  boolInt(channel.IsArchived),
+		IsShared:    boolInt(channel.IsShared),
+		IsGeneral:   boolInt(channel.IsGeneral),
+		RawJson:     channel.RawJSON,
+		UpdatedAt:   formatDBTime(channel.UpdatedAt),
+	})
 }
 
 func (s *Store) UpsertUser(ctx context.Context, user User) error {
-	_, err := s.db.ExecContext(ctx, `
-insert into users (id, workspace_id, name, real_name, display_name, title, is_bot, is_deleted, raw_json, updated_at)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-on conflict(id) do update set
-  workspace_id=excluded.workspace_id,
-  name=excluded.name,
-  real_name=excluded.real_name,
-  display_name=excluded.display_name,
-  title=excluded.title,
-  is_bot=excluded.is_bot,
-  is_deleted=excluded.is_deleted,
-  raw_json=excluded.raw_json,
-  updated_at=excluded.updated_at
-`, user.ID, user.WorkspaceID, user.Name, user.RealName, user.DisplayName, user.Title, boolInt(user.IsBot), boolInt(user.IsDeleted), user.RawJSON, user.UpdatedAt.Format(time.RFC3339))
-	return err
+	return s.q.UpsertUser(ctx, storedb.UpsertUserParams{
+		ID:          user.ID,
+		WorkspaceID: user.WorkspaceID,
+		Name:        user.Name,
+		RealName:    dbText(user.RealName),
+		DisplayName: dbText(user.DisplayName),
+		Title:       dbText(user.Title),
+		IsBot:       boolInt(user.IsBot),
+		IsDeleted:   boolInt(user.IsDeleted),
+		RawJson:     user.RawJSON,
+		UpdatedAt:   formatDBTime(user.UpdatedAt),
+	})
 }
 
 func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []Mention) error {
@@ -357,46 +351,32 @@ func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []M
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	qtx := s.q.WithTx(tx)
 
-	_, err = tx.ExecContext(ctx, `
-insert into messages (
-  channel_id, ts, workspace_id, user_id, subtype, client_msg_id, thread_ts, parent_user_id,
-  text, normalized_text, reply_count, latest_reply, edited_ts, deleted_ts, source_rank,
-  source_name, raw_json, updated_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-on conflict(channel_id, ts) do update set
-  workspace_id=excluded.workspace_id,
-  user_id=excluded.user_id,
-  subtype=excluded.subtype,
-  client_msg_id=excluded.client_msg_id,
-  thread_ts=excluded.thread_ts,
-  parent_user_id=excluded.parent_user_id,
-  text=excluded.text,
-  normalized_text=excluded.normalized_text,
-  reply_count=excluded.reply_count,
-  latest_reply=excluded.latest_reply,
-  edited_ts=excluded.edited_ts,
-  deleted_ts=excluded.deleted_ts,
-  source_rank=case
-    when excluded.source_rank <= messages.source_rank then excluded.source_rank
-    else messages.source_rank
-  end,
-  source_name=case
-    when excluded.source_rank <= messages.source_rank then excluded.source_name
-    else messages.source_name
-  end,
-  raw_json=case
-    when excluded.source_rank <= messages.source_rank then excluded.raw_json
-    else messages.raw_json
-  end,
-  updated_at=excluded.updated_at
-`, message.ChannelID, message.TS, message.WorkspaceID, message.UserID, message.Subtype, message.ClientMsgID, message.ThreadTS, message.ParentUserID, message.Text, message.NormalizedText, message.ReplyCount, message.LatestReply, message.EditedTS, message.DeletedTS, message.SourceRank, message.SourceName, message.RawJSON, message.UpdatedAt.Format(time.RFC3339))
-	if err != nil {
+	if err := qtx.UpsertMessage(ctx, storedb.UpsertMessageParams{
+		ChannelID:      message.ChannelID,
+		Ts:             message.TS,
+		WorkspaceID:    message.WorkspaceID,
+		UserID:         dbText(message.UserID),
+		Subtype:        dbText(message.Subtype),
+		ClientMsgID:    dbText(message.ClientMsgID),
+		ThreadTs:       dbText(message.ThreadTS),
+		ParentUserID:   dbText(message.ParentUserID),
+		Text:           message.Text,
+		NormalizedText: message.NormalizedText,
+		ReplyCount:     int64(message.ReplyCount),
+		LatestReply:    dbText(message.LatestReply),
+		EditedTs:       dbText(message.EditedTS),
+		DeletedTs:      dbText(message.DeletedTS),
+		SourceRank:     int64(message.SourceRank),
+		SourceName:     message.SourceName,
+		RawJson:        message.RawJSON,
+		UpdatedAt:      formatDBTime(message.UpdatedAt),
+	}); err != nil {
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx, `delete from message_mentions where channel_id = ? and ts = ?`, message.ChannelID, message.TS)
-	if err != nil {
+	if err := qtx.DeleteMessageMentions(ctx, storedb.DeleteMessageMentionsParams{ChannelID: message.ChannelID, Ts: message.TS}); err != nil {
 		return err
 	}
 	seenMentions := map[string]struct{}{}
@@ -406,27 +386,32 @@ on conflict(channel_id, ts) do update set
 			continue
 		}
 		seenMentions[key] = struct{}{}
-		if _, err := tx.ExecContext(ctx, `
-insert into message_mentions (channel_id, ts, mention_type, target_id, display_text)
-values (?, ?, ?, ?, ?)
-on conflict(channel_id, ts, mention_type, target_id) do update set
-  display_text=excluded.display_text
-`, message.ChannelID, message.TS, mention.Type, mention.TargetID, mention.DisplayText); err != nil {
+		if err := qtx.UpsertMessageMention(ctx, storedb.UpsertMessageMentionParams{
+			ChannelID:   message.ChannelID,
+			Ts:          message.TS,
+			MentionType: mention.Type,
+			TargetID:    mention.TargetID,
+			DisplayText: dbText(mention.DisplayText),
+		}); err != nil {
 			return err
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `delete from message_fts where message_key = ?`, key); err != nil {
+	if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into message_fts (message_key, content) values (?, ?)`, key, message.NormalizedText); err != nil {
+	if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: message.NormalizedText}); err != nil {
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
-values (?, ?, ?, ?, ?, ?)
-`, message.ChannelID, message.TS, eventType(message), message.SourceName, message.RawJSON, message.UpdatedAt.Format(time.RFC3339)); err != nil {
+	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
+		ChannelID:   message.ChannelID,
+		Ts:          message.TS,
+		EventType:   eventType(message),
+		SourceName:  message.SourceName,
+		PayloadJson: message.RawJSON,
+		CreatedAt:   formatDBTime(message.UpdatedAt),
+	}); err != nil {
 		return err
 	}
 
@@ -434,44 +419,55 @@ values (?, ?, ?, ?, ?, ?)
 }
 
 func (s *Store) SetSyncState(ctx context.Context, source, entityType, entityID, value string) error {
-	_, err := s.db.ExecContext(ctx, `
-insert into sync_state (source_name, entity_type, entity_id, value, updated_at)
-values (?, ?, ?, ?, ?)
-on conflict(source_name, entity_type, entity_id) do update set
-  value=excluded.value,
-  updated_at=excluded.updated_at
-`, source, entityType, entityID, value, time.Now().UTC().Format(time.RFC3339))
-	return err
+	return s.q.SetSyncState(ctx, storedb.SetSyncStateParams{
+		SourceName: source,
+		EntityType: entityType,
+		EntityID:   entityID,
+		Value:      value,
+		UpdatedAt:  formatDBTime(time.Now().UTC()),
+	})
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
 	status := Status{}
-	for query, target := range map[string]*int{
-		`select count(*) from workspaces`: &status.Workspaces,
-		`select count(*) from channels`:   &status.Channels,
-		`select count(*) from users`:      &status.Users,
-		`select count(*) from messages`:   &status.Messages,
-	} {
-		if err := s.db.QueryRowContext(ctx, query).Scan(target); err != nil {
-			return Status{}, err
-		}
-	}
-
-	var lastSync sql.NullString
-	if err := s.db.QueryRowContext(ctx, `select max(updated_at) from sync_state where source_name != 'doctor'`).Scan(&lastSync); err != nil {
+	countWorkspaces, err := s.q.CountWorkspaces(ctx)
+	if err != nil {
 		return Status{}, err
 	}
-	if lastSync.Valid {
-		parsed, err := time.Parse(time.RFC3339, lastSync.String)
+	countChannels, err := s.q.CountChannels(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	countUsers, err := s.q.CountUsers(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	countMessages, err := s.q.CountMessages(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	status.Workspaces = int(countWorkspaces)
+	status.Channels = int(countChannels)
+	status.Users = int(countUsers)
+	status.Messages = int(countMessages)
+
+	lastSync, err := s.q.LastSyncAt(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	if lastSync != "" {
+		parsed, err := time.Parse(time.RFC3339, lastSync)
 		if err == nil {
 			status.LastSyncAt = parsed
 		}
 	}
 
 	status.ThreadState = "partial"
-	var hasUser sql.NullString
-	if err := s.db.QueryRowContext(ctx, `select value from sync_state where source_name = 'doctor' and entity_type = 'threads' and entity_id = 'coverage'`).Scan(&hasUser); err == nil {
-		status.ThreadState = hasUser.String
+	threadState, err := s.q.ThreadCoverageState(ctx)
+	if err == nil {
+		status.ThreadState = threadState
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Status{}, err
 	}
 
 	return status, nil
@@ -496,65 +492,53 @@ limit ?
 }
 
 func (s *Store) Messages(ctx context.Context, workspaceID string, channelID string, userID string, limit int) ([]MessageRow, error) {
-	query := `
-select workspace_id, channel_id, ts, user_id, text, normalized_text, thread_ts, subtype
-from messages
-where 1=1`
-	args := []any{}
-	if workspaceID != "" {
-		query += ` and workspace_id = ?`
-		args = append(args, workspaceID)
-	}
-	if channelID != "" {
-		query += ` and channel_id = ?`
-		args = append(args, channelID)
-	}
-	if userID != "" {
-		query += ` and user_id = ?`
-		args = append(args, userID)
-	}
-	query += ` order by ts desc limit ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.q.ListMessages(ctx, storedb.ListMessagesParams{
+		WorkspaceID: workspaceID,
+		ChannelID:   channelID,
+		UserID:      userID,
+		Limit:       int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return scanMessageRows(rows)
+	out := make([]MessageRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, MessageRow{
+			WorkspaceID:    row.WorkspaceID,
+			ChannelID:      row.ChannelID,
+			TS:             row.Ts,
+			UserID:         row.UserID,
+			Text:           row.Text,
+			NormalizedText: row.NormalizedText,
+			ThreadTS:       row.ThreadTs,
+			Subtype:        row.Subtype,
+		})
+	}
+	return out, nil
 }
 
 func (s *Store) Mentions(ctx context.Context, workspaceID string, target string, limit int) ([]MentionRow, error) {
-	query := `
-select m.workspace_id, mm.channel_id, mm.ts, mm.mention_type, mm.target_id, coalesce(mm.display_text, '')
-from message_mentions mm
-join messages m on m.channel_id = mm.channel_id and m.ts = mm.ts
-where 1=1`
-	args := []any{}
-	if workspaceID != "" {
-		query += ` and m.workspace_id = ?`
-		args = append(args, workspaceID)
-	}
-	if target != "" {
-		query += ` and (mm.target_id = ? or mm.display_text like ?)`
-		args = append(args, target, "%"+target+"%")
-	}
-	query += ` order by mm.ts desc limit ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.q.ListMentions(ctx, storedb.ListMentionsParams{
+		WorkspaceID: workspaceID,
+		Target:      target,
+		TargetLike:  dbText("%" + target + "%"),
+		Limit:       int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []MentionRow
-	for rows.Next() {
-		var row MentionRow
-		if err := rows.Scan(&row.WorkspaceID, &row.ChannelID, &row.TS, &row.MentionType, &row.TargetID, &row.DisplayText); err != nil {
-			return nil, err
-		}
-		out = append(out, row)
+	out := make([]MentionRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, MentionRow{
+			WorkspaceID: row.WorkspaceID,
+			ChannelID:   row.ChannelID,
+			TS:          row.Ts,
+			MentionType: row.MentionType,
+			TargetID:    row.TargetID,
+			DisplayText: row.DisplayText,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) QueryReadOnly(ctx context.Context, query string) ([]map[string]any, error) {
@@ -592,27 +576,27 @@ func (s *Store) QueryReadOnly(ctx context.Context, query string) ([]map[string]a
 }
 
 func (s *Store) Users(ctx context.Context, workspaceID string, query string, limit int) ([]UserRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-select workspace_id, id, name, coalesce(real_name, ''), coalesce(display_name, ''), coalesce(title, '')
-from users
-where (? = '' or workspace_id = ?)
-  and (? = '' or id = ? or name like ? or real_name like ? or display_name like ?)
-order by name asc
-limit ?
-`, workspaceID, workspaceID, query, query, "%"+query+"%", "%"+query+"%", "%"+query+"%", limit)
+	rows, err := s.q.ListUsers(ctx, storedb.ListUsersParams{
+		WorkspaceID: workspaceID,
+		Query:       query,
+		QueryLike:   "%" + query + "%",
+		Limit:       int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []UserRow
-	for rows.Next() {
-		var row UserRow
-		if err := rows.Scan(&row.WorkspaceID, &row.ID, &row.Name, &row.RealName, &row.DisplayName, &row.Title); err != nil {
-			return nil, err
-		}
-		out = append(out, row)
+	out := make([]UserRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, UserRow{
+			WorkspaceID: row.WorkspaceID,
+			ID:          row.ID,
+			Name:        row.Name,
+			RealName:    row.RealName,
+			DisplayName: row.DisplayName,
+			Title:       row.Title,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) Channels(ctx context.Context, workspaceID string, query string, limit int) ([]ChannelRow, error) {
@@ -620,79 +604,62 @@ func (s *Store) Channels(ctx context.Context, workspaceID string, query string, 
 }
 
 func (s *Store) ChannelsByKind(ctx context.Context, workspaceID string, query string, kind string, limit int) ([]ChannelRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-select workspace_id, id, name, kind
-from channels
-where (? = '' or workspace_id = ?)
-  and (? = '' or id = ? or name like ?)
-  and (? = '' or kind = ?)
-order by name asc
-limit ?
-`, workspaceID, workspaceID, query, query, "%"+query+"%", kind, kind, limit)
+	rows, err := s.q.ListChannelsByKind(ctx, storedb.ListChannelsByKindParams{
+		WorkspaceID: workspaceID,
+		Query:       query,
+		QueryLike:   "%" + query + "%",
+		Kind:        kind,
+		Limit:       int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []ChannelRow
-	for rows.Next() {
-		var row ChannelRow
-		if err := rows.Scan(&row.WorkspaceID, &row.ID, &row.Name, &row.Kind); err != nil {
-			return nil, err
-		}
-		out = append(out, row)
+	out := make([]ChannelRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ChannelRow{
+			WorkspaceID: row.WorkspaceID,
+			ID:          row.ID,
+			Name:        row.Name,
+			Kind:        row.Kind,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]ChannelSyncCursor, error) {
-	rows, err := s.db.QueryContext(ctx, `
-select c.id, coalesce(max(case when m.ts not like 'draft:%' then m.ts end), '')
-from channels c
-left join messages m on m.channel_id = c.id and m.workspace_id = c.workspace_id
-where c.workspace_id = ?
-group by c.id
-order by c.id asc
-`, workspaceID)
+	rows, err := s.q.ChannelSyncCursors(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []ChannelSyncCursor
-	for rows.Next() {
-		var row ChannelSyncCursor
-		if err := rows.Scan(&row.ID, &row.LatestTS); err != nil {
-			return nil, err
-		}
-		out = append(out, row)
+	out := make([]ChannelSyncCursor, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ChannelSyncCursor{ID: row.ID, LatestTS: row.LatestTs})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) RenameChannel(ctx context.Context, channelID string, name string) error {
-	_, err := s.db.ExecContext(ctx, `
-update channels
-set name = ?, updated_at = ?
-where id = ?
-`, name, time.Now().UTC().Format(time.RFC3339), channelID)
-	return err
+	return s.q.RenameChannel(ctx, storedb.RenameChannelParams{
+		Name:      name,
+		UpdatedAt: formatDBTime(time.Now().UTC()),
+		ID:        channelID,
+	})
 }
 
 func (s *Store) SetChannelArchived(ctx context.Context, channelID string, archived bool) error {
-	_, err := s.db.ExecContext(ctx, `
-update channels
-set is_archived = ?, updated_at = ?
-where id = ?
-`, boolInt(archived), time.Now().UTC().Format(time.RFC3339), channelID)
-	return err
+	return s.q.SetChannelArchived(ctx, storedb.SetChannelArchivedParams{
+		IsArchived: boolInt(archived),
+		UpdatedAt:  formatDBTime(time.Now().UTC()),
+		ID:         channelID,
+	})
 }
 
 func (s *Store) GetSyncState(ctx context.Context, source, entityType, entityID string) (string, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, `
-select value from sync_state
-where source_name = ? and entity_type = ? and entity_id = ?
-`, source, entityType, entityID).Scan(&value)
+	value, err := s.q.GetSyncState(ctx, storedb.GetSyncStateParams{
+		SourceName: source,
+		EntityType: entityType,
+		EntityID:   entityID,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -700,28 +667,24 @@ where source_name = ? and entity_type = ? and entity_id = ?
 }
 
 func (s *Store) ListSyncState(ctx context.Context, source, entityType string, limit int) ([]SyncStateRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-select source_name, entity_type, entity_id, value
-from sync_state
-where (? = '' or source_name = ?)
-  and (? = '' or entity_type = ?)
-order by updated_at desc, entity_id asc
-limit ?
-`, source, source, entityType, entityType, RequireLimit(limit))
+	rows, err := s.q.ListSyncState(ctx, storedb.ListSyncStateParams{
+		SourceName: source,
+		EntityType: entityType,
+		Limit:      int64(RequireLimit(limit)),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []SyncStateRow
-	for rows.Next() {
-		var row SyncStateRow
-		if err := rows.Scan(&row.SourceName, &row.EntityType, &row.EntityID, &row.Value); err != nil {
-			return nil, err
-		}
-		out = append(out, row)
+	out := make([]SyncStateRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, SyncStateRow{
+			SourceName: row.SourceName,
+			EntityType: row.EntityType,
+			EntityID:   row.EntityID,
+			Value:      row.Value,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) RebuildSearchIndexes(ctx context.Context) error {
@@ -764,11 +727,19 @@ func scanMessageRows(rows *sql.Rows) ([]MessageRow, error) {
 	return out, rows.Err()
 }
 
-func boolInt(value bool) int {
+func boolInt(value bool) int64 {
 	if value {
 		return 1
 	}
 	return 0
+}
+
+func dbText(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: true}
+}
+
+func formatDBTime(value time.Time) string {
+	return value.Format(time.RFC3339)
 }
 
 func eventType(message Message) string {

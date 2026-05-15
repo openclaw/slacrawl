@@ -80,6 +80,54 @@ func TestUpsertMessageDeduplicatesMentions(t *testing.T) {
 	require.Equal(t, int64(1), rows[0]["n"])
 }
 
+func TestUpsertMessagePreservesSourcePrecedenceAndRefreshesSearch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID:      "C1",
+		TS:             "123.45",
+		WorkspaceID:    "T1",
+		Text:           "old alpha",
+		NormalizedText: "old alpha",
+		SourceRank:     1,
+		SourceName:     "api-user",
+		RawJSON:        `{"source":"user"}`,
+		UpdatedAt:      now,
+	}, nil))
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID:      "C1",
+		TS:             "123.45",
+		WorkspaceID:    "T1",
+		Text:           "new beta",
+		NormalizedText: "new beta",
+		SourceRank:     2,
+		SourceName:     "api-bot",
+		RawJSON:        `{"source":"bot"}`,
+		UpdatedAt:      now.Add(time.Second),
+	}, nil))
+
+	rows, err := s.QueryReadOnly(ctx, "select source_rank, source_name, raw_json, text, normalized_text from messages where channel_id = 'C1' and ts = '123.45'")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, int64(1), rows[0]["source_rank"])
+	require.Equal(t, "api-user", rows[0]["source_name"])
+	require.Equal(t, `{"source":"user"}`, rows[0]["raw_json"])
+	require.Equal(t, "new beta", rows[0]["text"])
+	require.Equal(t, "new beta", rows[0]["normalized_text"])
+
+	matches, err := s.Search(ctx, "", "beta", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	matches, err = s.Search(ctx, "", "alpha", 10)
+	require.NoError(t, err)
+	require.Empty(t, matches)
+}
+
 func TestWorkspaceFiltersApplyToReadQueries(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
