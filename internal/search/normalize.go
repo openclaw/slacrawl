@@ -114,6 +114,10 @@ func appendRawVisibleText(parts *[]string, value any, key string) {
 			if _, hidden := rawHiddenTextContainers[childKey]; hidden {
 				continue
 			}
+			if key == "fields" && childKey == "value" {
+				appendRawVisibleText(parts, v[childKey], "text")
+				continue
+			}
 			appendRawVisibleText(parts, v[childKey], childKey)
 		}
 	case []any:

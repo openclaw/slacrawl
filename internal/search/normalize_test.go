@@ -114,9 +114,13 @@ func TestNormalizeMessageWithRawPayloadKeepsSubstringLabels(t *testing.T) {
 	raw := []any{map[string]any{
 		"type": "unknown_new",
 		"text": "go",
+		"fields": []any{
+			map[string]any{"title": "Impact", "value": "customer visible"},
+		},
+		"value": "hidden action value",
 	}}
 
-	require.Equal(t, "dragon go", NormalizeMessageWithRawPayload(msg, raw))
+	require.Equal(t, "dragon Impact customer visible go", NormalizeMessageWithRawPayload(msg, raw))
 }
 
 func TestNormalizeMessageIncludesRichBlocksAndActionElements(t *testing.T) {

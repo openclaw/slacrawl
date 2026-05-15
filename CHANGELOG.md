@@ -27,6 +27,7 @@
 - Slack export imports now preserve leading and trailing whitespace in message text.
 - Media fetch now validates every redirect target before sending Slack file requests.
 - Message search indexing now includes visible Slack block and attachment text.
+- Desktop IndexedDB ingest now indexes visible Slack block and attachment text.
 - Share imports now reject manifest table directories that resolve outside the share repo.
 - Share imports now validate manifest tables, shard paths, columns, and row counts before replacing snapshots.
 - Git-share pulls now preserve local commits instead of resetting the branch to `origin`.

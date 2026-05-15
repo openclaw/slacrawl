@@ -83,6 +83,8 @@ type ReduxMessage struct {
 	ClientMsgID  string       `json:"client_msg_id"`
 	ParentUserID string       `json:"parent_user_id"`
 	Text         string       `json:"text"`
+	Blocks       any          `json:"blocks,omitempty"`
+	Attachments  any          `json:"attachments,omitempty"`
 	ReplyCount   int          `json:"reply_count"`
 	LatestReply  string       `json:"latest_reply"`
 	Hidden       bool         `json:"hidden"`
@@ -344,6 +346,16 @@ func normalizeReduxMessage(message ReduxMessage) string {
 				return ""
 			}(),
 		},
+	}
+	rawPayload := map[string]any{}
+	if message.Blocks != nil {
+		rawPayload["blocks"] = message.Blocks
+	}
+	if message.Attachments != nil {
+		rawPayload["attachments"] = message.Attachments
+	}
+	if len(rawPayload) > 0 {
+		return search.NormalizeMessageWithRawPayload(slackMessage, rawPayload)
 	}
 	return search.NormalizeMessage(slackMessage)
 }

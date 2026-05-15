@@ -256,6 +256,32 @@ fs.writeFileSync(process.argv[1], v8.serialize(value));
 	require.Equal(t, "thread reply", byTS["1710000002.000300"].Text)
 }
 
+func TestNormalizeReduxMessageIncludesBlocksAndAttachments(t *testing.T) {
+	normalized := normalizeReduxMessage(ReduxMessage{
+		Channel: "C111",
+		TS:      "1710000001.000200",
+		Type:    "message",
+		Blocks: []any{
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{"type": "mrkdwn", "text": "block body <@U123|ada>"},
+			},
+		},
+		Attachments: []any{
+			map[string]any{
+				"fallback": "attachment fallback",
+				"fields": []any{
+					map[string]any{"title": "impact", "value": "customer visible"},
+				},
+			},
+		},
+	})
+
+	require.Contains(t, normalized, "block body @ada")
+	require.Contains(t, normalized, "attachment fallback")
+	require.Contains(t, normalized, "customer visible")
+}
+
 func TestInspectIncludesSnapshotDerivedDesktopSummaries(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
