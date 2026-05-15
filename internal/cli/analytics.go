@@ -57,6 +57,9 @@ func (a *App) runAnalyticsQuiet(ctx context.Context, configPath string, args []s
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectUnexpectedArgs("analytics quiet", fs.Args()); err != nil {
+		return err
+	}
 	lookback, err := parseLookback(*since)
 	if err != nil {
 		return fmt.Errorf("parse --since: %w", err)
@@ -99,6 +102,9 @@ func (a *App) runAnalyticsTrends(ctx context.Context, configPath string, args []
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectUnexpectedArgs("analytics trends", fs.Args()); err != nil {
+		return err
+	}
 	if *weeks < 0 {
 		return errors.New("--weeks must be zero or greater")
 	}
@@ -123,4 +129,11 @@ func (a *App) runAnalyticsTrends(ctx context.Context, configPath string, args []
 		return err
 	}
 	return a.writeOutput("Analytics Trends", trends, outputFormat, true)
+}
+
+func rejectUnexpectedArgs(command string, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s does not accept positional arguments: %q", command, args)
 }

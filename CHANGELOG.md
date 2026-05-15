@@ -13,6 +13,7 @@
 - Fixed Slack deleted-message events so live tail marks the original message row deleted instead of inserting a synthetic row at the event timestamp.
 - Handled Slack deleted-message payloads that omit `previous_message`.
 - `analytics --help`, `analytics -h`, and `analytics help` now print analytics subcommand usage.
+- `analytics quiet` and `analytics trends` now reject unexpected positional arguments instead of ignoring them.
 - Indexed mentions when a live deleted-message event creates a tombstone row before the original message was archived.
 - Preserved archived reply and file metadata when live deleted-message events mark an existing message deleted.
 - Refreshed message search text when live deleted-message events mark an existing message deleted.

@@ -213,6 +213,19 @@ func TestAnalyticsTrendsCommandIncludesRequestedQuietChannel(t *testing.T) {
 	require.Equal(t, float64(0), weekly[1].(map[string]any)["messages"])
 }
 
+func TestAnalyticsCommandsRejectPositionalArgs(t *testing.T) {
+	ctx := context.Background()
+	app, configPath, _, _ := setupAnalyticsApp(t)
+
+	err := app.Run(ctx, []string{"--config", configPath, "analytics", "quiet", "typo", "--workspace", "T1"})
+	require.ErrorContains(t, err, "analytics quiet does not accept positional arguments")
+	require.ErrorContains(t, err, "typo")
+
+	err = app.Run(ctx, []string{"--config", configPath, "analytics", "trends", "typo", "--weeks", "3"})
+	require.ErrorContains(t, err, "analytics trends does not accept positional arguments")
+	require.ErrorContains(t, err, "typo")
+}
+
 func setupAnalyticsApp(t *testing.T) (*App, string, string, *bytes.Buffer) {
 	t.Helper()
 	tmp := t.TempDir()
