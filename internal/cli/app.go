@@ -293,6 +293,16 @@ func (a *App) runDoctor(ctx context.Context, configPath string, format OutputFor
 	if threadCoverage == "" {
 		threadCoverage = "partial"
 	}
+	if threadCoverage == "full" {
+		hasThreadSkips, err := st.HasSyncStateType(ctx, slackapi.SourceUser, "thread_skip")
+		if err != nil {
+			return err
+		}
+		if hasThreadSkips {
+			threadCoverage = "partial"
+		}
+	}
+	diag.ThreadCoverage = threadCoverage
 	if err := st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage); err != nil {
 		return err
 	}

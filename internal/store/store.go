@@ -756,6 +756,37 @@ func (s *Store) SetSyncState(ctx context.Context, source, entityType, entityID, 
 	})
 }
 
+func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityID string) error {
+	return s.q.DeleteSyncState(ctx, storedb.DeleteSyncStateParams{
+		SourceName: source,
+		EntityType: entityType,
+		EntityID:   entityID,
+	})
+}
+
+func (s *Store) DeleteSyncStateByType(ctx context.Context, source, entityType string) error {
+	return s.q.DeleteSyncStateByType(ctx, storedb.DeleteSyncStateByTypeParams{
+		SourceName: source,
+		EntityType: entityType,
+	})
+}
+
+func (s *Store) DeleteSyncStateByTypePrefix(ctx context.Context, source, entityType, entityIDPrefix string) error {
+	return s.q.DeleteSyncStateByTypePrefix(ctx, storedb.DeleteSyncStateByTypePrefixParams{
+		SourceName:   source,
+		EntityType:   entityType,
+		EntityIDLike: entityIDPrefix + "%",
+	})
+}
+
+func (s *Store) HasSyncStateType(ctx context.Context, source, entityType string) (bool, error) {
+	count, err := s.q.CountSyncStateByType(ctx, storedb.CountSyncStateByTypeParams{
+		SourceName: source,
+		EntityType: entityType,
+	})
+	return count > 0, err
+}
+
 func (s *Store) Status(ctx context.Context) (Status, error) {
 	status := Status{}
 	countWorkspaces, err := s.q.CountWorkspaces(ctx)

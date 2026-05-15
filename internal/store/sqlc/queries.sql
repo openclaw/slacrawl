@@ -174,6 +174,25 @@ on conflict(source_name, entity_type, entity_id) do update set
   value=excluded.value,
   updated_at=excluded.updated_at;
 
+-- name: DeleteSyncState :exec
+delete from sync_state
+where source_name = ? and entity_type = ? and entity_id = ?;
+
+-- name: DeleteSyncStateByType :exec
+delete from sync_state
+where source_name = ? and entity_type = ?;
+
+-- name: DeleteSyncStateByTypePrefix :exec
+delete from sync_state
+where source_name = sqlc.arg(source_name)
+  and entity_type = sqlc.arg(entity_type)
+  and entity_id like sqlc.arg(entity_id_like);
+
+-- name: CountSyncStateByType :one
+select count(*)
+from sync_state
+where source_name = ? and entity_type = ?;
+
 -- name: CountWorkspaces :one
 select count(*) from workspaces;
 

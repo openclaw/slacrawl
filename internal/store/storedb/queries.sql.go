@@ -69,6 +69,24 @@ func (q *Queries) CountMessages(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countSyncStateByType = `-- name: CountSyncStateByType :one
+select count(*)
+from sync_state
+where source_name = ? and entity_type = ?
+`
+
+type CountSyncStateByTypeParams struct {
+	SourceName string `json:"source_name"`
+	EntityType string `json:"entity_type"`
+}
+
+func (q *Queries) CountSyncStateByType(ctx context.Context, arg CountSyncStateByTypeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSyncStateByType, arg.SourceName, arg.EntityType)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUsers = `-- name: CountUsers :one
 select count(*) from users
 `
@@ -125,6 +143,55 @@ type DeleteMessageMentionsParams struct {
 
 func (q *Queries) DeleteMessageMentions(ctx context.Context, arg DeleteMessageMentionsParams) error {
 	_, err := q.db.ExecContext(ctx, deleteMessageMentions, arg.ChannelID, arg.Ts)
+	return err
+}
+
+const deleteSyncState = `-- name: DeleteSyncState :exec
+delete from sync_state
+where source_name = ? and entity_type = ? and entity_id = ?
+`
+
+type DeleteSyncStateParams struct {
+	SourceName string `json:"source_name"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+}
+
+func (q *Queries) DeleteSyncState(ctx context.Context, arg DeleteSyncStateParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSyncState, arg.SourceName, arg.EntityType, arg.EntityID)
+	return err
+}
+
+const deleteSyncStateByType = `-- name: DeleteSyncStateByType :exec
+delete from sync_state
+where source_name = ? and entity_type = ?
+`
+
+type DeleteSyncStateByTypeParams struct {
+	SourceName string `json:"source_name"`
+	EntityType string `json:"entity_type"`
+}
+
+func (q *Queries) DeleteSyncStateByType(ctx context.Context, arg DeleteSyncStateByTypeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSyncStateByType, arg.SourceName, arg.EntityType)
+	return err
+}
+
+const deleteSyncStateByTypePrefix = `-- name: DeleteSyncStateByTypePrefix :exec
+delete from sync_state
+where source_name = ?1
+  and entity_type = ?2
+  and entity_id like ?3
+`
+
+type DeleteSyncStateByTypePrefixParams struct {
+	SourceName   string `json:"source_name"`
+	EntityType   string `json:"entity_type"`
+	EntityIDLike string `json:"entity_id_like"`
+}
+
+func (q *Queries) DeleteSyncStateByTypePrefix(ctx context.Context, arg DeleteSyncStateByTypePrefixParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSyncStateByTypePrefix, arg.SourceName, arg.EntityType, arg.EntityIDLike)
 	return err
 }
 

@@ -176,6 +176,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		return err
 	}
 	userRepliesAvailable := c.userAuthAvailable(ctx)
+	threadRepliesSkipped := newThreadSkipTracker()
 
 	channels, err := c.fetchChannels(ctx, workspaceID)
 	if err != nil {
@@ -194,7 +195,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 		selectedChannels = append(selectedChannels, channel)
 	}
-	if err := c.syncChannels(ctx, st, workspaceID, selectedChannels, opts, now, userRepliesAvailable); err != nil {
+	if err := c.syncChannels(ctx, st, workspaceID, selectedChannels, opts, now, userRepliesAvailable, threadRepliesSkipped); err != nil {
 		return err
 	}
 
@@ -239,6 +240,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 				sourceRank:       1,
 				allowJoin:        false,
 				skipMissingScope: true,
+				threadSkip:       threadRepliesSkipped,
 			}); err != nil {
 				return err
 			}
@@ -258,8 +260,20 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	threadCoverage := "partial"
-	if userRepliesAvailable {
-		threadCoverage = "full"
+	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
+		threadSkipPrefix := workspaceID + "|"
+		if opts.Full && len(opts.Channels) == 0 {
+			if err := st.DeleteSyncStateByTypePrefix(ctx, SourceUser, "thread_skip", threadSkipPrefix); err != nil {
+				return err
+			}
+		}
+		hasThreadSkips, err := st.HasSyncStateType(ctx, SourceUser, "thread_skip")
+		if err != nil {
+			return err
+		}
+		if !hasThreadSkips {
+			threadCoverage = "full"
+		}
 	}
 	if err := st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage); err != nil {
 		return err
@@ -438,7 +452,28 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				return err
 			}
 			if msg.ReplyCount > 0 && userRepliesAvailable {
+				threadKey := workspaceID + "|" + channel.ID + "|" + msg.Timestamp
+				if source.threadSkip != nil {
+					if reason, ok := source.threadSkip.SkipReason(channel.ID, threadSkipScope(channel)); ok {
+						if setErr := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason); setErr != nil {
+							return setErr
+						}
+						continue
+					}
+				}
 				if err := c.syncThread(ctx, st, workspaceID, channel.ID, msg.Timestamp, now); err != nil {
+					if isThreadRepliesSkipped(err) {
+						if source.threadSkip != nil {
+							source.threadSkip.Record(channel.ID, threadSkipScope(channel), channelSkipReason(err))
+						}
+						if setErr := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, channelSkipReason(err)); setErr != nil {
+							return setErr
+						}
+						continue
+					}
+					return err
+				}
+				if err := st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey); err != nil {
 					return err
 				}
 			}
@@ -516,11 +551,15 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 		latestByChannel[cursor.ID] = cursor.LatestTS
 	}
 	now := c.now()
+	threadRepliesSkipped := newThreadSkipTracker()
 	for _, channel := range channels {
 		repairSince := repairOldest(latestByChannel[channel.ID], time.Hour)
-		if err := c.syncChannels(ctx, st, workspaceID, []slack.Channel{channel}, SyncOptions{Since: repairSince}, now, c.userAuthAvailable(ctx)); err != nil {
+		if err := c.syncChannels(ctx, st, workspaceID, []slack.Channel{channel}, SyncOptions{Since: repairSince}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
 			return err
 		}
+	}
+	if threadRepliesSkipped.Skipped() {
+		return st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial")
 	}
 	return nil
 }
@@ -996,15 +1035,17 @@ type channelSyncSource struct {
 	sourceRank       int
 	allowJoin        bool
 	skipMissingScope bool
+	threadSkip       *threadSkipTracker
 }
 
-func (c *Client) syncChannels(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool) error {
+func (c *Client) syncChannels(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, threadSkip *threadSkipTracker) error {
 	return c.syncChannelsWithSource(ctx, st, workspaceID, channels, opts, now, userRepliesAvailable, channelSyncSource{
 		historyClient: c.bot,
 		token:         c.tokens.Bot,
 		sourceName:    SourceBot,
 		sourceRank:    2,
 		allowJoin:     true,
+		threadSkip:    threadSkip,
 	})
 }
 
@@ -1135,6 +1176,71 @@ func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspace
 func isChannelHistorySkipped(err error) bool {
 	reason := channelSkipReason(err)
 	return reason == "not_in_channel" || reason == "channel_not_found"
+}
+
+func isThreadRepliesSkipped(err error) bool {
+	reason := channelSkipReason(err)
+	return reason == "missing_scope" || reason == "not_in_channel" || reason == "channel_not_found"
+}
+
+type threadSkipTracker struct {
+	mu       sync.Mutex
+	scopes   map[string]string
+	channels map[string]string
+}
+
+func newThreadSkipTracker() *threadSkipTracker {
+	return &threadSkipTracker{
+		scopes:   make(map[string]string),
+		channels: make(map[string]string),
+	}
+}
+
+func (t *threadSkipTracker) Record(channelID, scope, reason string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if reason == "missing_scope" {
+		t.scopes[scope] = reason
+		return
+	}
+	t.channels[channelID] = reason
+}
+
+func (t *threadSkipTracker) SkipReason(channelID, scope string) (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	t.mu.Lock()
+	scopeReason, scopeSkipped := t.scopes[scope]
+	channelReason, channelSkipped := t.channels[channelID]
+	t.mu.Unlock()
+	if scopeSkipped {
+		return scopeReason, true
+	}
+	return channelReason, channelSkipped
+}
+
+func (t *threadSkipTracker) Skipped() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	skipped := len(t.scopes) > 0 || len(t.channels) > 0
+	t.mu.Unlock()
+	return skipped
+}
+
+func threadSkipScope(channel slack.Channel) string {
+	if kind := dmChannelKind(channel); kind != "" {
+		return kind
+	}
+	if channel.IsPrivate {
+		return "private_channel"
+	}
+	return "public_channel"
 }
 
 func channelSkipReason(err error) string {
