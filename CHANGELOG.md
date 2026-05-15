@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 - Unreleased
+
+### Fixes
+
+- Homebrew tap sync now skips cleanly when `HOMEBREW_TAP_GITHUB_TOKEN` is not configured.
+
 ## 0.6.0 - 2026-05-15
 
 ### Changes
