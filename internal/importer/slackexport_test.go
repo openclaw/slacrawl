@@ -121,6 +121,37 @@ func TestMissingChannelDirectoryDoesNotError(t *testing.T) {
 	require.Empty(t, messages)
 }
 
+func TestMessagesRejectsTraversalChannelName(t *testing.T) {
+	root := t.TempDir()
+	exportDir := filepath.Join(root, "export")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "leak"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "leak", "2026-01-01.json"), []byte(`[{"type":"message","text":"outside","ts":"1.0"}]`), 0o600))
+	require.NoError(t, os.MkdirAll(exportDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "channels.json"), []byte(`[{"id":"C1","name":"general"}]`), 0o600))
+
+	ex, err := Open(exportDir)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ex.Close()) }()
+
+	messages, iterErr := collectMessages(ex, "../leak")
+	require.Error(t, iterErr)
+	require.Contains(t, iterErr.Error(), "invalid channel directory")
+	require.Empty(t, messages)
+}
+
+func TestChannelsRejectTraversalNames(t *testing.T) {
+	dir := writeFixtureDir(t, map[string]string{
+		"channels.json": `[{"id":"C1","name":"../leak"}]`,
+	})
+	ex, err := Open(dir)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ex.Close()) }()
+
+	_, err = ex.Channels()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid channels.json name")
+}
+
 func collectMessages(ex *Export, channel string) ([]MessageEnvelope, error) {
 	messages := []MessageEnvelope{}
 	for env, err := range ex.Messages(channel) {

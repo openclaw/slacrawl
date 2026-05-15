@@ -98,6 +98,10 @@ func (e *Export) MPIMs() ([]ChannelInfo, error) {
 
 func (e *Export) Messages(channelName string) iter.Seq2[MessageEnvelope, error] {
 	return func(yield func(MessageEnvelope, error) bool) {
+		if err := validateChannelDirName(channelName); err != nil {
+			yield(MessageEnvelope{}, err)
+			return
+		}
 		entries, err := fs.ReadDir(e.fs, channelName)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -177,6 +181,12 @@ func (e *Export) readChannelList(fileName, kind string, defaultPrivate bool) ([]
 		if rec.Name == "" {
 			rec.Name = rec.ID
 		}
+		if err := validateChannelDirName(rec.ID); err != nil {
+			return nil, fmt.Errorf("invalid %s id %q: %w", fileName, rec.ID, err)
+		}
+		if err := validateChannelDirName(rec.Name); err != nil {
+			return nil, fmt.Errorf("invalid %s name %q: %w", fileName, rec.Name, err)
+		}
 		isPrivate := defaultPrivate
 		if rec.IsPrivate {
 			isPrivate = true
@@ -190,6 +200,13 @@ func (e *Export) readChannelList(fileName, kind string, defaultPrivate bool) ([]
 		})
 	}
 	return out, nil
+}
+
+func validateChannelDirName(name string) error {
+	if name == "." || !fs.ValidPath(name) || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("invalid channel directory %q", name)
+	}
+	return nil
 }
 
 func (e *Export) readJSONOptional(fileName string, out any) (bool, error) {
