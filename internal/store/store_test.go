@@ -128,6 +128,48 @@ func TestUpsertMessagePreservesSourcePrecedenceAndRefreshesSearch(t *testing.T) 
 	require.Empty(t, matches)
 }
 
+func TestQueryReadOnlyRejectsWritableCTE(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID:      "C1",
+		TS:             "123.45",
+		WorkspaceID:    "T1",
+		Text:           "keep me",
+		NormalizedText: "keep me",
+		SourceRank:     2,
+		SourceName:     "api-bot",
+		RawJSON:        "{}",
+		UpdatedAt:      time.Now().UTC(),
+	}, nil))
+
+	_, err = s.QueryReadOnly(ctx, "with x as (select 1) delete from messages where channel_id = 'C1' returning 1")
+	require.Error(t, err)
+
+	status, err := s.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Messages)
+}
+
+func TestQueryReadOnlyRejectsAdditionalStatements(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	_, err = s.QueryReadOnly(ctx, "select ';' as literal; select 2")
+	require.Error(t, err)
+
+	rows, err := s.QueryReadOnly(ctx, "select ';' as literal; -- trailing comment")
+	require.NoError(t, err)
+	require.Equal(t, ";", rows[0]["literal"])
+}
+
 func TestUpsertMessageStoresFilesPreservesMediaAndRefreshesSearch(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
