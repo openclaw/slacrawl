@@ -235,6 +235,9 @@ func Import(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 	if err != nil {
 		return Manifest{}, err
 	}
+	if err := validateManifest(ctx, s.DB(), opts.RepoPath, manifest); err != nil {
+		return Manifest{}, err
+	}
 	tx, err := s.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return Manifest{}, err
@@ -259,8 +262,12 @@ func Import(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 		}
 	}
 	for _, table := range manifest.Tables {
-		if err := importTable(ctx, tx, opts.RepoPath, table); err != nil {
+		rows, err := importTable(ctx, tx, opts.RepoPath, table)
+		if err != nil {
 			return Manifest{}, err
+		}
+		if rows != table.Rows {
+			return Manifest{}, fmt.Errorf("manifest table %s row count mismatch: imported %d, expected %d", table.Name, rows, table.Rows)
 		}
 	}
 	var mediaManifest *MediaManifest
@@ -289,6 +296,48 @@ func Import(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 		return Manifest{}, err
 	}
 	return manifest, nil
+}
+
+func validateManifest(ctx context.Context, db *sql.DB, repoPath string, manifest Manifest) error {
+	expected := make(map[string]struct{}, len(SnapshotTables))
+	for _, table := range SnapshotTables {
+		expected[table] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(manifest.Tables))
+	for _, table := range manifest.Tables {
+		if _, ok := expected[table.Name]; !ok {
+			return fmt.Errorf("manifest contains unknown table %q", table.Name)
+		}
+		if _, ok := seen[table.Name]; ok {
+			return fmt.Errorf("manifest contains duplicate table %q", table.Name)
+		}
+		seen[table.Name] = struct{}{}
+		if table.Rows < 0 {
+			return fmt.Errorf("manifest table %s has negative row count", table.Name)
+		}
+		files := tableManifestFiles(table)
+		if len(files) == 0 {
+			return fmt.Errorf("manifest table %s has no files", table.Name)
+		}
+		for _, rel := range files {
+			if _, err := resolveManifestTableFile(repoPath, table.Name, rel); err != nil {
+				return fmt.Errorf("manifest table %s file %q: %w", table.Name, rel, err)
+			}
+		}
+		columns, err := tableColumns(ctx, db, table.Name)
+		if err != nil {
+			return err
+		}
+		if !sameStrings(table.Columns, columns) {
+			return fmt.Errorf("manifest table %s columns mismatch", table.Name)
+		}
+	}
+	for _, table := range SnapshotTables {
+		if _, ok := seen[table]; !ok {
+			return fmt.Errorf("manifest missing table %q", table)
+		}
+	}
+	return nil
 }
 
 func ImportIfChanged(ctx context.Context, s *store.Store, opts Options) (Manifest, bool, error) {
@@ -455,41 +504,52 @@ func exportTable(ctx context.Context, db *sql.DB, dataDir, table string) (TableM
 	return TableManifest{Name: table, Files: writer.files, Columns: columns, Rows: count}, nil
 }
 
-func importTable(ctx context.Context, tx *sql.Tx, repoPath string, table TableManifest) error {
-	files := table.Files
-	if len(files) == 0 && strings.TrimSpace(table.File) != "" {
-		files = []string{table.File}
+func tableManifestFiles(table TableManifest) []string {
+	if len(table.Files) > 0 {
+		return table.Files
 	}
-	if len(files) == 0 {
-		return fmt.Errorf("manifest table %s has no files", table.Name)
-	}
-	stmt, err := tx.PrepareContext(ctx, insertSQL(table.Name, table.Columns))
-	if err != nil {
-		return fmt.Errorf("prepare import %s: %w", table.Name, err)
-	}
-	defer func() { _ = stmt.Close() }()
-	for _, rel := range files {
-		if err := importTableFile(ctx, stmt, repoPath, table, rel); err != nil {
-			return err
-		}
+	if strings.TrimSpace(table.File) != "" {
+		return []string{table.File}
 	}
 	return nil
 }
 
-func importTableFile(ctx context.Context, stmt *sql.Stmt, repoPath string, table TableManifest, rel string) error {
-	path := filepath.Join(repoPath, filepath.FromSlash(rel))
+func importTable(ctx context.Context, tx *sql.Tx, repoPath string, table TableManifest) (int, error) {
+	files := tableManifestFiles(table)
+	stmt, err := tx.PrepareContext(ctx, insertSQL(table.Name, table.Columns))
+	if err != nil {
+		return 0, fmt.Errorf("prepare import %s: %w", table.Name, err)
+	}
+	defer func() { _ = stmt.Close() }()
+	rows := 0
+	for _, rel := range files {
+		count, err := importTableFile(ctx, stmt, repoPath, table, rel)
+		if err != nil {
+			return 0, err
+		}
+		rows += count
+	}
+	return rows, nil
+}
+
+func importTableFile(ctx context.Context, stmt *sql.Stmt, repoPath string, table TableManifest, rel string) (int, error) {
+	path, err := resolveManifestTableFile(repoPath, table.Name, rel)
+	if err != nil {
+		return 0, fmt.Errorf("manifest table %s file %q: %w", table.Name, rel, err)
+	}
 	file, err := os.Open(path) //nolint:gosec // Import reads files from the configured backup repo.
 	if err != nil {
-		return fmt.Errorf("open %s: %w", rel, err)
+		return 0, fmt.Errorf("open %s: %w", rel, err)
 	}
 	defer func() { _ = file.Close() }()
 	gz, err := gzip.NewReader(file)
 	if err != nil {
-		return fmt.Errorf("read gzip %s: %w", rel, err)
+		return 0, fmt.Errorf("read gzip %s: %w", rel, err)
 	}
 	defer func() { _ = gz.Close() }()
 	dec := json.NewDecoder(gz)
 	dec.UseNumber()
+	rows := 0
 	for {
 		row := map[string]any{}
 		err := dec.Decode(&row)
@@ -497,17 +557,86 @@ func importTableFile(ctx context.Context, stmt *sql.Stmt, repoPath string, table
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("decode %s: %w", rel, err)
+			return 0, fmt.Errorf("decode %s: %w", rel, err)
 		}
 		values := make([]any, len(table.Columns))
 		for i, column := range table.Columns {
 			values[i] = importValue(row[column])
 		}
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("insert %s: %w", table.Name, err)
+			return 0, fmt.Errorf("insert %s: %w", table.Name, err)
+		}
+		rows++
+	}
+	return rows, nil
+}
+
+func resolveManifestTableFile(repoPath string, tableName string, rel string) (string, error) {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return "", errors.New("empty path")
+	}
+	if filepath.IsAbs(rel) || filepath.IsAbs(filepath.FromSlash(rel)) {
+		return "", errors.New("absolute path")
+	}
+	cleanRel := filepath.Clean(filepath.FromSlash(rel))
+	if cleanRel == "." || cleanRel == ".." || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes share repo")
+	}
+	expectedPrefix := filepath.Join("tables", tableName) + string(filepath.Separator)
+	if !strings.HasPrefix(cleanRel, expectedPrefix) {
+		return "", fmt.Errorf("path is outside tables/%s", tableName)
+	}
+	basePath := filepath.Join(repoPath, "tables", tableName)
+	filePath := filepath.Join(repoPath, cleanRel)
+	baseEval, err := filepath.EvalSymlinks(basePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve table dir: %w", err)
+	}
+	fileEval, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve file: %w", err)
+	}
+	relative, err := filepath.Rel(baseEval, fileEval)
+	if err != nil {
+		return "", err
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", errors.New("path escapes table directory")
+	}
+	info, err := os.Stat(fileEval)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", errors.New("path is a directory")
+	}
+	return fileEval, nil
+}
+
+func tableColumns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, "select * from "+quoteIdent(table)+" limit 0") //nolint:gosec // Table names are validated against SnapshotTables before querying.
+	if err != nil {
+		return nil, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	return columns, nil
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 func exportMedia(ctx context.Context, db *sql.DB, opts Options) (*MediaManifest, error) {

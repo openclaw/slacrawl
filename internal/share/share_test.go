@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,77 @@ func TestExportImportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "git backed archive works", rows[0].Text)
+}
+
+func TestImportRejectsIncompleteManifestBeforeClearing(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+	opts := Options{RepoPath: filepath.Join(dir, "share"), Branch: "main"}
+	manifest, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+	manifest.Tables = manifest.Tables[:1]
+	writeManifest(t, opts.RepoPath, manifest)
+
+	reader := seedStore(t, filepath.Join(dir, "reader.db"))
+	defer func() { require.NoError(t, reader.Close()) }()
+
+	_, err = Import(ctx, reader, opts)
+	require.ErrorContains(t, err, "manifest missing table")
+	assertArchiveStillPresent(t, ctx, reader)
+}
+
+func TestImportRejectsTableRowCountMismatch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+	opts := Options{RepoPath: filepath.Join(dir, "share"), Branch: "main"}
+	manifest, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+	for i := range manifest.Tables {
+		if manifest.Tables[i].Name == "messages" {
+			manifest.Tables[i].Rows++
+			break
+		}
+	}
+	writeManifest(t, opts.RepoPath, manifest)
+
+	reader := seedStore(t, filepath.Join(dir, "reader.db"))
+	defer func() { require.NoError(t, reader.Close()) }()
+
+	_, err = Import(ctx, reader, opts)
+	require.ErrorContains(t, err, "row count mismatch")
+	assertArchiveStillPresent(t, ctx, reader)
+}
+
+func TestImportRejectsEscapedManifestTablePath(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+	opts := Options{RepoPath: filepath.Join(dir, "share"), Branch: "main"}
+	manifest, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+	for i := range manifest.Tables {
+		if manifest.Tables[i].Name == "messages" {
+			manifest.Tables[i].Files = []string{"../outside.jsonl.gz"}
+			manifest.Tables[i].File = ""
+			break
+		}
+	}
+	writeManifest(t, opts.RepoPath, manifest)
+
+	reader := seedStore(t, filepath.Join(dir, "reader.db"))
+	defer func() { require.NoError(t, reader.Close()) }()
+
+	_, err = Import(ctx, reader, opts)
+	require.ErrorContains(t, err, "path escapes share repo")
+	assertArchiveStillPresent(t, ctx, reader)
 }
 
 func TestImportIfChangedSkipsCurrentManifest(t *testing.T) {
@@ -158,6 +230,22 @@ func TestNeedsImportUsesLastImportTime(t *testing.T) {
 	require.False(t, NeedsImport(ctx, s, time.Hour))
 	require.NoError(t, s.SetSyncState(ctx, importSyncSource, importSyncEntityType, lastImportEntityID, time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339Nano)))
 	require.True(t, NeedsImport(ctx, s, time.Hour))
+}
+
+func writeManifest(t *testing.T, repoPath string, manifest Manifest) {
+	t.Helper()
+	body, err := json.MarshalIndent(manifest, "", "  ")
+	require.NoError(t, err)
+	body = append(body, '\n')
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, ManifestName), body, 0o600))
+}
+
+func assertArchiveStillPresent(t *testing.T, ctx context.Context, s *store.Store) {
+	t.Helper()
+	rows, err := s.Search(ctx, "", "archive", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "git backed archive works", rows[0].Text)
 }
 
 func seedStore(t *testing.T, path string) *store.Store {
