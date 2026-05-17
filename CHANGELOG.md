@@ -5,6 +5,8 @@
 ### Fixes
 
 - Homebrew tap sync now skips cleanly when `HOMEBREW_TAP_GITHUB_TOKEN` is not configured.
+- Add cached release checks with `slacrawl check-update` and passive terminal
+  notices when a newer OpenClaw release is available.
 
 ## 0.6.0 - 2026-05-15
 

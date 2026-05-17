@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openclaw/crawlkit/progress"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	"github.com/vincentkoc/crawlkit/progress"
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/search"

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	crawlstore "github.com/openclaw/crawlkit/store"
 	"github.com/openclaw/slacrawl/internal/store/storedb"
-	crawlstore "github.com/vincentkoc/crawlkit/store"
 )
 
 const schemaVersion = 3

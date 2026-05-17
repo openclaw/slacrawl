@@ -195,6 +195,11 @@ Choose the path that matches your setup:
 - `users` lists synced users
 - `channels` lists synced channels
 - `status` prints workspace and sync status
+- `metadata --json`, `status --json`, and `doctor --json` expose crawlkit
+  control/status payloads for launchers, automation, and CI
+- `check-update` checks GitHub Releases for newer OpenClaw builds; interactive
+  terminal runs also print a cached daily stderr notice unless
+  `SLACRAWL_NO_UPDATE_CHECK=1` or `CRAWLKIT_NO_UPDATE_CHECK=1` is set
 - `digest` prints a per-channel activity summary for a time window
 - `analytics` groups analytics subcommands (`digest`, `quiet`, `trends`)
 - `completion` prints shell completion for `bash` or `zsh`

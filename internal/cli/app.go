@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/openclaw/crawlkit/control"
+	"github.com/openclaw/crawlkit/tui"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/media"
 	"github.com/openclaw/slacrawl/internal/report"
@@ -25,8 +27,6 @@ import (
 	"github.com/openclaw/slacrawl/internal/slackdesktop"
 	"github.com/openclaw/slacrawl/internal/store"
 	"github.com/openclaw/slacrawl/internal/syncer"
-	"github.com/vincentkoc/crawlkit/control"
-	"github.com/vincentkoc/crawlkit/tui"
 )
 
 type App struct {
@@ -105,10 +105,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		a.printHelp()
 		return nil
 	}
+	a.maybeNotifyRelease(ctx, rest)
 
 	switch rest[0] {
 	case "version":
 		return a.writeOutput("Version", map[string]string{"version": version}, outputFormat, false)
+	case "check-update":
+		return a.runCheckUpdate(ctx, rest[1:], outputFormat)
 	case "metadata":
 		return a.runMetadata(rest[1:], outputFormat)
 	case "init":
