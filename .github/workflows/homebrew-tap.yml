@@ -42,13 +42,17 @@ jobs:
           set -euo pipefail
           export GH_TOKEN="${HOMEBREW_TAP_TOKEN:-${HOMEBREW_TAP_GITHUB_TOKEN:-}}"
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::Set HOMEBREW_TAP_TOKEN with workflow access to ${TAP_REPO}"
-            exit 1
+            echo "::warning::Homebrew tap sync skipped; set HOMEBREW_TAP_TOKEN with workflow access to ${TAP_REPO}."
+            exit 0
           fi
 
-          if [ "$(gh api "repos/${TAP_REPO}" --jq '.permissions.push // false')" != "true" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN must have push access to ${TAP_REPO}."
-            exit 1
+          if ! can_push="$(gh api "repos/${TAP_REPO}" --jq '.permissions.push // false')"; then
+            echo "::warning::Homebrew tap sync skipped; HOMEBREW_TAP_TOKEN cannot access ${TAP_REPO}."
+            exit 0
+          fi
+          if [ "${can_push}" != "true" ]; then
+            echo "::warning::Homebrew tap sync skipped; HOMEBREW_TAP_TOKEN needs push access to ${TAP_REPO}."
+            exit 0
           fi
 
           request_id="${FORMULA}-${RELEASE_TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
