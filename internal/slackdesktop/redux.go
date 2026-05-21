@@ -180,6 +180,9 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				RawJSON:     store.MarshalRaw(member),
 				UpdatedAt:   now,
 			}); err != nil {
+				if strings.Contains(err.Error(), "already belongs to workspace") {
+					continue
+				}
 				return err
 			}
 		}
@@ -203,6 +206,9 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				RawJSON:     store.MarshalRaw(channel),
 				UpdatedAt:   now,
 			}); err != nil {
+				if strings.Contains(err.Error(), "already belongs to workspace") {
+					continue
+				}
 				return err
 			}
 			allowedChannels[channel.ID] = struct{}{}
@@ -237,6 +243,9 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				RawJSON:        store.MarshalRaw(message),
 				UpdatedAt:      now,
 			}, reduxMentions(message.Text)); err != nil {
+				if strings.Contains(err.Error(), "already belongs to workspace") {
+					continue
+				}
 				return err
 			}
 		}

@@ -13,6 +13,7 @@ import (
 const (
 	defaultDirName     = ".slacrawl"
 	defaultDesktopPath = "~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack"
+	directDesktopPath  = "~/Library/Application Support/Slack"
 )
 
 type Config struct {
@@ -404,7 +405,7 @@ func sanitizeEnvSegment(value string) string {
 }
 
 func DetectDesktopPath() (string, error) {
-	candidates := []string{defaultDesktopPath}
+	candidates := []string{defaultDesktopPath, directDesktopPath}
 	for _, candidate := range candidates {
 		expanded, err := ExpandPath(candidate)
 		if err != nil {
@@ -414,7 +415,7 @@ func DetectDesktopPath() (string, error) {
 			return expanded, nil
 		}
 	}
-	return ExpandPath(defaultDesktopPath)
+	return "", nil
 }
 
 func ValidateTokenShape(value string, prefix string) error {
