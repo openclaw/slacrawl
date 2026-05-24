@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/golang/snappy v1.0.0
-	github.com/openclaw/crawlkit v0.6.0
+	github.com/openclaw/crawlkit v0.9.0
 	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0
@@ -13,7 +13,6 @@ require (
 )
 
 require (
-	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/bubbles v1.0.0 // indirect
 	github.com/charmbracelet/bubbletea v1.3.10 // indirect
