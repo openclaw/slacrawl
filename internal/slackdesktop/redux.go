@@ -203,6 +203,9 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				RawJSON:     store.MarshalRaw(channel),
 				UpdatedAt:   now,
 			}); err != nil {
+				if store.IsWorkspaceCollision(err, "channel") {
+					continue
+				}
 				return err
 			}
 			allowedChannels[channel.ID] = struct{}{}

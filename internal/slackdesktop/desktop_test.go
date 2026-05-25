@@ -382,6 +382,26 @@ func TestIngestReduxStatesSkipsDuplicateDesktopMessages(t *testing.T) {
 	}}, now))
 }
 
+func TestIngestReduxStatesSkipsDuplicateDesktopChannels(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{{
+		WorkspaceID: "T2",
+		UserID:      "U2",
+		Channels: []ReduxChannel{{
+			ID:            "C1",
+			Name:          "general",
+			IsChannel:     true,
+			ContextTeamID: "T2",
+		}},
+	}}, now))
+}
+
 func TestNormalizeReduxMessageIncludesBlocksAndAttachments(t *testing.T) {
 	normalized := normalizeReduxMessage(ReduxMessage{
 		Channel: "C111",
