@@ -187,7 +187,7 @@ type ExpandableRecord struct {
 
 func Discover(path string) (Source, error) {
 	if path == "" {
-		return Source{}, errors.New("desktop path missing")
+		return Source{}, nil
 	}
 	source := Source{Path: path}
 	info, err := os.Stat(path)

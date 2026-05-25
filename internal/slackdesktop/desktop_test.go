@@ -162,6 +162,13 @@ func TestIngestDesktopDraftUsesPersistWorkspace(t *testing.T) {
 	require.Equal(t, "U222", messages[0].UserID)
 }
 
+func TestDiscoverEmptyPathIsUnavailable(t *testing.T) {
+	source, err := Discover("")
+	require.NoError(t, err)
+	require.False(t, source.Available)
+	require.Empty(t, source.Path)
+}
+
 func TestSnapshotPathRemovesPartialSnapshotOnError(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
