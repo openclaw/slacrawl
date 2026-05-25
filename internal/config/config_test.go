@@ -117,10 +117,23 @@ func TestDefaultConfigPath(t *testing.T) {
 }
 
 func TestNormalizeAutoDetectsDesktopPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "Library", "Application Support", "Slack"), 0o750))
+
 	cfg := Default()
 	cfg.Slack.Desktop.Path = ""
 	require.NoError(t, cfg.Normalize())
-	require.True(t, filepath.IsAbs(cfg.Slack.Desktop.Path))
+	require.Equal(t, filepath.Join(home, "Library", "Application Support", "Slack"), cfg.Slack.Desktop.Path)
+}
+
+func TestNormalizeLeavesDesktopPathEmptyWhenNoInstallFound(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := Default()
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Normalize())
+	require.Empty(t, cfg.Slack.Desktop.Path)
 }
 
 func TestNormalizeSetsDefaultWorkspaceFromWorkspaceList(t *testing.T) {
