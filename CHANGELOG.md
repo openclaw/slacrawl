@@ -7,6 +7,10 @@
 - Added `sync --source mcp` for fetching Slack users, channels, messages, and threads through Codex's HTTP connector gateway or the reference Slack MCP server over stdio into the canonical SQLite archive.
 - Updated the minimum Go toolchain to 1.26.4 to pick up standard-library security fixes.
 
+### Fixes
+
+- MCP sync now handles parent-only thread payloads, replies with missing author names, missing Slack connectors, and shell completion for `mcp`/`connector` sources.
+
 ## 0.6.3 - 2026-05-25
 
 ### Fixes

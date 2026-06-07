@@ -171,7 +171,11 @@ func parseThreadMessages(raw, channelID string) (threadPage, error) {
 	}
 	parentPart, repliesPart, ok := strings.Cut(envelope.Messages, "\n\n=== THREAD REPLIES")
 	if !ok {
-		return threadPage{}, fmt.Errorf("Slack MCP thread payload missing replies separator")
+		parent, err := parseThreadMessage(envelope.Messages, channelID, "")
+		if err != nil {
+			return threadPage{}, fmt.Errorf("Slack MCP thread payload missing replies separator")
+		}
+		return threadPage{Parent: &parent, NextCursor: extractCursor(envelope.PaginationInfo)}, nil
 	}
 	parent, err := parseThreadMessage(parentPart, channelID, "")
 	if err != nil {
@@ -202,7 +206,7 @@ func parseThreadMessage(raw, channelID, threadTS string) (MessageRecord, error) 
 	from := fieldValue(lines, "From: ")
 	occurredAt := fieldValue(lines, "Time: ")
 	ts := fieldValue(lines, "Message TS: ")
-	if from == "" || occurredAt == "" || ts == "" {
+	if occurredAt == "" || ts == "" {
 		return MessageRecord{}, fmt.Errorf("Slack MCP thread message missing required fields")
 	}
 	name, id := parseNameID(from)

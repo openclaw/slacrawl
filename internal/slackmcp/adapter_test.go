@@ -129,6 +129,30 @@ func TestIncrementalSyncReconcilesStoredThreadRoots(t *testing.T) {
 	require.Equal(t, []map[string]any{{"ts": "1710000001.000002"}, {"ts": "1710000002.000003"}}, rows)
 }
 
+func TestSyncPreservesThreadMetadataWhenThreadPayloadHasNoReplies(t *testing.T) {
+	server := newParentOnlyThreadGatewayServer(t)
+	defer server.Close()
+	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
+
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	summary, err := Sync(ctx, st, Options{
+		WorkspaceID: "T123",
+		Channels:    []string{"C123"},
+		Config:      testMCPConfig(server.URL),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Messages)
+	require.Equal(t, 0, summary.Replies)
+
+	rows, err := st.QueryReadOnly(ctx, `select reply_count, latest_reply from messages where channel_id = 'C123' and ts = '1778016984.861209'`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"reply_count": int64(3), "latest_reply": "1778015241.379869"}}, rows)
+}
+
 func syncTwice(ctx context.Context, st *store.Store, opts Options) error {
 	if _, err := Sync(ctx, st, opts); err != nil {
 		return err
@@ -306,6 +330,12 @@ func TestFilterSlackToolsRejectsUnknownConfiguredConnector(t *testing.T) {
 	require.ErrorContains(t, err, "was not found")
 }
 
+func TestFilterSlackToolsRejectsMissingSlackConnector(t *testing.T) {
+	tools := []mcpclient.Tool{{Name: "gmail_search_emails", Meta: &mcpclient.ToolMeta{ConnectorName: "Gmail"}}}
+	_, err := filterSlackTools(tools, "")
+	require.ErrorContains(t, err, "none matched Slack")
+}
+
 func TestFilterSlackToolsUsesExactConnectorWhenAvailable(t *testing.T) {
 	wanted := mcpclient.Tool{Name: "search_channels", Meta: &mcpclient.ToolMeta{ConnectorID: "wanted", ConnectorName: "Slack"}}
 	other := mcpclient.Tool{Name: "slack_search_channels", Meta: &mcpclient.ToolMeta{ConnectorID: "other", ConnectorName: "Slack"}}
@@ -383,6 +413,49 @@ func newTargetedGatewayServer(t *testing.T) *httptest.Server {
 				"messages":        "Channel: codex-feedback (C123)\n\n=== Message from Ada (U123) at 2026-03-08T12:00:00Z === \nMessage TS: 1772574099.659199\ntargeted message",
 				"pagination_info": "",
 			})
+		default:
+			t.Fatalf("unexpected RPC method %q", req.Method)
+		}
+	}))
+}
+
+func newParentOnlyThreadGatewayServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			writeRPCResult(t, w, map[string]any{"protocolVersion": "2025-03-26"})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeRPCResult(t, w, map[string]any{"tools": []map[string]any{
+				{"name": "slack_search_channels", "_meta": map[string]any{"connector_id": testConnectorID}},
+				{"name": "slack_search_users", "_meta": map[string]any{"connector_id": testConnectorID}},
+				{"name": "slack_read_channel", "_meta": map[string]any{"connector_id": testConnectorID}},
+				{"name": "slack_read_thread", "_meta": map[string]any{"connector_id": testConnectorID}},
+			}, "nextCursor": ""})
+		case "tools/call":
+			name, _ := req.Params["name"].(string)
+			switch name {
+			case "slack_read_channel":
+				writeToolText(t, w, map[string]any{
+					"messages":        "Channel: parent-only (C123)\n\n=== Message from Ada (U123) at 2026-05-05T21:36:24Z === \nMessage TS: 1778016984.861209\nroot\nThread: 3 replies (latest: 1778015241.379869)",
+					"pagination_info": "",
+				})
+			case "slack_read_thread":
+				writeToolText(t, w, map[string]any{
+					"messages":        "=== THREAD PARENT MESSAGE ===\nFrom: Ada (U123)\nTime: 2026-05-05 14:36:24 PDT\nMessage TS: 1778016984.861209\nroot",
+					"pagination_info": "There are no more messages in this thread.\n",
+				})
+			default:
+				t.Fatalf("unexpected tool call %q", name)
+			}
 		default:
 			t.Fatalf("unexpected RPC method %q", req.Method)
 		}

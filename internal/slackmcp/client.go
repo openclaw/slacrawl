@@ -385,6 +385,9 @@ func filterSlackTools(tools []mcpclient.Tool, connectorID string) ([]mcpclient.T
 			filtered = append(filtered, tool)
 		}
 	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("Slack MCP connector was not found; tools/list returned %d tools but none matched Slack", len(tools))
+	}
 	return filtered, nil
 }
 

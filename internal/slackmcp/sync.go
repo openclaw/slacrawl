@@ -155,7 +155,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	if err != nil {
 		return 0, fmt.Errorf("read MCP thread %s/%s: %w", channelID, threadTS, err)
 	}
-	if thread.Parent != nil {
+	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
 		thread.Parent.LatestReply = latestReplyTS(thread.Parent.LatestReply, thread.Replies)
 		if err := upsertMessage(ctx, st, workspaceID, *thread.Parent, now); err != nil {

@@ -97,7 +97,7 @@ _slacrawl()
 			return
 			;;
 		--source)
-			COMPREPLY=( $(compgen -W "api bot desktop wiretap all" -- "${cur}") )
+			COMPREPLY=( $(compgen -W "api bot desktop wiretap mcp connector all" -- "${cur}") )
 			return
 			;;
 		--kind)
@@ -278,7 +278,7 @@ _slacrawl() {
           _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--no-media[skip restoring cached media]'
           ;;
         sync)
-          _arguments '--source[sync source]:source:(api bot desktop wiretap all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
+          _arguments '--source[sync source]:source:(api bot desktop wiretap mcp connector all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
           ;;
         import)
           _arguments '--workspace[workspace id]:workspace id:' '--dry-run[walk and count without writing]' '--force[overwrite existing slack-export rows at the same rank]' '--format[output format]:format:(text json log)'

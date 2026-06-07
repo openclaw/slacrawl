@@ -523,6 +523,8 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--format")
 	require.Contains(t, out, "--kind")
 	require.Contains(t, out, "wiretap")
+	require.Contains(t, out, "mcp")
+	require.Contains(t, out, "connector")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -541,6 +543,8 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--no-color")
 	require.Contains(t, out, "public_channel")
 	require.Contains(t, out, "wiretap")
+	require.Contains(t, out, "mcp")
+	require.Contains(t, out, "connector")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {
