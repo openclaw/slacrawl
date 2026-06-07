@@ -34,6 +34,7 @@ type SlackConfig struct {
 	App     TokenConfig   `toml:"app"`
 	User    TokenConfig   `toml:"user"`
 	Desktop DesktopConfig `toml:"desktop"`
+	MCP     MCPConfig     `toml:"mcp"`
 }
 
 type Workspace struct {
@@ -53,6 +54,23 @@ type TokenConfig struct {
 type DesktopConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Path    string `toml:"path"`
+}
+
+type MCPConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	Transport       string   `toml:"transport"`
+	BaseURL         string   `toml:"base_url"`
+	Command         string   `toml:"command"`
+	Args            []string `toml:"args"`
+	AuthPath        string   `toml:"auth_path"`
+	TokenEnv        string   `toml:"token_env"`
+	AccountIDEnv    string   `toml:"account_id_env"`
+	ConnectorID     string   `toml:"connector_id"`
+	ChannelTypes    string   `toml:"channel_types"`
+	PageSize        int      `toml:"page_size"`
+	SearchLimit     int      `toml:"search_limit"`
+	MaxPages        int      `toml:"max_pages"`
+	ProtocolVersion string   `toml:"protocol_version"`
 }
 
 type SyncConfig struct {
@@ -120,6 +138,19 @@ func Default() Config {
 			Desktop: DesktopConfig{
 				Enabled: true,
 				Path:    "",
+			},
+			MCP: MCPConfig{
+				Enabled:         true,
+				Transport:       "http",
+				BaseURL:         "https://chatgpt.com/backend-api/wham/apps",
+				AuthPath:        "~/.codex/auth.json",
+				TokenEnv:        "CODEX_APPS_ACCESS_TOKEN",
+				AccountIDEnv:    "CODEX_APPS_ACCOUNT_ID",
+				ChannelTypes:    "public_channel,private_channel",
+				PageSize:        100,
+				SearchLimit:     20,
+				MaxPages:        250,
+				ProtocolVersion: "2025-03-26",
 			},
 		},
 		Sync: SyncConfig{
@@ -192,6 +223,47 @@ func (c *Config) Normalize() error {
 	if c.Sync.DesktopRefreshEvery == "" {
 		c.Sync.DesktopRefreshEvery = "5m"
 	}
+	defaults := Default().Slack.MCP
+	if c.Slack.MCP.Transport == "" {
+		c.Slack.MCP.Transport = defaults.Transport
+	}
+	c.Slack.MCP.Transport = strings.ToLower(strings.TrimSpace(c.Slack.MCP.Transport))
+	if c.Slack.MCP.Transport != "http" && c.Slack.MCP.Transport != "stdio" {
+		return fmt.Errorf("slack.mcp.transport must be http or stdio, got %q", c.Slack.MCP.Transport)
+	}
+	if c.Slack.MCP.BaseURL == "" {
+		c.Slack.MCP.BaseURL = defaults.BaseURL
+	}
+	if c.Slack.MCP.Transport == "stdio" && strings.TrimSpace(c.Slack.MCP.Command) == "" {
+		return errors.New("slack.mcp.command is required for stdio transport")
+	}
+	if c.Slack.MCP.AuthPath == "" {
+		c.Slack.MCP.AuthPath = defaults.AuthPath
+	}
+	if c.Slack.MCP.TokenEnv == "" {
+		c.Slack.MCP.TokenEnv = defaults.TokenEnv
+	}
+	if c.Slack.MCP.AccountIDEnv == "" {
+		c.Slack.MCP.AccountIDEnv = defaults.AccountIDEnv
+	}
+	if c.Slack.MCP.ChannelTypes == "" {
+		c.Slack.MCP.ChannelTypes = defaults.ChannelTypes
+	}
+	if c.Slack.MCP.PageSize <= 0 {
+		c.Slack.MCP.PageSize = defaults.PageSize
+	}
+	if c.Slack.MCP.SearchLimit <= 0 {
+		c.Slack.MCP.SearchLimit = defaults.SearchLimit
+	}
+	if c.Slack.MCP.Transport == "http" && c.Slack.MCP.SearchLimit > 20 {
+		return errors.New("slack.mcp.search_limit cannot exceed 20")
+	}
+	if c.Slack.MCP.MaxPages < 0 {
+		return errors.New("slack.mcp.max_pages cannot be negative")
+	}
+	if c.Slack.MCP.ProtocolVersion == "" {
+		c.Slack.MCP.ProtocolVersion = defaults.ProtocolVersion
+	}
 	if c.Slack.Desktop.Enabled && strings.TrimSpace(c.Slack.Desktop.Path) == "" {
 		detected, err := DetectDesktopPath()
 		if err != nil {
@@ -200,7 +272,7 @@ func (c *Config) Normalize() error {
 		c.Slack.Desktop.Path = detected
 	}
 
-	paths := []*string{&c.DBPath, &c.CacheDir, &c.LogDir, &c.Slack.Desktop.Path, &c.Share.RepoPath}
+	paths := []*string{&c.DBPath, &c.CacheDir, &c.LogDir, &c.Slack.Desktop.Path, &c.Slack.MCP.AuthPath, &c.Share.RepoPath}
 	for _, candidate := range paths {
 		expanded, err := ExpandPath(*candidate)
 		if err != nil {

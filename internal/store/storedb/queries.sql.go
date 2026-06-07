@@ -1471,6 +1471,81 @@ func (q *Queries) UpsertMessage(ctx context.Context, arg UpsertMessageParams) (i
 	return result.RowsAffected()
 }
 
+const upsertMessageByPriority = `-- name: UpsertMessageByPriority :execrows
+insert into messages (
+  channel_id, ts, workspace_id, user_id, subtype, client_msg_id, thread_ts, parent_user_id,
+  text, normalized_text, reply_count, latest_reply, edited_ts, deleted_ts, source_rank,
+  source_name, raw_json, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(channel_id, ts) do update set
+  workspace_id=excluded.workspace_id,
+  user_id=excluded.user_id,
+  subtype=excluded.subtype,
+  client_msg_id=excluded.client_msg_id,
+  thread_ts=excluded.thread_ts,
+  parent_user_id=excluded.parent_user_id,
+  text=excluded.text,
+  normalized_text=excluded.normalized_text,
+  reply_count=excluded.reply_count,
+  latest_reply=excluded.latest_reply,
+  edited_ts=excluded.edited_ts,
+  deleted_ts=excluded.deleted_ts,
+  source_rank=excluded.source_rank,
+  source_name=excluded.source_name,
+  raw_json=excluded.raw_json,
+  updated_at=excluded.updated_at
+where messages.workspace_id = excluded.workspace_id
+  and excluded.source_rank <= messages.source_rank
+`
+
+type UpsertMessageByPriorityParams struct {
+	ChannelID      string         `json:"channel_id"`
+	Ts             string         `json:"ts"`
+	WorkspaceID    string         `json:"workspace_id"`
+	UserID         sql.NullString `json:"user_id"`
+	Subtype        sql.NullString `json:"subtype"`
+	ClientMsgID    sql.NullString `json:"client_msg_id"`
+	ThreadTs       sql.NullString `json:"thread_ts"`
+	ParentUserID   sql.NullString `json:"parent_user_id"`
+	Text           string         `json:"text"`
+	NormalizedText string         `json:"normalized_text"`
+	ReplyCount     int64          `json:"reply_count"`
+	LatestReply    sql.NullString `json:"latest_reply"`
+	EditedTs       sql.NullString `json:"edited_ts"`
+	DeletedTs      sql.NullString `json:"deleted_ts"`
+	SourceRank     int64          `json:"source_rank"`
+	SourceName     string         `json:"source_name"`
+	RawJson        string         `json:"raw_json"`
+	UpdatedAt      string         `json:"updated_at"`
+}
+
+func (q *Queries) UpsertMessageByPriority(ctx context.Context, arg UpsertMessageByPriorityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertMessageByPriority,
+		arg.ChannelID,
+		arg.Ts,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.Subtype,
+		arg.ClientMsgID,
+		arg.ThreadTs,
+		arg.ParentUserID,
+		arg.Text,
+		arg.NormalizedText,
+		arg.ReplyCount,
+		arg.LatestReply,
+		arg.EditedTs,
+		arg.DeletedTs,
+		arg.SourceRank,
+		arg.SourceName,
+		arg.RawJson,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertMessageMention = `-- name: UpsertMessageMention :exec
 insert into message_mentions (channel_id, ts, mention_type, target_id, display_text)
 values (?, ?, ?, ?, ?)

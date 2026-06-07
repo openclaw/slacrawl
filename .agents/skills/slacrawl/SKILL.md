@@ -29,10 +29,11 @@ Refresh:
 
 ```bash
 slacrawl sync --source bot --latest-only
+slacrawl sync --source mcp --workspace T01234567
 slacrawl sync --source wiretap
 ```
 
-Use `--full` only for deliberate historical backfills. `bot` = API tokens; `wiretap` = Slack Desktop cache; `all` = API then desktop enrichment.
+Use `--full` only for deliberate historical backfills. `bot` = API tokens; `mcp` = configured HTTP or stdio Slack connector; `wiretap` = Slack Desktop cache; `all` = API then desktop enrichment.
 
 ## Query Workflow
 

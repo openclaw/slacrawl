@@ -48,6 +48,18 @@ func TestParseLookback(t *testing.T) {
 	}
 }
 
+func TestResolveMCPWorkspaceID(t *testing.T) {
+	workspaceID, err := resolveMCPWorkspaceID([]string{"T123"})
+	require.NoError(t, err)
+	require.Equal(t, "T123", workspaceID)
+
+	_, err = resolveMCPWorkspaceID(nil)
+	require.ErrorContains(t, err, "workspace ID is required")
+
+	_, err = resolveMCPWorkspaceID([]string{"T1", "T2"})
+	require.ErrorContains(t, err, "pass --workspace")
+}
+
 func TestDigestCommandJSON(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.toml")
@@ -118,7 +130,7 @@ func TestInitStatusAndSQL(t *testing.T) {
 	require.Equal(t, float64(0), status["messages"])
 	profile := status["archive_profile"].(map[string]any)
 	require.Equal(t, "empty", profile["mode"])
-	require.Len(t, profile["sources"].([]any), 3)
+	require.Len(t, profile["sources"].([]any), 4)
 
 	stdout.Reset()
 	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "sql", "select count(*) as messages from messages"}))

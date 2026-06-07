@@ -461,6 +461,11 @@ type ChannelSyncCursor struct {
 	LatestTS string
 }
 
+type ThreadRoot struct {
+	ChannelID string
+	TS        string
+}
+
 type SyncStateRow struct {
 	SourceName string `json:"source_name"`
 	EntityType string `json:"entity_type"`
@@ -559,6 +564,17 @@ func (s *Store) UpsertWorkspace(ctx context.Context, workspace Workspace) error 
 	})
 }
 
+// EnsureWorkspace inserts sparse provider metadata without replacing richer data
+// already collected by another source.
+func (s *Store) EnsureWorkspace(ctx context.Context, workspace Workspace) error {
+	_, err := s.db.ExecContext(ctx, `
+insert into workspaces (id, name, domain, enterprise_id, raw_json, updated_at)
+values (?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing
+`, workspace.ID, workspace.Name, dbText(workspace.Domain), dbText(workspace.EnterpriseID), workspace.RawJSON, formatDBTime(workspace.UpdatedAt))
+	return err
+}
+
 func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
 	rows, err := s.q.UpsertChannel(ctx, storedb.UpsertChannelParams{
 		ID:          channel.ID,
@@ -601,6 +617,31 @@ func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
 			return err
 		}
 		return fmt.Errorf("channel %q upsert affected no rows", channel.ID)
+	}
+	return nil
+}
+
+// EnsureChannel inserts lower-fidelity provider metadata without replacing an
+// existing channel collected by a richer source.
+func (s *Store) EnsureChannel(ctx context.Context, channel Channel) error {
+	result, err := s.db.ExecContext(ctx, `
+insert into channels (id, workspace_id, name, kind, topic, purpose, is_private, is_archived, is_shared, is_general, raw_json, updated_at)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing
+`, channel.ID, channel.WorkspaceID, channel.Name, channel.Kind, dbText(channel.Topic), dbText(channel.Purpose), boolInt(channel.IsPrivate), boolInt(channel.IsArchived), boolInt(channel.IsShared), boolInt(channel.IsGeneral), channel.RawJSON, formatDBTime(channel.UpdatedAt))
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows > 0 {
+		return err
+	}
+	existing, err := s.getChannelWorkspaceKind(ctx, channel.ID)
+	if err != nil {
+		return err
+	}
+	if existing.WorkspaceID != channel.WorkspaceID {
+		return &WorkspaceCollisionError{Entity: "channel", ID: channel.ID, ExistingWorkspaceID: existing.WorkspaceID, WorkspaceID: channel.WorkspaceID}
 	}
 	return nil
 }
@@ -659,57 +700,95 @@ func (s *Store) UpsertUser(ctx context.Context, user User) error {
 	return nil
 }
 
+// EnsureUser inserts lower-fidelity provider metadata without replacing an
+// existing user collected by a richer source.
+func (s *Store) EnsureUser(ctx context.Context, user User) error {
+	result, err := s.db.ExecContext(ctx, `
+insert into users (id, workspace_id, name, real_name, display_name, title, is_bot, is_deleted, raw_json, updated_at)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(id) do nothing
+`, user.ID, user.WorkspaceID, user.Name, dbText(user.RealName), dbText(user.DisplayName), dbText(user.Title), boolInt(user.IsBot), boolInt(user.IsDeleted), user.RawJSON, formatDBTime(user.UpdatedAt))
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows > 0 {
+		return err
+	}
+	existingWorkspaceID, err := s.q.GetUserWorkspace(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	if existingWorkspaceID != user.WorkspaceID {
+		return &WorkspaceCollisionError{Entity: "user", ID: user.ID, ExistingWorkspaceID: existingWorkspaceID, WorkspaceID: user.WorkspaceID}
+	}
+	return nil
+}
+
 func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []Mention) error {
+	_, err := s.upsertMessage(ctx, message, mentions, false)
+	return err
+}
+
+// UpsertMessageByPriority atomically skips updates from a lower-priority source.
+func (s *Store) UpsertMessageByPriority(ctx context.Context, message Message, mentions []Mention) (bool, error) {
+	return s.upsertMessage(ctx, message, mentions, true)
+}
+
+func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []Mention, preserveHigherPriority bool) (bool, error) {
 	key := messageKey(message.ChannelID, message.TS)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	qtx := s.q.WithTx(tx)
 
-	rows, err := qtx.UpsertMessage(ctx, storedb.UpsertMessageParams{
-		ChannelID:      message.ChannelID,
-		Ts:             message.TS,
-		WorkspaceID:    message.WorkspaceID,
-		UserID:         dbText(message.UserID),
-		Subtype:        dbText(message.Subtype),
-		ClientMsgID:    dbText(message.ClientMsgID),
-		ThreadTs:       dbText(message.ThreadTS),
-		ParentUserID:   dbText(message.ParentUserID),
-		Text:           message.Text,
-		NormalizedText: message.NormalizedText,
-		ReplyCount:     int64(message.ReplyCount),
-		LatestReply:    dbText(message.LatestReply),
-		EditedTs:       dbText(message.EditedTS),
-		DeletedTs:      dbText(message.DeletedTS),
-		SourceRank:     int64(message.SourceRank),
-		SourceName:     message.SourceName,
-		RawJson:        message.RawJSON,
-		UpdatedAt:      formatDBTime(message.UpdatedAt),
-	})
+	var rows int64
+	if preserveHigherPriority {
+		rows, err = qtx.UpsertMessageByPriority(ctx, storedb.UpsertMessageByPriorityParams{
+			ChannelID: message.ChannelID, Ts: message.TS, WorkspaceID: message.WorkspaceID,
+			UserID: dbText(message.UserID), Subtype: dbText(message.Subtype), ClientMsgID: dbText(message.ClientMsgID),
+			ThreadTs: dbText(message.ThreadTS), ParentUserID: dbText(message.ParentUserID), Text: message.Text,
+			NormalizedText: message.NormalizedText, ReplyCount: int64(message.ReplyCount), LatestReply: dbText(message.LatestReply),
+			EditedTs: dbText(message.EditedTS), DeletedTs: dbText(message.DeletedTS), SourceRank: int64(message.SourceRank),
+			SourceName: message.SourceName, RawJson: message.RawJSON, UpdatedAt: formatDBTime(message.UpdatedAt),
+		})
+	} else {
+		rows, err = qtx.UpsertMessage(ctx, storedb.UpsertMessageParams{
+			ChannelID: message.ChannelID, Ts: message.TS, WorkspaceID: message.WorkspaceID,
+			UserID: dbText(message.UserID), Subtype: dbText(message.Subtype), ClientMsgID: dbText(message.ClientMsgID),
+			ThreadTs: dbText(message.ThreadTS), ParentUserID: dbText(message.ParentUserID), Text: message.Text,
+			NormalizedText: message.NormalizedText, ReplyCount: int64(message.ReplyCount), LatestReply: dbText(message.LatestReply),
+			EditedTs: dbText(message.EditedTS), DeletedTs: dbText(message.DeletedTS), SourceRank: int64(message.SourceRank),
+			SourceName: message.SourceName, RawJson: message.RawJSON, UpdatedAt: formatDBTime(message.UpdatedAt),
+		})
+	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if rows == 0 {
 		if err := rejectMessageWorkspaceCollision(ctx, qtx, message); err != nil {
-			return err
+			return false, err
 		}
-		return fmt.Errorf("message %q upsert affected no rows", key)
+		if preserveHigherPriority {
+			return false, nil
+		}
+		return false, fmt.Errorf("message %q upsert affected no rows", key)
 	}
 
 	if err := replaceMessageMentions(ctx, qtx, message.ChannelID, message.TS, mentions); err != nil {
-		return err
+		return false, err
 	}
 
 	filesForSearch := message.Files
 	if message.Files != nil {
 		existingMedia, err := existingFileMedia(ctx, qtx, message.ChannelID, message.TS)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := qtx.DeleteMessageFiles(ctx, storedb.DeleteMessageFilesParams{ChannelID: message.ChannelID, Ts: message.TS}); err != nil {
-			return err
+			return false, err
 		}
 		for i, file := range message.Files {
 			if file.WorkspaceID == "" {
@@ -737,24 +816,24 @@ func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []M
 			}
 			message.Files[i] = file
 			if err := qtx.InsertMessageFile(ctx, insertMessageFileParams(file)); err != nil {
-				return err
+				return false, err
 			}
 		}
 		filesForSearch = message.Files
 	} else {
 		filesForSearch, err = existingFilesForSearch(ctx, tx, message.ChannelID, message.TS)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 
 	if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-		return err
+		return false, err
 	}
 	searchMessage := message
 	searchMessage.Files = filesForSearch
 	if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
-		return err
+		return false, err
 	}
 
 	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
@@ -765,10 +844,13 @@ func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []M
 		PayloadJson: message.RawJSON,
 		CreatedAt:   formatDBTime(message.UpdatedAt),
 	}); err != nil {
-		return err
+		return false, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mentions []Mention) error {
@@ -1814,6 +1896,39 @@ func (s *Store) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]C
 		out = append(out, ChannelSyncCursor{ID: row.ID, LatestTS: row.LatestTs})
 	}
 	return out, nil
+}
+
+func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID string) ([]ThreadRoot, error) {
+	rows, err := s.db.QueryContext(ctx, `
+select m.channel_id, m.ts
+from messages m
+where m.workspace_id = ?
+  and m.channel_id = ?
+  and coalesce(m.thread_ts, '') = ''
+  and (
+    m.reply_count > 0
+    or exists (
+      select 1 from messages r
+      where r.workspace_id = m.workspace_id
+        and r.channel_id = m.channel_id
+        and r.thread_ts = m.ts
+    )
+  )
+order by m.ts
+`, workspaceID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var roots []ThreadRoot
+	for rows.Next() {
+		var root ThreadRoot
+		if err := rows.Scan(&root.ChannelID, &root.TS); err != nil {
+			return nil, err
+		}
+		roots = append(roots, root)
+	}
+	return roots, rows.Err()
 }
 
 func (s *Store) RenameChannel(ctx context.Context, channelID string, name string) error {

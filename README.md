@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/vincentkoc/slacrawl" alt="License"></a>
-  <img src="https://img.shields.io/badge/go-1.26.3%2B-00ADD8" alt="Go 1.26.3+">
+  <img src="https://img.shields.io/badge/go-1.26.4%2B-00ADD8" alt="Go 1.26.4+">
   <img src="https://img.shields.io/badge/storage-SQLite-003B57" alt="SQLite">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform">
 </p>
@@ -19,7 +19,7 @@
 
 Slack search is convenient until you need your own workflow, your own retention, or your own queries. `slacrawl` is a Go-based CLI that pulls Slack workspace metadata and message history into SQLite so you can inspect it without depending on the Slack UI.
 
-Data stays on your machine. You can run it in API mode, desktop mode, or a hybrid workflow that combines both. That covers one-shot syncs, live tailing over Socket Mode, and local desktop recovery or "wiretap" style inspection from Slack Desktop artifacts already on your machine.
+Data stays on your machine. You can run it in API mode, MCP connector mode, desktop mode, or a hybrid workflow. That covers one-shot syncs, live tailing over Socket Mode, connector-backed fetching, and local desktop recovery or "wiretap" style inspection from Slack Desktop artifacts already on your machine.
 
 ## Included
 
@@ -61,7 +61,7 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 
 ## Requirements
 
-- Go `1.26.3+`
+- Go `1.26.4+`
 - `node` if you want richer desktop-local IndexedDB blob decoding
 - a Slack bot token for standard API sync
 - an app token if you want to use `tail`
@@ -147,6 +147,7 @@ export SLACK_USER_TOKEN="xoxp-..."
 go run ./cmd/slacrawl init
 go run ./cmd/slacrawl doctor
 go run ./cmd/slacrawl sync --source bot
+go run ./cmd/slacrawl sync --source mcp --workspace T01234567
 go run ./cmd/slacrawl search --workspace T01234567 "incident"
 go run ./cmd/slacrawl analytics trends --weeks 4
 go run ./cmd/slacrawl tail --repair-every 30m
@@ -162,6 +163,7 @@ If you built the binary, replace `go run ./cmd/slacrawl` with `./bin/slacrawl`.
 Treat one `slacrawl` config/database as one Slack visibility boundary. The archive should mean "what this bot/account/profile can see", not a blend of unrelated personal and company backups.
 
 - `--source bot` is an alias for `--source api`; it crawls Slack through configured bot/user tokens
+- `--source mcp` fetches through Codex's HTTP Slack connector or the reference Slack MCP server over stdio and requires a workspace ID for archive ownership
 - `--source wiretap` is an alias for `--source desktop`; it reads the local Slack Desktop cache
 - `--source all` runs API first, then desktop enrichment
 - `[share]` is a backup/restore target for the current DB, not a second Slack source
@@ -173,6 +175,7 @@ Choose the path that matches your setup:
 - use `sync --source bot` for normal token-backed incremental syncs
 - use `sync --source bot --full` only when you want a deliberate full backfill
 - use `sync --source bot --latest-only` when you only want fresh deltas on channels that already have local history
+- use `sync --source mcp --workspace T01234567` when a configured HTTP or stdio MCP connector can read the workspace
 - use `sync --source wiretap` when you want local desktop recovery only
 - use `watch` when you want desktop-local state to refresh into SQLite continuously
 
@@ -184,7 +187,7 @@ Choose the path that matches your setup:
 - `publish` exports the local SQLite archive into a git repo as compressed JSONL shards plus a manifest
 - `subscribe` configures a git-backed reader that can run without Slack credentials
 - `update` pulls and imports the latest git snapshot
-- `sync` performs a one-shot crawl from bot/API, wiretap/desktop, or both
+- `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
 - `import` imports a Slack export ZIP or extracted export directory
 - `tail` listens for live events through Socket Mode, including one tail per configured workspace
 - `watch` refreshes desktop-local state on a schedule

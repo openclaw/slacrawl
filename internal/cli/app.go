@@ -387,7 +387,18 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 			"app_set":      tokens.App != "",
 			"user_set":     tokens.User != "",
 		},
-		"slack_api":         diag,
+		"slack_api": diag,
+		"mcp_source": map[string]any{
+			"enabled":          cfg.Slack.MCP.Enabled,
+			"transport":        cfg.Slack.MCP.Transport,
+			"base_url":         cfg.Slack.MCP.BaseURL,
+			"command":          cfg.Slack.MCP.Command,
+			"connector_id":     cfg.Slack.MCP.ConnectorID,
+			"token_env":        cfg.Slack.MCP.TokenEnv,
+			"token_set":        strings.TrimSpace(os.Getenv(cfg.Slack.MCP.TokenEnv)) != "",
+			"auth_path":        cfg.Slack.MCP.AuthPath,
+			"auth_path_exists": pathExists(cfg.Slack.MCP.AuthPath),
+		},
 		"workspace_api":     workspaceAPI,
 		"thread_coverage":   threadCoverage,
 		"desktop_source":    desktop,
@@ -507,7 +518,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
-	source := fs.String("source", "api", "api|bot|desktop|wiretap|all")
+	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channels := fs.String("channels", "", "comma separated channel ids")
 	excludeChannels := fs.String("exclude-channels", "", "comma separated channel names to skip during sync")
@@ -1591,6 +1602,14 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 	if opts.Source == syncer.SourceDesktop {
 		return syncer.Run(ctx, cfg, st, opts)
 	}
+	if opts.Source == syncer.SourceMCP {
+		workspaceID, err := resolveMCPWorkspaceID(targets)
+		if err != nil {
+			return syncer.Summary{}, err
+		}
+		opts.WorkspaceID = workspaceID
+		return syncer.Run(ctx, cfg, st, opts)
+	}
 	if len(targets) == 0 {
 		return syncer.Run(ctx, cfg, st, opts)
 	}
@@ -1606,6 +1625,17 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 		last = summary
 	}
 	return last, nil
+}
+
+func resolveMCPWorkspaceID(targets []string) (string, error) {
+	switch len(targets) {
+	case 1:
+		return targets[0], nil
+	case 0:
+		return "", errors.New("workspace ID is required for MCP sync; set workspace_id or pass --workspace")
+	default:
+		return "", errors.New("MCP sync requires one workspace; pass --workspace when multiple workspaces are configured")
+	}
 }
 
 func (a *App) fetchMediaForSync(ctx context.Context, cfg config.Config, st *store.Store, workspaceID string, channels []string) (media.FetchStats, error) {
@@ -2087,6 +2117,12 @@ func archiveProfileFromConfig(cfg config.Config) archiveProfileResponse {
 			Configured: strings.TrimSpace(cfg.Slack.Desktop.Path) != "",
 		},
 		{
+			Name:       "mcp",
+			Label:      "Slack MCP connector visibility",
+			Enabled:    cfg.Slack.MCP.Enabled,
+			Configured: mcpConfigured(cfg.Slack.MCP),
+		},
+		{
 			Name:       "backup",
 			Label:      "Git archive backup/restore",
 			Enabled:    cfg.ShareEnabled(),
@@ -2097,6 +2133,13 @@ func archiveProfileFromConfig(cfg config.Config) archiveProfileResponse {
 		Mode:    archiveMode(sources),
 		Sources: sources,
 	}
+}
+
+func mcpConfigured(cfg config.MCPConfig) bool {
+	if strings.EqualFold(strings.TrimSpace(cfg.Transport), "stdio") {
+		return strings.TrimSpace(cfg.Command) != ""
+	}
+	return strings.TrimSpace(cfg.BaseURL) != ""
 }
 
 func (a *App) buildArchiveProfile(ctx context.Context, cfg config.Config, st *store.Store) (archiveProfileResponse, error) {
@@ -2192,7 +2235,7 @@ func hasAPITokens(cfg config.Config) bool {
 }
 
 func archiveMode(sources []sourceResponse) string {
-	var bot, wiretap, backup, imported bool
+	var bot, mcp, wiretap, backup, imported bool
 	for _, source := range sources {
 		hasData := source.Messages > 0 || source.LastSeenAt != "" || source.SyncEntries > 0
 		switch source.Name {
@@ -2200,6 +2243,8 @@ func archiveMode(sources []sourceResponse) string {
 			bot = hasData
 		case "wiretap":
 			wiretap = hasData
+		case "mcp":
+			mcp = hasData
 		case "backup":
 			backup = hasData
 		case "import":
@@ -2207,10 +2252,12 @@ func archiveMode(sources []sourceResponse) string {
 		}
 	}
 	switch {
-	case bot && wiretap:
+	case boolCount(bot, mcp, wiretap, backup, imported) > 1:
 		return "hybrid"
 	case bot:
 		return "bot"
+	case mcp:
+		return "mcp"
 	case wiretap:
 		return "wiretap"
 	case backup:
@@ -2220,6 +2267,24 @@ func archiveMode(sources []sourceResponse) string {
 	default:
 		return "empty"
 	}
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
+}
+
+func pathExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func shareStateFromConfig(cfg config.Config) shareResponse {
