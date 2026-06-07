@@ -37,6 +37,24 @@ token_env = "SLACK_USER_TOKEN"
 enabled = true
 path = ""
 
+[slack.mcp]
+enabled = true
+transport = "http"
+base_url = "https://chatgpt.com/backend-api/wham/apps"
+auth_path = "~/.codex/auth.json"
+token_env = "CODEX_APPS_ACCESS_TOKEN"
+account_id_env = "CODEX_APPS_ACCOUNT_ID"
+protocol_version = "2025-03-26"
+connector_id = ""
+channel_types = "public_channel,private_channel"
+page_size = 100
+search_limit = 20
+max_pages = 250
+# Reference Slack MCP server over stdio:
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-slack"]
+
 [sync]
 concurrency = 4
 repair_every = "30m"

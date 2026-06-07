@@ -160,6 +160,36 @@ func TestUpsertMessagePreservesSourcePrecedenceAndRefreshesSearch(t *testing.T) 
 	require.Empty(t, matches)
 }
 
+func TestUpsertMessageByPrioritySkipsLowerPriorityContent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1", Text: "richer",
+		NormalizedText: "richer", SourceRank: 1, SourceName: "api-user", RawJSON: `{"source":"api"}`, UpdatedAt: now,
+	}, []Mention{{Type: "user", TargetID: "U1"}}))
+
+	written, err := s.UpsertMessageByPriority(ctx, Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1", Text: "lower priority",
+		NormalizedText: "lower priority", SourceRank: 4, SourceName: "mcp", RawJSON: `{"source":"mcp"}`, UpdatedAt: now.Add(time.Second),
+	}, []Mention{{Type: "user", TargetID: "U2"}})
+	require.NoError(t, err)
+	require.False(t, written)
+
+	rows, err := s.QueryReadOnly(ctx, `select text, source_name, source_rank from messages where channel_id = 'C1' and ts = '123.45'`)
+	require.NoError(t, err)
+	require.Equal(t, "richer", rows[0]["text"])
+	require.Equal(t, "api-user", rows[0]["source_name"])
+	require.Equal(t, int64(1), rows[0]["source_rank"])
+	mentions, err := s.QueryReadOnly(ctx, `select target_id from message_mentions where channel_id = 'C1' and ts = '123.45'`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"target_id": "U1"}}, mentions)
+}
+
 func TestQueryReadOnlyRejectsWritableCTE(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)

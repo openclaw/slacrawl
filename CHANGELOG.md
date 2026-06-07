@@ -2,6 +2,10 @@
 
 ## 0.6.4 - Unreleased
 
+### Changes
+
+- Added `sync --source mcp` for fetching Slack users, channels, messages, and threads through Codex's HTTP connector gateway or the reference Slack MCP server over stdio into the canonical SQLite archive.
+
 ## 0.6.3 - 2026-05-25
 
 ### Fixes

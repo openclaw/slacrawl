@@ -78,6 +78,32 @@ on conflict(channel_id, ts) do update set
   updated_at=excluded.updated_at
 where messages.workspace_id = excluded.workspace_id;
 
+-- name: UpsertMessageByPriority :execrows
+insert into messages (
+  channel_id, ts, workspace_id, user_id, subtype, client_msg_id, thread_ts, parent_user_id,
+  text, normalized_text, reply_count, latest_reply, edited_ts, deleted_ts, source_rank,
+  source_name, raw_json, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(channel_id, ts) do update set
+  workspace_id=excluded.workspace_id,
+  user_id=excluded.user_id,
+  subtype=excluded.subtype,
+  client_msg_id=excluded.client_msg_id,
+  thread_ts=excluded.thread_ts,
+  parent_user_id=excluded.parent_user_id,
+  text=excluded.text,
+  normalized_text=excluded.normalized_text,
+  reply_count=excluded.reply_count,
+  latest_reply=excluded.latest_reply,
+  edited_ts=excluded.edited_ts,
+  deleted_ts=excluded.deleted_ts,
+  source_rank=excluded.source_rank,
+  source_name=excluded.source_name,
+  raw_json=excluded.raw_json,
+  updated_at=excluded.updated_at
+where messages.workspace_id = excluded.workspace_id
+  and excluded.source_rank <= messages.source_rank;
+
 -- name: GetMessageWorkspace :one
 select workspace_id from messages where channel_id = ? and ts = ?;
 

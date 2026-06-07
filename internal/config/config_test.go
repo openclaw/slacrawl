@@ -100,14 +100,59 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg := Default()
 	cfg.WorkspaceID = "T123"
 	cfg.Share.Remote = "https://example.com/private/slacrawl.git"
+	cfg.Slack.MCP.Enabled = true
+	cfg.Slack.MCP.BaseURL = "https://mcp.example.test"
+	cfg.Slack.MCP.AuthPath = filepath.Join(dir, "auth.json")
 	require.NoError(t, cfg.Save(path))
 
 	loaded, err := Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "T123", loaded.WorkspaceID)
+	require.True(t, loaded.Slack.MCP.Enabled)
+	require.Equal(t, "https://mcp.example.test", loaded.Slack.MCP.BaseURL)
+	require.True(t, filepath.IsAbs(loaded.Slack.MCP.AuthPath))
+	require.Equal(t, 100, loaded.Slack.MCP.PageSize)
+	require.Equal(t, 20, loaded.Slack.MCP.SearchLimit)
 	require.True(t, filepath.IsAbs(loaded.DBPath))
 	require.True(t, filepath.IsAbs(loaded.Share.RepoPath))
 	require.Equal(t, "https://example.com/private/slacrawl.git", loaded.Share.Remote)
+}
+
+func TestSaveAndLoadStdioMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := Default()
+	cfg.Slack.MCP.Transport = "stdio"
+	cfg.Slack.MCP.Command = "npx"
+	cfg.Slack.MCP.Args = []string{"-y", "@modelcontextprotocol/server-slack"}
+	require.NoError(t, cfg.Save(path))
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "stdio", loaded.Slack.MCP.Transport)
+	require.Equal(t, "npx", loaded.Slack.MCP.Command)
+	require.Equal(t, []string{"-y", "@modelcontextprotocol/server-slack"}, loaded.Slack.MCP.Args)
+}
+
+func TestNormalizeRejectsStdioMCPWithoutCommand(t *testing.T) {
+	cfg := Default()
+	cfg.Slack.MCP.Transport = "stdio"
+	cfg.Slack.MCP.Command = ""
+	require.ErrorContains(t, cfg.Normalize(), "command is required")
+}
+
+func TestNormalizeRejectsMCPSearchLimitAboveConnectorMaximum(t *testing.T) {
+	cfg := Default()
+	cfg.Slack.MCP.SearchLimit = 21
+	require.ErrorContains(t, cfg.Normalize(), "cannot exceed 20")
+}
+
+func TestNormalizeAllowsReferenceMCPSearchLimit(t *testing.T) {
+	cfg := Default()
+	cfg.Slack.MCP.Transport = "stdio"
+	cfg.Slack.MCP.Command = "server-slack"
+	cfg.Slack.MCP.SearchLimit = 100
+	require.NoError(t, cfg.Normalize())
 }
 
 func TestDefaultConfigPath(t *testing.T) {

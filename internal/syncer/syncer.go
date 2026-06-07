@@ -10,6 +10,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/slackapi"
 	"github.com/openclaw/slacrawl/internal/slackdesktop"
+	"github.com/openclaw/slacrawl/internal/slackmcp"
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
@@ -18,6 +19,7 @@ type Source string
 const (
 	SourceAPI     Source = "api"
 	SourceDesktop Source = "desktop"
+	SourceMCP     Source = "mcp"
 	SourceAll     Source = "all"
 )
 
@@ -27,10 +29,12 @@ func ParseSource(value string) (Source, error) {
 		return SourceAPI, nil
 	case string(SourceDesktop), "wiretap":
 		return SourceDesktop, nil
+	case string(SourceMCP), "connector":
+		return SourceMCP, nil
 	case string(SourceAll), "hybrid":
 		return SourceAll, nil
 	default:
-		return "", fmt.Errorf("unsupported source %q: use api, bot, desktop, wiretap, or all", value)
+		return "", fmt.Errorf("unsupported source %q: use api, bot, desktop, wiretap, mcp, connector, or all", value)
 	}
 }
 
@@ -49,6 +53,7 @@ type Options struct {
 
 type Summary struct {
 	Desktop slackdesktop.Source `json:"desktop"`
+	MCP     *slackmcp.Summary   `json:"mcp,omitempty"`
 }
 
 func Run(ctx context.Context, cfg config.Config, st *store.Store, opts Options) (Summary, error) {
@@ -74,6 +79,22 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		})
 	case SourceDesktop:
 		return syncDesktop(ctx, cfg, st)
+	case SourceMCP:
+		if !cfg.Slack.MCP.Enabled {
+			return summary, errors.New("slack MCP source is disabled in config")
+		}
+		mcpSummary, err := slackmcp.Sync(ctx, st, slackmcp.Options{
+			WorkspaceID:     opts.WorkspaceID,
+			Channels:        opts.Channels,
+			ExcludeChannels: opts.ExcludeChannels,
+			Since:           opts.Since,
+			Full:            opts.Full,
+			LatestOnly:      opts.LatestOnly,
+			Logger:          opts.Logger,
+			Config:          cfg.Slack.MCP,
+		})
+		summary.MCP = &mcpSummary
+		return summary, err
 	case SourceAll:
 		if err := apiClient.Sync(ctx, st, slackapi.SyncOptions{
 			WorkspaceID:     opts.WorkspaceID,

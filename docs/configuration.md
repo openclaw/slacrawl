@@ -47,6 +47,19 @@ token_env = "SLACK_USER_TOKEN"
 enabled = true
 path = ""
 
+[slack.mcp]
+enabled = true
+base_url = "https://chatgpt.com/backend-api/wham/apps"
+auth_path = "~/.codex/auth.json"
+token_env = "CODEX_APPS_ACCESS_TOKEN"
+account_id_env = "CODEX_APPS_ACCOUNT_ID"
+protocol_version = "2025-03-26"
+connector_id = ""
+channel_types = "public_channel,private_channel"
+page_size = 100
+search_limit = 20
+max_pages = 250
+
 [sync]
 concurrency = 4
 repair_every = "30m"
@@ -97,6 +110,7 @@ Behavior:
 One config/database should represent one Slack visibility boundary: the messages visible to one bot/account/profile. Use ingestion sources to decide how that archive is populated:
 
 - `sync --source bot` is an alias for `sync --source api` and uses Slack bot/user tokens
+- `sync --source mcp` fetches from a Slack connector exposed by the configured HTTP JSON-RPC MCP gateway
 - `sync --source wiretap` is an alias for `sync --source desktop` and reads the local Slack Desktop cache
 - `sync --source all` runs token-backed sync first, then desktop enrichment
 - `[share]` backs up or restores the current DB; it is not a second Slack data source
@@ -120,6 +134,54 @@ db_path = "~/.slacrawl/personal.db"
 remote = "git@github.com:your-user/personal-slacrawl-archive.git"
 repo_path = "~/.slacrawl/personal-share"
 ```
+
+## MCP Connector Source
+
+MCP sync is an additional ingestion source; all reads still use the local slacrawl database. It discovers Slack tools with `tools/list`, calls the connector for users, channels, channel history, and threads, then normalizes the results into the same archive schema used by API and desktop sync.
+
+```bash
+slacrawl sync --source mcp --workspace T01234567
+slacrawl sync --source mcp --workspace T01234567 --channels C01234567 --since 1772574099.659199
+```
+
+The workspace ID is required because connector responses do not reliably carry archive ownership. `connector_id` is optional; when empty, tool discovery matches Slack tools by their names and metadata. Set it when multiple Slack connectors are exposed by one gateway.
+
+The default `transport = "http"` uses Codex's connector gateway:
+
+```toml
+[slack.mcp]
+enabled = true
+transport = "http"
+base_url = "https://chatgpt.com/backend-api/wham/apps"
+auth_path = "~/.codex/auth.json"
+```
+
+HTTP authentication order:
+
+1. The configured `token_env` and optional `account_id_env`.
+2. `CODEX_APPS_ACCESS_TOKEN` or `CODEX_CONNECTORS_TOKEN`.
+3. The configured `auth_path`, using Codex's `tokens.access_token` and optional `tokens.account_id` fields.
+
+`max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. Explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+
+The connector's channel search response may omit privacy metadata. Those channels are stored with kind `mcp_channel` rather than being assumed public; they remain locally searchable but are not treated as public channels by archive export logic.
+
+For the archived MCP reference Slack server, use stdio and export the server's required `SLACK_BOT_TOKEN` and `SLACK_TEAM_ID` variables before running slacrawl:
+
+```toml
+[slack.mcp]
+enabled = true
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-slack"]
+page_size = 100
+search_limit = 100
+max_pages = 250
+```
+
+The subprocess inherits the current environment; secrets are not passed through TOML fields. The reference server exposes public or explicitly configured channels and does not paginate channel history. Therefore each sync imports only the latest `page_size` messages returned by `slack_get_channel_history`; `--since` filters that fetched window locally and `--full` cannot extend the server's history window. Channel and user listing still paginate normally. The npm package is deprecated and its upstream repository is archived, but this adapter supports its published tool contract.
+
+Tool discovery selects either the Codex Slack connector contract or the reference `slack_list_channels`, `slack_get_channel_history`, `slack_get_thread_replies`, and `slack_get_users` contract.
 
 ## Git Archive Sharing
 
