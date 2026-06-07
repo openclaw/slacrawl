@@ -25,6 +25,7 @@ Data stays on your machine. You can run it in API mode, MCP connector mode, desk
 
 - local SQLite storage with full-text search backed by SQLite FTS5
 - workspace, channel, user, and message sync
+- MCP connector sync through Codex's HTTP Slack connector or the reference Slack MCP server
 - thread reply backfill when a user token is available
 - DM and MPIM sync when a user token is available
 - incremental API history sync by default, with `--full` reserved for deliberate backfills
@@ -64,6 +65,7 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 - Go `1.26.4+`
 - `node` if you want richer desktop-local IndexedDB blob decoding
 - a Slack bot token for standard API sync
+- a configured Slack MCP connector if you want MCP-backed sync
 - an app token if you want to use `tail`
 - an optional user token for fuller historical thread coverage
 - macOS Slack Desktop only if you want desktop-local discovery
@@ -74,7 +76,7 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 <summary>Homebrew (macOS)</summary>
 
 ```bash
-brew tap vincentkoc/tap
+brew tap openclaw/tap
 brew install slacrawl
 ```
 
@@ -88,15 +90,15 @@ Download the package that matches your platform from the [latest release](https:
 Debian/Ubuntu:
 
 ```bash
-curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl_0.6.3_amd64.deb
-sudo dpkg -i slacrawl_0.6.3_amd64.deb
+curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl_0.7.0_amd64.deb
+sudo dpkg -i slacrawl_0.7.0_amd64.deb
 ```
 
 RHEL/Fedora:
 
 ```bash
-curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl-0.6.3-1.x86_64.rpm
-sudo rpm -i slacrawl-0.6.3-1.x86_64.rpm
+curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl-0.7.0-1.x86_64.rpm
+sudo rpm -i slacrawl-0.7.0-1.x86_64.rpm
 ```
 
 </details>
