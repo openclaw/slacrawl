@@ -1,10 +1,16 @@
 # Changelog
 
-## 0.7.1 - Unreleased
+## 0.7.1 - 2026-06-08
 
 ### Fixes
 
 - Desktop and wiretap sync now apply configured workspace, channel, and excluded-channel filters to cached Slack Desktop imports.
+
+### Maintenance
+
+- Updated `slack-go` to 0.25.0 while preserving search indexing for rich-text, raw-text, raw-number, and empty table cells.
+- Added a pinned dead-code CI gate and removed unreachable internal helpers. Thanks @vincentkoc.
+- Updated the TruffleHog secret-scanning action to 3.95.5.
 
 ## 0.7.0 - 2026-06-07
 

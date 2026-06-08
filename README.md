@@ -90,15 +90,15 @@ Download the package that matches your platform from the [latest release](https:
 Debian/Ubuntu:
 
 ```bash
-curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl_0.7.0_amd64.deb
-sudo dpkg -i slacrawl_0.7.0_amd64.deb
+curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl_0.7.1_amd64.deb
+sudo dpkg -i slacrawl_0.7.1_amd64.deb
 ```
 
 RHEL/Fedora:
 
 ```bash
-curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl-0.7.0-1.x86_64.rpm
-sudo rpm -i slacrawl-0.7.0-1.x86_64.rpm
+curl -LO https://github.com/openclaw/slacrawl/releases/latest/download/slacrawl-0.7.1-1.x86_64.rpm
+sudo rpm -i slacrawl-0.7.1-1.x86_64.rpm
 ```
 
 </details>
