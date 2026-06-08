@@ -490,16 +490,6 @@ func DetectDesktopPath() (string, error) {
 	return "", nil
 }
 
-func ValidateTokenShape(value string, prefix string) error {
-	if value == "" {
-		return errors.New("token missing")
-	}
-	if !strings.HasPrefix(value, prefix) {
-		return fmt.Errorf("token must start with %s", prefix)
-	}
-	return nil
-}
-
 func Redact(value string) string {
 	if value == "" {
 		return ""

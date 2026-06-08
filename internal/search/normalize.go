@@ -81,10 +81,6 @@ func NormalizeMessage(msg slack.Message) string {
 	return joinNormalizedParts(parts)
 }
 
-func NormalizeRawPayloadText(value any) string {
-	return strings.Join(normalizeRawPayloadParts(value), " ")
-}
-
 func normalizeRawPayloadParts(value any) []string {
 	parts := make([]string, 0)
 	appendRawVisibleText(&parts, value, "")
@@ -728,16 +724,6 @@ func display(label string, fallback string) string {
 		return label
 	}
 	return fallback
-}
-
-func filterEmpty(parts []string) []string {
-	filtered := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.TrimSpace(part) != "" {
-			filtered = append(filtered, strings.TrimSpace(part))
-		}
-	}
-	return filtered
 }
 
 func sanitizeText(raw string) string {

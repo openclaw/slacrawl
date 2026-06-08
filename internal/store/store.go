@@ -1087,13 +1087,6 @@ func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityI
 	})
 }
 
-func (s *Store) DeleteSyncStateByType(ctx context.Context, source, entityType string) error {
-	return s.q.DeleteSyncStateByType(ctx, storedb.DeleteSyncStateByTypeParams{
-		SourceName: source,
-		EntityType: entityType,
-	})
-}
-
 func (s *Store) DeleteSyncStateByTypePrefix(ctx context.Context, source, entityType, entityIDPrefix string) error {
 	return s.q.DeleteSyncStateByTypePrefix(ctx, storedb.DeleteSyncStateByTypePrefixParams{
 		SourceName:   source,
@@ -2099,35 +2092,11 @@ func stringifyDBValue(value any) any {
 	}
 }
 
-func DebugJSON(value any) string {
-	data, _ := json.MarshalIndent(value, "", "  ")
-	return string(data)
-}
-
-func ParseTime(value string) string {
-	if value == "" {
-		return ""
-	}
-	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return parsed.Format(time.RFC3339)
-	}
-	return value
-}
-
 func RequireLimit(limit int) int {
 	if limit <= 0 {
 		return 50
 	}
 	return limit
-}
-
-func PrettyStatus(status Status) string {
-	last := "never"
-	if !status.LastSyncAt.IsZero() {
-		last = status.LastSyncAt.Format(time.RFC3339)
-	}
-	return fmt.Sprintf("workspaces=%d channels=%d users=%d messages=%d last_sync=%s thread_state=%s",
-		status.Workspaces, status.Channels, status.Users, status.Messages, last, status.ThreadState)
 }
 
 func readSchemaVersion(db *sql.DB) (int, error) {

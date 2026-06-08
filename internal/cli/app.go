@@ -1822,10 +1822,6 @@ func stripKnownFlags(args []string, strip map[string]bool) []string {
 	return out
 }
 
-func WithTimeout(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, 30*time.Second)
-}
-
 func (a *App) runPublish(ctx context.Context, configPath string, args []string, format OutputFormat) error {
 	cfg, err := loadConfig(configPath)
 	if err != nil {
