@@ -1373,7 +1373,11 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 	defer func() { _ = st.Close() }()
 
 	syncOnce := func() error {
-		summary, err := syncer.Run(ctx, cfg, st, syncer.Options{Source: syncer.SourceDesktop})
+		summary, err := syncer.Run(ctx, cfg, st, syncer.Options{
+			Source:          syncer.SourceDesktop,
+			WorkspaceID:     cfg.WorkspaceID,
+			ExcludeChannels: cfg.Sync.ExcludeChannels,
+		})
 		if err != nil {
 			return err
 		}

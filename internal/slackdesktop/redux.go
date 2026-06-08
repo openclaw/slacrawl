@@ -153,47 +153,49 @@ func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
 	return states, nil
 }
 
-func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecodedState, now time.Time) error {
+func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecodedState, now time.Time, filter ingestFilter) error {
+	mergedChannelNames := channelNamesByWorkspaceID(states)
+	workspaceCandidates := channelWorkspaceCandidates(states)
 	for _, state := range states {
 		if state.WorkspaceID == "" {
 			continue
 		}
-		if err := st.UpsertWorkspace(ctx, store.Workspace{
-			ID:        state.WorkspaceID,
-			Name:      state.WorkspaceID,
-			RawJSON:   store.MarshalRaw(map[string]any{"workspace_id": state.WorkspaceID, "source": indexedDBSourceName}),
-			UpdatedAt: now,
-		}); err != nil {
-			return err
-		}
-		for _, member := range state.Members {
-			workspaceID := fallback(member.TeamID, state.WorkspaceID)
-			if err := upsertDesktopUser(ctx, st, store.User{
-				ID:          member.ID,
-				WorkspaceID: workspaceID,
-				Name:        fallback(member.Name, member.ID),
-				RealName:    fallback(member.Profile.RealName, member.Real),
-				DisplayName: member.Profile.DisplayName,
-				Title:       member.Profile.Title,
-				IsBot:       member.IsBot,
-				IsDeleted:   member.Deleted,
-				RawJSON:     store.MarshalRaw(member),
-				UpdatedAt:   now,
-			}); err != nil {
+		if filter.allowWorkspace(state.WorkspaceID) {
+			if err := upsertIndexedDBWorkspace(ctx, st, state.WorkspaceID, now); err != nil {
 				return err
 			}
 		}
 		allowedChannels := map[string]struct{}{}
+		channelWorkspaces := map[string]string{}
+		knownChannelNames := map[string][]string{}
+		referencedUsers := map[string]struct{}{}
 		memberNames := map[string]string{}
 		for _, member := range state.Members {
 			memberNames[member.ID] = firstNonEmpty(member.Profile.DisplayName, member.Profile.RealName, member.Name, member.Real, member.ID)
 		}
 		for _, channel := range state.Channels {
-			workspaceID := fallback(channel.ContextTeamID, state.WorkspaceID)
+			workspaceID := channelContextWorkspaceID(channel.ContextTeamID, state.WorkspaceID)
+			channelWorkspaces[channel.ID] = workspaceID
+			channelName := reduxChannelName(channel, memberNames)
+			filterChannelNames := mergedChannelNames.get(workspaceID, channel.ID)
+			knownChannelNames[channel.ID] = filterChannelNames
+			if !filter.allowChannelNames(workspaceID, channel.ID, filterChannelNames) {
+				continue
+			}
+			if err := upsertIndexedDBWorkspace(ctx, st, workspaceID, now); err != nil {
+				return err
+			}
+			allowedChannels[channel.ID] = struct{}{}
+			if channel.User != "" {
+				referencedUsers[channel.User] = struct{}{}
+			}
+			for _, memberID := range channel.Members {
+				referencedUsers[memberID] = struct{}{}
+			}
 			if err := st.UpsertChannel(ctx, store.Channel{
 				ID:          channel.ID,
 				WorkspaceID: workspaceID,
-				Name:        reduxChannelName(channel, memberNames),
+				Name:        channelName,
 				Kind:        reduxChannelKind(channel),
 				Topic:       channel.Topic.Value,
 				Purpose:     channel.Purpose.Value,
@@ -208,23 +210,45 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				}
 				return err
 			}
-			allowedChannels[channel.ID] = struct{}{}
 		}
 		for _, message := range state.Messages {
 			if message.Channel == "" || message.TS == "" {
 				continue
 			}
-			if _, ok := allowedChannels[message.Channel]; !ok && !isSlackConversationID(message.Channel) {
+			workspaceID, ok := channelWorkspaces[message.Channel]
+			if !ok {
+				workspaceID, ok = resolveChannelWorkspace(message.Channel, state.WorkspaceID, workspaceCandidates)
+				if !ok {
+					continue
+				}
+			}
+			if !filter.allowWorkspace(workspaceID) {
+				continue
+			}
+			channelNames, knownChannel := knownChannelNames[message.Channel]
+			if len(channelNames) == 0 {
+				channelNames = mergedChannelNames.get(workspaceID, message.Channel)
+			}
+			if _, ok := allowedChannels[message.Channel]; !ok && (knownChannel || !isSlackConversationID(message.Channel)) {
+				continue
+			}
+			if !filter.allowChannelNames(workspaceID, message.Channel, channelNames) {
 				continue
 			}
 			text := strings.TrimSpace(message.Text)
 			if text == "" && message.Subtype == "" && message.Type == "" {
 				continue
 			}
+			if message.User != "" {
+				referencedUsers[message.User] = struct{}{}
+			}
+			if message.ParentUserID != "" {
+				referencedUsers[message.ParentUserID] = struct{}{}
+			}
 			if err := upsertDesktopMessage(ctx, st, store.Message{
 				ChannelID:      message.Channel,
 				TS:             message.TS,
-				WorkspaceID:    state.WorkspaceID,
+				WorkspaceID:    workspaceID,
 				UserID:         message.User,
 				Subtype:        message.Subtype,
 				ClientMsgID:    message.ClientMsgID,
@@ -243,11 +267,92 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				return err
 			}
 		}
+		for _, member := range state.Members {
+			workspaceID := fallback(member.TeamID, state.WorkspaceID)
+			if !filter.allowWorkspace(workspaceID) {
+				if _, referenced := referencedUsers[member.ID]; !referenced {
+					continue
+				}
+			}
+			if err := upsertDesktopUser(ctx, st, store.User{
+				ID:          member.ID,
+				WorkspaceID: workspaceID,
+				Name:        fallback(member.Name, member.ID),
+				RealName:    fallback(member.Profile.RealName, member.Real),
+				DisplayName: member.Profile.DisplayName,
+				Title:       member.Profile.Title,
+				IsBot:       member.IsBot,
+				IsDeleted:   member.Deleted,
+				RawJSON:     store.MarshalRaw(member),
+				UpdatedAt:   now,
+			}); err != nil {
+				return err
+			}
+		}
 		if err := st.SetSyncState(ctx, sourceName, "indexeddb", "decoded_states", fmt.Sprintf("%d", len(states))); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func channelWorkspaceCandidates(states []ReduxDecodedState) map[string]map[string]struct{} {
+	candidates := map[string]map[string]struct{}{}
+	for _, state := range states {
+		for _, channel := range state.Channels {
+			if channel.ID == "" {
+				continue
+			}
+			workspaceID := channelContextWorkspaceID(channel.ContextTeamID, state.WorkspaceID)
+			if workspaceID == "" {
+				continue
+			}
+			if _, ok := candidates[channel.ID]; !ok {
+				candidates[channel.ID] = map[string]struct{}{}
+			}
+			candidates[channel.ID][workspaceID] = struct{}{}
+		}
+	}
+	return candidates
+}
+
+func channelContextWorkspaceID(contextTeamID, stateWorkspaceID string) string {
+	contextTeamID = strings.TrimSpace(contextTeamID)
+	if strings.HasPrefix(contextTeamID, "T") {
+		return contextTeamID
+	}
+	return strings.TrimSpace(stateWorkspaceID)
+}
+
+func resolveChannelWorkspace(channelID, fallbackWorkspace string, candidates map[string]map[string]struct{}) (string, bool) {
+	fallbackWorkspace = strings.TrimSpace(fallbackWorkspace)
+	workspaces := candidates[channelID]
+	if len(workspaces) == 0 {
+		return fallbackWorkspace, fallbackWorkspace != ""
+	}
+	if fallbackWorkspace != "" {
+		if _, ok := workspaces[fallbackWorkspace]; ok {
+			return fallbackWorkspace, true
+		}
+	}
+	if len(workspaces) == 1 {
+		for workspaceID := range workspaces {
+			return workspaceID, true
+		}
+	}
+	return "", false
+}
+
+func upsertIndexedDBWorkspace(ctx context.Context, st *store.Store, workspaceID string, now time.Time) error {
+	if workspaceID == "" {
+		return nil
+	}
+	return st.EnsureWorkspace(ctx, store.Workspace{
+		ID:        workspaceID,
+		Name:      workspaceID,
+		RawJSON:   store.MarshalRaw(map[string]any{"workspace_id": workspaceID, "source": indexedDBSourceName}),
+		UpdatedAt: now,
+	})
 }
 
 func scanReduxBlobRefs(blobRoot string) ([]reduxBlobRef, error) {
@@ -350,6 +455,61 @@ func reduxChannelName(channel ReduxChannel, memberNames map[string]string) strin
 		}
 	}
 	return channel.ID
+}
+
+func reduxResolvedChannelNames(channel ReduxChannel, memberNames map[string]string) []string {
+	aliases := make([]string, 0, 2)
+	if name := strings.TrimSpace(channel.Name); name != "" && !channel.IsIM && !channel.IsMPIM {
+		aliases = append(aliases, name)
+	}
+	if channel.IsIM {
+		if name, ok := resolvedMemberName(channel.User, memberNames); ok {
+			aliases = append(aliases, name)
+		}
+	}
+	if channel.IsMPIM {
+		names := make([]string, 0, len(channel.Members))
+		allResolved := len(channel.Members) > 0
+		for _, memberID := range channel.Members {
+			if name, ok := resolvedMemberName(memberID, memberNames); ok {
+				names = append(names, name)
+			} else {
+				allResolved = false
+			}
+		}
+		if allResolved {
+			if name := strings.TrimSpace(channel.Name); name != "" {
+				aliases = append(aliases, name)
+			}
+			sort.Strings(names)
+			aliases = append(aliases, strings.Join(names, ","))
+			aliases = append(aliases, strings.Join(names, ", "))
+		}
+	}
+	return uniqueNonEmptyStrings(aliases)
+}
+
+func resolvedMemberName(memberID string, memberNames map[string]string) (string, bool) {
+	name := strings.TrimSpace(memberNames[memberID])
+	return name, name != "" && name != memberID
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func isSlackConversationID(value string) bool {

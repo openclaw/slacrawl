@@ -106,7 +106,7 @@ func TestIngestDesktopState(t *testing.T) {
 	defer func() { require.NoError(t, st.Close()) }()
 
 	snapshotParent := withSnapshotTempParent(t)
-	source, err := Ingest(context.Background(), st, root)
+	source, err := Ingest(context.Background(), st, root, IngestOptions{})
 	require.NoError(t, err)
 	require.True(t, source.Available)
 	require.Empty(t, source.Snapshot)
@@ -138,6 +138,122 @@ func TestIngestDesktopState(t *testing.T) {
 	require.Equal(t, "1", expandableCount)
 }
 
+func TestIngestDesktopStateRespectsWorkspaceFilter(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "storage", "root-state.json"), []byte(`{"appTeams":{"T111":{},"T222":{}}}`), 0o600))
+
+	localDB, err := leveldb.OpenFile(filepath.Join(root, "Local Storage", "leveldb"), nil)
+	require.NoError(t, err)
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.comlocalConfig_v2"), []byte(`{"teams":{"T111":{"id":"T111","name":"Team One","domain":"team-one","user_id":"U111"},"T222":{"id":"T222","name":"Team Two","domain":"team-two","user_id":"U222"}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::drafts"), []byte(`{"unifiedDrafts":{"draft-1":{"id":"draft-1","client_draft_id":"draft-1","destinations":[{"channel_id":"C000000111"}],"ops":[{"insert":"wrong workspace"}],"last_updated_ts":1710000001.000200}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T222::U222::drafts"), []byte(`{"unifiedDrafts":{"draft-2":{"id":"draft-2","client_draft_id":"draft-2","destinations":[{"channel_id":"C000000222"}],"ops":[{"insert":"kept draft"}],"last_updated_ts":1710000002.000200},"draft-3":{"id":"draft-3","client_draft_id":"draft-3","destinations":[{"channel_id":"C000000223"}],"ops":[{"insert":"excluded draft"}],"last_updated_ts":1710000003.000200}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::recentlyJoinedChannels"), []byte(`{"C000000111":{}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T222::U222::recentlyJoinedChannels"), []byte(`{"C000000222":{},"C000000223":{}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::customStatus"), []byte(`{"status-1":{"id":"status-1","user_id":"U111","text":"Wrong workspace","is_active":true,"date_created":10}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T222::U222::customStatus"), []byte(`{"status-2":{"id":"status-2","user_id":"U222","text":"Kept workspace","is_active":true,"date_created":10}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T222::U222::persistedApiCalls"), []byte(`{"mark-1":{"method":"conversations.mark","persistKey":"mark-1","reason":"viewed","args":{"channel":"C000000222","ts":"1710000002.000300"}},"mark-2":{"method":"conversations.mark","persistKey":"mark-2","reason":"viewed","args":{"channel":"C000000223","ts":"1710000003.000300"}}}`), nil))
+	require.NoError(t, localDB.Close())
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	source, err := Ingest(context.Background(), st, root, IngestOptions{WorkspaceID: "T222"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"T222"}, source.Summary.AppTeamsKeys)
+
+	status, err := st.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Workspaces)
+	require.Equal(t, 1, status.Users)
+	require.Equal(t, 2, status.Messages)
+
+	channels, err := st.Channels(context.Background(), "T222", "", 10)
+	require.NoError(t, err)
+	require.Len(t, channels, 2)
+
+	channels, err = st.Channels(context.Background(), "T111", "", 10)
+	require.NoError(t, err)
+	require.Empty(t, channels)
+
+	messages, err := st.Messages(context.Background(), "", "", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	for _, message := range messages {
+		require.Equal(t, "T222", message.WorkspaceID)
+	}
+
+	readTS, err := st.GetSyncState(context.Background(), sourceName, "read_marker", "C000000222")
+	require.NoError(t, err)
+	require.Equal(t, "1710000002.000300", readTS)
+	appTeams, err := st.GetSyncState(context.Background(), sourceName, "root_state", "app_teams")
+	require.NoError(t, err)
+	require.Equal(t, "T222", appTeams)
+	_, err = st.GetSyncState(context.Background(), sourceName, "custom_status", "T111:U111")
+	require.Error(t, err)
+}
+
+func TestIngestDesktopStateSkipsUnknownChannelsForNameExcludes(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
+
+	localDB, err := leveldb.OpenFile(filepath.Join(root, "Local Storage", "leveldb"), nil)
+	require.NoError(t, err)
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.comlocalConfig_v2"), []byte(`{"teams":{"T111":{"id":"T111","name":"Team One","domain":"team-one","user_id":"U111"}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::drafts"), []byte(`{"unifiedDrafts":{"draft-1":{"id":"draft-1","client_draft_id":"draft-1","destinations":[{"channel_id":"C111"}],"ops":[{"insert":"unknown channel draft"}],"last_updated_ts":1710000001.000200}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::recentlyJoinedChannels"), []byte(`{"C111":{}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::persistedApiCalls"), []byte(`{"mark-1":{"method":"conversations.mark","persistKey":"mark-1","reason":"viewed","args":{"channel":"C111","ts":"1710000001.000300"}}}`), nil))
+	require.NoError(t, localDB.Close())
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	source, err := Ingest(context.Background(), st, root, IngestOptions{
+		ExcludeChannels: []string{"GENERAL"},
+	})
+	require.NoError(t, err)
+	require.True(t, source.Available)
+
+	status, err := st.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Workspaces)
+	require.Equal(t, 1, status.Users)
+	require.Equal(t, 0, status.Channels)
+	require.Equal(t, 0, status.Messages)
+
+	_, err = st.GetSyncState(context.Background(), sourceName, "read_marker", "C111")
+	require.Error(t, err)
+}
+
+func TestIngestReduxStatesSkipsUnknownChannelsForNameExcludesWithWorkspaceFilter(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	filter := newIngestFilter(IngestOptions{
+		WorkspaceID:     "T111",
+		ExcludeChannels: []string{"general"},
+	})
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{{
+		WorkspaceID: "T111",
+		Messages: []ReduxMessage{{
+			Channel: "C111",
+			TS:      "1710000001.000200",
+			Type:    "message",
+			Text:    "metadata-less message",
+		}},
+	}}, time.Now().UTC(), filter))
+
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Workspaces)
+	require.Equal(t, 0, status.Messages)
+}
+
 func TestIngestDesktopDraftUsesPersistWorkspace(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
@@ -152,7 +268,7 @@ func TestIngestDesktopDraftUsesPersistWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, st.Close()) }()
 
-	_, err = Ingest(context.Background(), st, root)
+	_, err = Ingest(context.Background(), st, root, IngestOptions{})
 	require.NoError(t, err)
 
 	messages, err := st.Messages(context.Background(), "", "C111", "", 10)
@@ -322,7 +438,7 @@ func TestIngestReduxStatesIncludesIMs(t *testing.T) {
 			User:    "U222",
 			Text:    "What's the best way to coordinate meetings?",
 		}},
-	}}, now))
+	}}, now, ingestFilter{}))
 
 	channels, err := st.Channels(context.Background(), "", "", 10)
 	require.NoError(t, err)
@@ -335,6 +451,421 @@ func TestIngestReduxStatesIncludesIMs(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "D111", rows[0].ChannelID)
 	require.Equal(t, "mike", rows[0].ChannelName)
+}
+
+func TestIngestReduxStatesRespectsWorkspaceAndChannelFilters(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	filter := newIngestFilter(IngestOptions{
+		WorkspaceID:     "T111",
+		ExcludeChannels: []string{"#EXCLUDED"},
+	})
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{
+		{
+			WorkspaceID: "T111",
+			UserID:      "U111",
+			Channels: []ReduxChannel{
+				{ID: "C111", Name: "kept", IsChannel: true, ContextTeamID: "T111"},
+				{ID: "C222", Name: "excluded", IsChannel: true, ContextTeamID: "T111"},
+			},
+			Members: []ReduxMember{
+				{ID: "U111", Name: "alice", TeamID: "T111"},
+			},
+			Messages: []ReduxMessage{
+				{Channel: "C111", TS: "1710000001.000200", Type: "message", User: "U111", Text: "kept message"},
+				{Channel: "C222", TS: "1710000002.000200", Type: "message", User: "U111", Text: "excluded message"},
+			},
+		},
+		{
+			WorkspaceID: "T222",
+			UserID:      "U222",
+			Channels: []ReduxChannel{
+				{ID: "C333", Name: "wrong-workspace", IsChannel: true, ContextTeamID: "T222"},
+			},
+			Members: []ReduxMember{
+				{ID: "U222", Name: "bob", TeamID: "T222"},
+			},
+			Messages: []ReduxMessage{
+				{Channel: "C333", TS: "1710000003.000200", Type: "message", User: "U222", Text: "wrong workspace"},
+			},
+		},
+		{
+			WorkspaceID: "T222",
+			UserID:      "U555",
+			Channels: []ReduxChannel{
+				{ID: "C555", Name: "cross-context", IsChannel: true, ContextTeamID: "T111"},
+			},
+			Members: []ReduxMember{
+				{ID: "U555", Name: "cross-user", TeamID: "T111"},
+				{ID: "U_EXTERNAL", Name: "external-user", TeamID: "T_EXTERNAL"},
+			},
+			Messages: []ReduxMessage{
+				{Channel: "C555", TS: "1710000005.000200", Type: "message", User: "U555", Text: "cross workspace message"},
+				{Channel: "C555", TS: "1710000006.000200", Type: "message", User: "U_EXTERNAL", Text: "external user message"},
+			},
+		},
+	}, now, filter))
+
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Workspaces)
+	require.Equal(t, 2, status.Channels)
+	require.Equal(t, 3, status.Users)
+	require.Equal(t, 3, status.Messages)
+
+	messages, err := st.Messages(ctx, "", "", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	byChannel := map[string]store.MessageRow{}
+	for _, message := range messages {
+		byChannel[message.ChannelID+":"+message.TS] = message
+	}
+	require.Equal(t, "T111", byChannel["C111:1710000001.000200"].WorkspaceID)
+	require.Equal(t, "kept message", byChannel["C111:1710000001.000200"].Text)
+	require.Equal(t, "T111", byChannel["C555:1710000005.000200"].WorkspaceID)
+	require.Equal(t, "cross workspace message", byChannel["C555:1710000005.000200"].Text)
+	require.Equal(t, "T111", byChannel["C555:1710000006.000200"].WorkspaceID)
+	require.Equal(t, "external user message", byChannel["C555:1710000006.000200"].Text)
+
+	users, err := st.Users(ctx, "", "external-user", 10)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	require.Equal(t, "T_EXTERNAL", users[0].WorkspaceID)
+
+	channels, err := st.Channels(ctx, "", "", 10)
+	require.NoError(t, err)
+	require.Len(t, channels, 2)
+}
+
+func TestIngestReduxStatesUsesGlobalChannelWorkspaceForMetadataLessMessages(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{
+		{
+			WorkspaceID: "T222",
+			Channels: []ReduxChannel{{
+				ID:            "C999",
+				Name:          "connect",
+				IsChannel:     true,
+				ContextTeamID: "T222",
+			}},
+		},
+		{
+			WorkspaceID: "T111",
+			Messages: []ReduxMessage{{
+				Channel: "C999",
+				TS:      "1710000009.000200",
+				Type:    "message",
+				User:    "U111",
+				Text:    "metadata in another state",
+			}},
+		},
+	}, now, ingestFilter{}))
+
+	messages, err := st.Messages(ctx, "", "C999", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "T222", messages[0].WorkspaceID)
+
+	filtered, err := store.Open(filepath.Join(t.TempDir(), "filtered.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, filtered.Close()) }()
+	filter := newIngestFilter(IngestOptions{WorkspaceID: "T111"})
+	require.NoError(t, ingestReduxStates(ctx, filtered, []ReduxDecodedState{
+		{
+			WorkspaceID: "T222",
+			Channels: []ReduxChannel{{
+				ID:            "C999",
+				Name:          "connect",
+				IsChannel:     true,
+				ContextTeamID: "T222",
+			}},
+		},
+		{
+			WorkspaceID: "T111",
+			Messages: []ReduxMessage{{
+				Channel: "C999",
+				TS:      "1710000009.000200",
+				Type:    "message",
+				User:    "U111",
+				Text:    "metadata in another state",
+			}},
+		},
+	}, now, filter))
+	status, err := filtered.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, status.Messages)
+}
+
+func TestIngestReduxStatesUsesStateWorkspaceForEnterpriseContext(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	state := ReduxDecodedState{
+		WorkspaceID: "T111",
+		Channels: []ReduxChannel{{
+			ID:            "C111",
+			Name:          "grid-channel",
+			IsChannel:     true,
+			ContextTeamID: "E111",
+		}},
+		Messages: []ReduxMessage{{
+			Channel: "C111",
+			TS:      "1710000001.000200",
+			Type:    "message",
+			Text:    "enterprise context message",
+		}},
+	}
+	filter := newIngestFilter(IngestOptions{WorkspaceID: "T111"})
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{state}, now, filter))
+
+	messages, err := st.Messages(ctx, "", "C111", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "T111", messages[0].WorkspaceID)
+
+	hints := channelNamesByWorkspaceID([]ReduxDecodedState{state})
+	require.Equal(t, []string{"grid-channel"}, hints.get("T111", "C111"))
+	require.Empty(t, hints.get("E111", "C111"))
+}
+
+func TestIngestReduxStatesUsesMatchingStateWorkspaceForConflictedChannel(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{
+		{
+			WorkspaceID: "T222",
+			Channels: []ReduxChannel{{
+				ID:            "C999",
+				Name:          "connect",
+				IsChannel:     true,
+				ContextTeamID: "T222",
+			}},
+		},
+		{
+			WorkspaceID: "T333",
+			Channels: []ReduxChannel{{
+				ID:            "C999",
+				Name:          "connect",
+				IsChannel:     true,
+				ContextTeamID: "T333",
+			}},
+		},
+		{
+			WorkspaceID: "T222",
+			Messages: []ReduxMessage{{
+				Channel: "C999",
+				TS:      "1710000008.000200",
+				Type:    "message",
+				User:    "U222",
+				Text:    "matching conflicted workspace",
+			}},
+		},
+		{
+			WorkspaceID: "T111",
+			Messages: []ReduxMessage{{
+				Channel: "C999",
+				TS:      "1710000009.000200",
+				Type:    "message",
+				User:    "U111",
+				Text:    "conflicted workspace",
+			}},
+		},
+	}, now, ingestFilter{}))
+
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Messages)
+	messages, err := st.Messages(ctx, "", "C999", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "T222", messages[0].WorkspaceID)
+	require.Equal(t, "matching conflicted workspace", messages[0].Text)
+}
+
+func TestResolveChannelWorkspaceUsesContextCandidates(t *testing.T) {
+	candidates := channelWorkspaceCandidates([]ReduxDecodedState{
+		{
+			WorkspaceID: "T222",
+			Channels: []ReduxChannel{{
+				ID:            "C111",
+				ContextTeamID: "T111",
+			}},
+		},
+		{
+			WorkspaceID: "T333",
+			Channels: []ReduxChannel{{
+				ID:            "C222",
+				ContextTeamID: "T333",
+			}},
+		},
+		{
+			WorkspaceID: "T444",
+			Channels: []ReduxChannel{{
+				ID:            "C222",
+				ContextTeamID: "T444",
+			}},
+		},
+	})
+
+	workspaceID, ok := resolveChannelWorkspace("C111", "T222", candidates)
+	require.True(t, ok)
+	require.Equal(t, "T111", workspaceID)
+
+	workspaceID, ok = resolveChannelWorkspace("C222", "T333", candidates)
+	require.True(t, ok)
+	require.Equal(t, "T333", workspaceID)
+
+	_, ok = resolveChannelWorkspace("C222", "T111", candidates)
+	require.False(t, ok)
+
+	workspaceID, ok = resolveChannelWorkspace("C333", "T555", candidates)
+	require.True(t, ok)
+	require.Equal(t, "T555", workspaceID)
+}
+
+func TestChannelNameHintsAreWorkspaceQualifiedAndDerived(t *testing.T) {
+	hints := channelNamesByWorkspaceID([]ReduxDecodedState{
+		{
+			WorkspaceID: "T111",
+			Channels: []ReduxChannel{{
+				ID:            "D111",
+				User:          "U111",
+				IsIM:          true,
+				ContextTeamID: "T111",
+			}},
+			Members: []ReduxMember{{
+				ID:     "U111",
+				Name:   "alice",
+				TeamID: "T111",
+			}},
+		},
+		{
+			WorkspaceID: "T222",
+			Channels: []ReduxChannel{{
+				ID:            "D111",
+				Name:          "ops",
+				IsChannel:     true,
+				ContextTeamID: "T222",
+			}},
+		},
+		{
+			WorkspaceID: "T333",
+			Channels: []ReduxChannel{{
+				ID:            "G111",
+				Name:          "mpdm-alice--bob-1",
+				IsMPIM:        true,
+				Members:       []string{"U2", "U1"},
+				ContextTeamID: "T333",
+			}},
+			Members: []ReduxMember{
+				{ID: "U1", Name: "alice", TeamID: "T333"},
+				{ID: "U2", Name: "bob", TeamID: "T333"},
+			},
+		},
+		{
+			WorkspaceID: "T444",
+			Channels: []ReduxChannel{{
+				ID:            "G222",
+				Name:          "mpdm-alice--unknown-1",
+				IsMPIM:        true,
+				Members:       []string{"U1", "U_MISSING"},
+				ContextTeamID: "T444",
+			}},
+			Members: []ReduxMember{
+				{ID: "U1", Name: "alice", TeamID: "T444"},
+			},
+		},
+		{
+			WorkspaceID: "T666",
+			Channels: []ReduxChannel{{
+				ID:            "C777",
+				Name:          "ops",
+				IsChannel:     true,
+				ContextTeamID: "T666",
+			}},
+		},
+		{
+			WorkspaceID: "T666",
+			Channels: []ReduxChannel{{
+				ID:            "C777",
+				Name:          "ops-archive",
+				IsChannel:     true,
+				ContextTeamID: "T666",
+			}},
+		},
+	})
+
+	require.Equal(t, []string{"alice"}, hints.get("T111", "D111"))
+	require.Equal(t, []string{"ops"}, hints.get("T222", "D111"))
+	require.Equal(t, []string{"mpdm-alice--bob-1", "alice,bob", "alice, bob"}, hints.get("T333", "G111"))
+	require.Empty(t, hints.get("T444", "G222"))
+	require.Equal(t, []string{"ops", "ops-archive"}, hints.get("T666", "C777"))
+
+	filter := newIngestFilter(IngestOptions{ExcludeChannels: []string{"#ALICE"}})
+	require.False(t, filter.allowChannelNames("T111", "D111", hints.get("T111", "D111")))
+	require.True(t, filter.allowChannelNames("T222", "D111", hints.get("T222", "D111")))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"alice,bob"}})
+	require.False(t, filter.allowChannelNames("T333", "G111", hints.get("T333", "G111")))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"c2"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c555": {}})
+	require.True(t, filter.hasNameExclude)
+	require.False(t, filter.allowChannelNames("T555", "C555", nil))
+	require.True(t, filter.allowChannelNames("T555", "C555", []string{"kept"}))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C000000223"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c000000222": {}, "c000000223": {}})
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C000000222", nil))
+	require.True(t, filter.allowChannelNames("T555", "C000000222", []string{"kept"}))
+	require.False(t, filter.allowChannelNames("T555", "C000000223", []string{"excluded"}))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"c000000223"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c000000222": {}, "c000000223": {}})
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C000000222", nil))
+	require.False(t, filter.allowChannelNames("T555", "C000000223", nil))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"id:C000000223"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c000000222": {}})
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C000000222", nil))
+	require.False(t, filter.allowChannelNames("T555", "C000000223", nil))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C000000223"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c000000222": {}})
+	require.True(t, filter.hasNameExclude)
+	require.False(t, filter.allowChannelNames("T555", "C000000222", nil))
+	require.True(t, filter.allowChannelNames("T555", "C000000222", []string{"kept"}))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C123"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c999": {}})
+	require.True(t, filter.hasNameExclude)
+	require.False(t, filter.allowChannelNames("T555", "C999", nil))
+	require.True(t, filter.allowChannelNames("T555", "C999", []string{"kept"}))
+
+	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"DEV2"}})
+	filter.resolveKnownChannelIDs(map[string]struct{}{"c999": {}})
+	require.True(t, filter.hasNameExclude)
+	require.False(t, filter.allowChannelNames("T555", "C999", nil))
+	require.True(t, filter.allowChannelNames("T555", "C999", []string{"kept"}))
 }
 
 func TestIngestReduxStatesSkipsDuplicateDesktopUsers(t *testing.T) {
@@ -355,7 +886,30 @@ func TestIngestReduxStatesSkipsDuplicateDesktopUsers(t *testing.T) {
 				DisplayName: "Slackbot",
 			},
 		}},
-	}}, now))
+	}}, now, ingestFilter{}))
+}
+
+func TestIngestReduxStatesDoesNotPromoteMemberTeamWorkspaces(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, ingestReduxStates(ctx, st, []ReduxDecodedState{{
+		WorkspaceID: "T1",
+		UserID:      "U1",
+		Members: []ReduxMember{{
+			ID:     "U_EXTERNAL",
+			Name:   "external-user",
+			TeamID: "T_EXTERNAL",
+		}},
+	}}, now, ingestFilter{}))
+
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, status.Workspaces)
+	require.Equal(t, 1, status.Users)
 }
 
 func TestIngestReduxStatesSkipsDuplicateDesktopMessages(t *testing.T) {
@@ -386,7 +940,7 @@ func TestIngestReduxStatesSkipsDuplicateDesktopMessages(t *testing.T) {
 			User:    "U2",
 			Text:    "same slack-connect message",
 		}},
-	}}, now))
+	}}, now, ingestFilter{}))
 }
 
 func TestIngestReduxStatesSkipsDuplicateDesktopChannels(t *testing.T) {
@@ -406,7 +960,20 @@ func TestIngestReduxStatesSkipsDuplicateDesktopChannels(t *testing.T) {
 			IsChannel:     true,
 			ContextTeamID: "T2",
 		}},
-	}}, now))
+		Messages: []ReduxMessage{{
+			Channel: "C1",
+			TS:      "1710000003.000400",
+			Type:    "message",
+			User:    "U2",
+			Text:    "same channel unique message",
+		}},
+	}}, now, ingestFilter{}))
+
+	messages, err := st.Messages(ctx, "", "C1", "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "T2", messages[0].WorkspaceID)
+	require.Equal(t, "same channel unique message", messages[0].Text)
 }
 
 func TestNormalizeReduxMessageIncludesBlocksAndAttachments(t *testing.T) {

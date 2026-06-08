@@ -209,7 +209,7 @@ func appendBlockParts(parts *[]string, blocks slack.Blocks) {
 			}
 			for _, row := range b.Rows {
 				for _, cell := range row {
-					appendRichTextBlock(parts, cell)
+					appendTableCell(parts, cell)
 				}
 			}
 		case *slack.TaskCardBlock:
@@ -231,6 +231,42 @@ func appendBlockParts(parts *[]string, blocks slack.Blocks) {
 			appendJSONVisibleText(parts, b)
 		}
 	}
+}
+
+func appendTableCell(parts *[]string, cell slack.TableCell) {
+	switch c := cell.(type) {
+	case nil:
+		return
+	case *slack.TableRichTextCell:
+		if c == nil {
+			return
+		}
+		appendRichTextBlock(parts, &slack.RichTextBlock{Type: slack.MBTRichText, Elements: c.Elements})
+	case slack.TableRichTextCell:
+		appendRichTextBlock(parts, &slack.RichTextBlock{Type: slack.MBTRichText, Elements: c.Elements})
+	case *slack.TableRawTextCell:
+		if c == nil {
+			return
+		}
+		appendNormalizedText(parts, c.Text)
+	case slack.TableRawTextCell:
+		appendNormalizedText(parts, c.Text)
+	case *slack.TableRawNumberCell:
+		if c == nil {
+			return
+		}
+		appendTableRawNumberCell(parts, *c)
+	case slack.TableRawNumberCell:
+		appendTableRawNumberCell(parts, c)
+	}
+}
+
+func appendTableRawNumberCell(parts *[]string, cell slack.TableRawNumberCell) {
+	if strings.TrimSpace(cell.Text) != "" {
+		appendNormalizedText(parts, cell.Text)
+		return
+	}
+	appendNormalizedText(parts, strconv.FormatFloat(cell.Value, 'f', -1, 64))
 }
 
 func appendCardBlock(parts *[]string, card *slack.CardBlock) {

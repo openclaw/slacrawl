@@ -78,7 +78,7 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 			AutoJoin:        opts.AutoJoin,
 		})
 	case SourceDesktop:
-		return syncDesktop(ctx, cfg, st)
+		return syncDesktop(ctx, cfg, st, opts)
 	case SourceMCP:
 		if !cfg.Slack.MCP.Enabled {
 			return summary, errors.New("slack MCP source is disabled in config")
@@ -108,17 +108,21 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		}); err != nil {
 			return summary, err
 		}
-		return syncDesktop(ctx, cfg, st)
+		return syncDesktop(ctx, cfg, st, opts)
 	default:
 		return summary, errors.New("unsupported source")
 	}
 }
 
-func syncDesktop(ctx context.Context, cfg config.Config, st *store.Store) (Summary, error) {
+func syncDesktop(ctx context.Context, cfg config.Config, st *store.Store, opts Options) (Summary, error) {
 	if !cfg.Slack.Desktop.Enabled {
 		return Summary{Desktop: slackdesktop.Source{Path: cfg.Slack.Desktop.Path, Available: false}}, nil
 	}
-	source, err := slackdesktop.Ingest(ctx, st, cfg.Slack.Desktop.Path)
+	source, err := slackdesktop.Ingest(ctx, st, cfg.Slack.Desktop.Path, slackdesktop.IngestOptions{
+		WorkspaceID:     opts.WorkspaceID,
+		Channels:        opts.Channels,
+		ExcludeChannels: opts.ExcludeChannels,
+	})
 	if err != nil {
 		return Summary{}, err
 	}

@@ -438,6 +438,11 @@ func TestDoctorHumanOutputSkipsEmptyShareTimes(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "init", "--db", dbPath}))
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	cfg.Slack.Desktop.Enabled = false
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Save(configPath))
 
 	stdout.Reset()
 	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "doctor"}))

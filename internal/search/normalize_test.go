@@ -144,7 +144,7 @@ func TestNormalizeMessageIncludesRichBlocksAndActionElements(t *testing.T) {
 	msg.Blocks = slack.Blocks{BlockSet: []slack.Block{
 		richDetails,
 		slack.NewTableBlock("table").AddRow(
-			slack.NewRichTextBlock("cell", slack.NewRichTextSection(slack.NewRichTextSectionTextElement("table cell", nil))),
+			slack.NewTableRichTextCell(slack.NewRichTextSection(slack.NewRichTextSectionTextElement("table cell", nil))),
 		),
 		slack.NewTaskCardBlock("task-1", "Task title").WithDetails(
 			slack.NewRichTextBlock("task-details", slack.NewRichTextSection(slack.NewRichTextSectionTextElement("task detail", nil))),
@@ -228,6 +228,25 @@ func TestNormalizeMessageIncludesRichBlocksAndActionElements(t *testing.T) {
 	} {
 		require.Contains(t, normalized, want)
 	}
+}
+
+func TestNormalizeMessageIncludesTableCellVariants(t *testing.T) {
+	msg := slack.Message{}
+	msg.Blocks = slack.Blocks{BlockSet: []slack.Block{
+		slack.NewTableBlock("table").AddRow(
+			slack.NewTableRawTextCell("raw text cell"),
+			slack.NewTableRawNumberCell(42.5),
+			slack.NewTableRawNumberCell(7).WithText("seven displayed"),
+			slack.NewTableRichTextCell(slack.NewRichTextSection(slack.NewRichTextSectionTextElement("rich text cell", nil))),
+			nil,
+		),
+	}}
+
+	normalized := NormalizeMessage(msg)
+	require.Contains(t, normalized, "raw text cell")
+	require.Contains(t, normalized, "42.5")
+	require.Contains(t, normalized, "seven displayed")
+	require.Contains(t, normalized, "rich text cell")
 }
 
 func TestNormalizeMessageIncludesUnknownBlockText(t *testing.T) {

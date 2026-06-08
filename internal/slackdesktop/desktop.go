@@ -38,6 +38,26 @@ type Source struct {
 	Snapshot  string              `json:"snapshot_path,omitempty"`
 }
 
+type IngestOptions struct {
+	WorkspaceID     string
+	Channels        []string
+	ExcludeChannels []string
+}
+
+type ingestFilter struct {
+	workspaceID      string
+	channels         map[string]struct{}
+	excludeChannels  map[string]struct{}
+	excludeSelectors []channelSelector
+	hasNameExclude   bool
+}
+
+type channelSelector struct {
+	raw        string
+	normalized string
+	explicitID bool
+}
+
 type RootStateSummary struct {
 	AppTeamsKeys      []string `json:"app_teams_keys"`
 	WorkspaceCount    int      `json:"workspace_count"`
@@ -312,7 +332,7 @@ func Extract(path string) (ExtractedData, error) {
 	}, nil
 }
 
-func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, error) {
+func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts IngestOptions) (Source, error) {
 	source, err := Discover(sourcePath)
 	if err != nil {
 		return Source{}, err
@@ -337,11 +357,19 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 	source.IndexedDB.DecodedStateCount = extracted.IndexedDB.DecodedStateCount
 
 	now := time.Now().UTC()
+	filter := newIngestFilter(opts)
+	filter.resolveKnownChannelIDs(desktopChannelIDs(extracted))
+	source.Summary.AppTeamsKeys = filter.workspaceIDs(source.Summary.AppTeamsKeys)
+	channelNames := channelNamesByWorkspaceID(extracted.ReduxStates)
+	workspaceCandidates := channelWorkspaceCandidates(extracted.ReduxStates)
 	statusByWorkspaceUser := map[string][]CustomStatus{}
 	for _, status := range extracted.Statuses {
 		statusByWorkspaceUser[status.WorkspaceID+":"+status.UserID] = append(statusByWorkspaceUser[status.WorkspaceID+":"+status.UserID], status.Statuses...)
 	}
 	for teamID, team := range extracted.LocalConfig.Teams {
+		if !filter.allowWorkspace(teamID) {
+			continue
+		}
 		sanitized := team
 		sanitized.Token = config.Redact(sanitized.Token)
 		userPayload := map[string]any{
@@ -375,20 +403,34 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 	channelHints := map[string]store.Channel{}
 	for workspaceID, channelIDs := range extracted.Recent {
 		for _, channelID := range channelIDs {
+			resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, workspaceID, workspaceCandidates)
+			if !ok {
+				continue
+			}
+			if !filter.allowChannelNames(resolvedWorkspaceID, channelID, channelNames.get(resolvedWorkspaceID, channelID)) {
+				continue
+			}
 			mergeChannelHint(channelHints, store.Channel{
 				ID:          channelID,
-				WorkspaceID: workspaceID,
+				WorkspaceID: resolvedWorkspaceID,
 				Name:        channelID,
 				Kind:        "desktop_recent",
-				RawJSON:     store.MarshalRaw(map[string]any{"workspace_id": workspaceID, "channel_id": channelID, "source": "recentlyJoinedChannels"}),
+				RawJSON:     store.MarshalRaw(map[string]any{"workspace_id": resolvedWorkspaceID, "persist_workspace_id": workspaceID, "channel_id": channelID, "source": "recentlyJoinedChannels"}),
 				UpdatedAt:   now,
 			})
 		}
 	}
 	for _, marker := range extracted.ReadMarkers {
+		workspaceID, ok := resolveChannelWorkspace(marker.ChannelID, marker.WorkspaceID, workspaceCandidates)
+		if !ok {
+			continue
+		}
+		if !filter.allowChannelNames(workspaceID, marker.ChannelID, channelNames.get(workspaceID, marker.ChannelID)) {
+			continue
+		}
 		mergeChannelHint(channelHints, store.Channel{
 			ID:          marker.ChannelID,
-			WorkspaceID: marker.WorkspaceID,
+			WorkspaceID: workspaceID,
 			Name:        marker.ChannelID,
 			Kind:        "desktop_mark",
 			RawJSON:     store.MarshalRaw(marker),
@@ -405,9 +447,21 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 			workspaceID = workspaceForDraft(extracted.LocalConfig.Teams, channelID, draft)
 		}
 		if workspaceID == "" {
-			workspaceID = firstWorkspaceID(extracted.LocalConfig.Teams)
+			if resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, "", workspaceCandidates); ok {
+				workspaceID = resolvedWorkspaceID
+			} else {
+				if filter.workspaceID != "" {
+					continue
+				}
+				workspaceID = firstWorkspaceID(extracted.LocalConfig.Teams)
+			}
 		}
-		if workspaceID == "" {
+		resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, workspaceID, workspaceCandidates)
+		if !ok {
+			continue
+		}
+		workspaceID = resolvedWorkspaceID
+		if !filter.allowChannelNames(workspaceID, channelID, channelNames.get(workspaceID, channelID)) {
 			continue
 		}
 
@@ -447,7 +501,7 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 			return Source{}, err
 		}
 	}
-	if err := ingestReduxStates(ctx, st, extracted.ReduxStates, now); err != nil {
+	if err := ingestReduxStates(ctx, st, extracted.ReduxStates, now, filter); err != nil {
 		return Source{}, err
 	}
 
@@ -485,27 +539,240 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string) (Source, er
 		return Source{}, err
 	}
 	for teamID, downloads := range extracted.RootState.Downloads {
+		if !filter.allowWorkspace(teamID) {
+			continue
+		}
 		if err := st.SetSyncState(ctx, sourceName, "downloads", teamID, intString(len(downloads))); err != nil {
 			return Source{}, err
 		}
 	}
 	for _, marker := range extracted.ReadMarkers {
+		workspaceID, ok := resolveChannelWorkspace(marker.ChannelID, marker.WorkspaceID, workspaceCandidates)
+		if !ok {
+			continue
+		}
+		if !filter.allowChannelNames(workspaceID, marker.ChannelID, channelNames.get(workspaceID, marker.ChannelID)) {
+			continue
+		}
 		if err := st.SetSyncState(ctx, sourceName, "read_marker", marker.ChannelID, marker.TS); err != nil {
 			return Source{}, err
 		}
 	}
 	for _, expandable := range extracted.Expandables {
+		if !filter.allowWorkspace(expandable.WorkspaceID) {
+			continue
+		}
 		if err := st.SetSyncState(ctx, sourceName, "expandables", expandable.WorkspaceID+":"+expandable.UserID, intString(len(expandable.Keys))); err != nil {
 			return Source{}, err
 		}
 	}
 	for _, status := range extracted.Statuses {
+		if !filter.allowWorkspace(status.WorkspaceID) {
+			continue
+		}
 		if err := st.SetSyncState(ctx, sourceName, "custom_status", status.WorkspaceID+":"+status.UserID, intString(len(status.Statuses))); err != nil {
 			return Source{}, err
 		}
 	}
 
 	return source, nil
+}
+
+func newIngestFilter(opts IngestOptions) ingestFilter {
+	excludeChannels, excludeSelectors := channelSelectorSet(opts.ExcludeChannels)
+	return ingestFilter{
+		workspaceID:      strings.TrimSpace(opts.WorkspaceID),
+		channels:         stringSet(opts.Channels),
+		excludeChannels:  excludeChannels,
+		excludeSelectors: excludeSelectors,
+		hasNameExclude:   len(excludeSelectors) > 0,
+	}
+}
+
+func stringSet(values []string) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	return set
+}
+
+func channelSelectorSet(values []string) (map[string]struct{}, []channelSelector) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	set := make(map[string]struct{}, len(values))
+	selectors := make([]channelSelector, 0, len(values))
+	for _, value := range values {
+		raw := strings.TrimSpace(value)
+		selectorValue := raw
+		explicitID := false
+		if strings.HasPrefix(strings.ToLower(selectorValue), "id:") {
+			explicitID = true
+			selectorValue = strings.TrimSpace(selectorValue[len("id:"):])
+		}
+		selector := normalizeChannelSelector(selectorValue)
+		if selector != "" {
+			set[selector] = struct{}{}
+			selectors = append(selectors, channelSelector{raw: raw, normalized: selector, explicitID: explicitID})
+		}
+	}
+	return set, selectors
+}
+
+func normalizeChannelSelector(value string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "#"))
+}
+
+func (f ingestFilter) allowWorkspace(workspaceID string) bool {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if f.workspaceID == "" {
+		return true
+	}
+	return workspaceID == f.workspaceID
+}
+
+func (f ingestFilter) allowChannelNames(workspaceID, channelID string, channelNames []string) bool {
+	channelID = strings.TrimSpace(channelID)
+	if !f.allowWorkspace(workspaceID) {
+		return false
+	}
+	if f.excludesChannel(channelID, channelNames) {
+		return false
+	}
+	if len(f.channels) == 0 {
+		return true
+	}
+	if channelID == "" {
+		return false
+	}
+	_, allowed := f.channels[channelID]
+	return allowed
+}
+
+func (f ingestFilter) excludesChannel(channelID string, channelNames []string) bool {
+	if len(f.excludeChannels) == 0 {
+		return false
+	}
+	if _, excluded := f.excludeChannels[normalizeChannelSelector(channelID)]; excluded {
+		return true
+	}
+	if len(channelNames) == 0 {
+		return f.hasNameExclude
+	}
+	sawName := false
+	for _, channelName := range channelNames {
+		channelName = normalizeChannelSelector(channelName)
+		if channelName == "" {
+			continue
+		}
+		sawName = true
+		if _, excluded := f.excludeChannels[channelName]; excluded {
+			return true
+		}
+	}
+	if !sawName {
+		return f.hasNameExclude
+	}
+	return false
+}
+
+func (f *ingestFilter) resolveKnownChannelIDs(channelIDs map[string]struct{}) {
+	hasNameExclude := false
+	for _, selector := range f.excludeSelectors {
+		if _, ok := channelIDs[selector.normalized]; !ok {
+			if !selector.explicitID {
+				hasNameExclude = true
+				break
+			}
+		}
+	}
+	f.hasNameExclude = hasNameExclude
+}
+
+func desktopChannelIDs(extracted ExtractedData) map[string]struct{} {
+	ids := map[string]struct{}{}
+	add := func(channelID string) {
+		channelID = normalizeChannelSelector(channelID)
+		if channelID != "" {
+			ids[channelID] = struct{}{}
+		}
+	}
+	for _, channelIDs := range extracted.Recent {
+		for _, channelID := range channelIDs {
+			add(channelID)
+		}
+	}
+	for _, marker := range extracted.ReadMarkers {
+		add(marker.ChannelID)
+	}
+	for _, draft := range extracted.Drafts {
+		for _, destination := range draft.Destinations {
+			add(destination.ChannelID)
+		}
+	}
+	for _, state := range extracted.ReduxStates {
+		for _, channel := range state.Channels {
+			add(channel.ID)
+		}
+		for _, message := range state.Messages {
+			add(message.Channel)
+		}
+	}
+	return ids
+}
+
+func (f ingestFilter) workspaceIDs(ids []string) []string {
+	if f.workspaceID == "" {
+		return ids
+	}
+	filtered := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if f.allowWorkspace(id) {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+type channelNameHints map[string][]string
+
+func channelNamesByWorkspaceID(states []ReduxDecodedState) channelNameHints {
+	names := channelNameHints{}
+	for _, state := range states {
+		memberNames := map[string]string{}
+		for _, member := range state.Members {
+			memberNames[member.ID] = firstNonEmpty(member.Profile.DisplayName, member.Profile.RealName, member.Name, member.Real, member.ID)
+		}
+		for _, channel := range state.Channels {
+			workspaceID := channelContextWorkspaceID(channel.ContextTeamID, state.WorkspaceID)
+			key := channelNameKey(workspaceID, channel.ID)
+			if channel.ID == "" {
+				continue
+			}
+			aliases := reduxResolvedChannelNames(channel, memberNames)
+			if len(aliases) > 0 {
+				names[key] = uniqueNonEmptyStrings(append(names[key], aliases...))
+			} else if _, exists := names[key]; !exists {
+				names[key] = nil
+			}
+		}
+	}
+	return names
+}
+
+func (h channelNameHints) get(workspaceID, channelID string) []string {
+	return h[channelNameKey(workspaceID, channelID)]
+}
+
+func channelNameKey(workspaceID, channelID string) string {
+	return strings.TrimSpace(workspaceID) + "\x00" + strings.TrimSpace(channelID)
 }
 
 func upsertDesktopUser(ctx context.Context, st *store.Store, user store.User) error {

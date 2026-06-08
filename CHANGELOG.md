@@ -2,6 +2,10 @@
 
 ## 0.7.1 - Unreleased
 
+### Fixes
+
+- Desktop and wiretap sync now apply configured workspace, channel, and excluded-channel filters to cached Slack Desktop imports.
+
 ## 0.7.0 - 2026-06-07
 
 ### Changes
