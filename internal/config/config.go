@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	crawlconfig "github.com/openclaw/crawlkit/config"
 )
 
 const (
-	defaultDirName     = ".slacrawl"
-	defaultDesktopPath = "~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack"
-	directDesktopPath  = "~/Library/Application Support/Slack"
+	defaultDirName               = ".slacrawl"
+	macOSContainerDesktopPath    = "~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack"
+	macOSDirectDesktopPath       = "~/Library/Application Support/Slack"
+	linuxHomeDesktopPathTemplate = "~/.config/Slack"
 )
+
+var runtimeGOOS = runtime.GOOS
 
 type Config struct {
 	Version     int          `toml:"version"`
@@ -477,7 +481,7 @@ func sanitizeEnvSegment(value string) string {
 }
 
 func DetectDesktopPath() (string, error) {
-	candidates := []string{defaultDesktopPath, directDesktopPath}
+	candidates := desktopPathCandidates()
 	for _, candidate := range candidates {
 		expanded, err := ExpandPath(candidate)
 		if err != nil {
@@ -488,6 +492,20 @@ func DetectDesktopPath() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func desktopPathCandidates() []string {
+	switch runtimeGOOS {
+	case "darwin":
+		return []string{macOSContainerDesktopPath, macOSDirectDesktopPath}
+	case "linux":
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfigHome != "" {
+			return []string{filepath.Join(xdgConfigHome, "Slack"), linuxHomeDesktopPathTemplate}
+		}
+		return []string{linuxHomeDesktopPathTemplate}
+	default:
+		return nil
+	}
 }
 
 func Redact(value string) string {

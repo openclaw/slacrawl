@@ -162,6 +162,7 @@ func TestDefaultConfigPath(t *testing.T) {
 }
 
 func TestNormalizeAutoDetectsDesktopPath(t *testing.T) {
+	withRuntimeGOOS(t, "darwin")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "Library", "Application Support", "Slack"), 0o750))
@@ -172,7 +173,35 @@ func TestNormalizeAutoDetectsDesktopPath(t *testing.T) {
 	require.Equal(t, filepath.Join(home, "Library", "Application Support", "Slack"), cfg.Slack.Desktop.Path)
 }
 
+func TestNormalizeAutoDetectsLinuxDesktopPathFromXDGConfigHome(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
+	home := t.TempDir()
+	xdgConfigHome := filepath.Join(home, ".xdg-config")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+	require.NoError(t, os.MkdirAll(filepath.Join(xdgConfigHome, "Slack"), 0o750))
+
+	cfg := Default()
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Normalize())
+	require.Equal(t, filepath.Join(xdgConfigHome, "Slack"), cfg.Slack.Desktop.Path)
+}
+
+func TestNormalizeAutoDetectsLinuxDesktopPathFromHomeConfig(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".missing-xdg-config"))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".config", "Slack"), 0o750))
+
+	cfg := Default()
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Normalize())
+	require.Equal(t, filepath.Join(home, ".config", "Slack"), cfg.Slack.Desktop.Path)
+}
+
 func TestNormalizeLeavesDesktopPathEmptyWhenNoInstallFound(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := Default()
@@ -223,4 +252,13 @@ func mustHome(t *testing.T) string {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	return home
+}
+
+func withRuntimeGOOS(t *testing.T, goos string) {
+	t.Helper()
+	old := runtimeGOOS
+	runtimeGOOS = goos
+	t.Cleanup(func() {
+		runtimeGOOS = old
+	})
 }

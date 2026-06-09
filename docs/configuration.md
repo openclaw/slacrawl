@@ -283,7 +283,7 @@ path = ""
 Behavior:
 
 - `enabled = true` turns on desktop sync support
-- `path = ""` auto-detects the supported macOS Slack container path
+- `path = ""` auto-detects the supported macOS or Linux Slack Desktop path
 - `path = "/custom/path"` overrides detection
 
 To disable desktop ingestion completely:

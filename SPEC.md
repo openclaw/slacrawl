@@ -46,7 +46,7 @@ Out of scope for V1:
 - source precedence: user-token API, then bot-token API and slack-export imports, then desktop-local cache
 - files: metadata only in DB for V1
 - future file-blob backup must store Git-share media as gzip-compressed files, import those files back into raw local cache layout, and keep legacy raw-media import compatibility
-- desktop-local source: macOS Slack Desktop container path only
+- desktop-local source: supported Slack Desktop cache paths on macOS and Linux
 
 ## Local Environment Contract
 
@@ -54,8 +54,10 @@ An agent should assume:
 
 - shell: `zsh`
 - Go `1.25+` is installed
-- macOS desktop-local Slack data may exist under:
+- desktop-local Slack data may exist under:
   - `~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack`
+  - `${XDG_CONFIG_HOME}/Slack`
+  - `~/.config/Slack`
 
 ## Slack Data Model Notes
 
@@ -271,7 +273,7 @@ Credential model:
 - optional user token: `xoxp-`
 - each token source can be enabled or disabled independently
 - desktop source can be enabled or disabled independently
-- blank desktop path means auto-detect the supported macOS Slack path
+- blank desktop path means auto-detect the supported macOS or Linux Slack path
 - optional `[[workspaces]]` entries can override bot/app/user token env vars per workspace
 - workspace token lookup should default to `SLACK_<WORKSPACE_ID>_BOT_TOKEN`, `SLACK_<WORKSPACE_ID>_APP_TOKEN`, and `SLACK_<WORKSPACE_ID>_USER_TOKEN`
 - `[sync].auto_join` defaults to `true` and controls whether API sync attempts to join public channels before retrying history

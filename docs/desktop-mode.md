@@ -38,7 +38,7 @@ with backward compatibility for older raw media entries.
 
 ## Path Detection
 
-On macOS, leave the desktop path blank to auto-detect:
+Leave the desktop path blank to auto-detect a supported Slack Desktop install:
 
 ```toml
 [slack.desktop]
@@ -46,10 +46,15 @@ enabled = true
 path = ""
 ```
 
-The supported default target is:
+The supported default targets are:
 
 ```text
+# macOS
 ~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack
+
+# Linux
+${XDG_CONFIG_HOME}/Slack
+~/.config/Slack
 ```
 
 If your Slack Desktop data lives elsewhere, set the path explicitly.
