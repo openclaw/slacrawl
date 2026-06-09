@@ -49,7 +49,7 @@ Data stays on your machine. You can run it in API mode, MCP connector mode, desk
 - channel threads
 - local FTS search
 - read-only SQL access
-- macOS Slack Desktop discovery
+- macOS and Linux Slack Desktop discovery
 - optional Slack file media caching
 
 ## Not Yet Included
@@ -68,7 +68,7 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 - a configured Slack MCP connector if you want MCP-backed sync
 - an app token if you want to use `tail`
 - an optional user token for fuller historical thread coverage
-- macOS Slack Desktop only if you want desktop-local discovery
+- Slack Desktop on macOS or Linux only if you want desktop-local discovery
 
 ## Install
 
