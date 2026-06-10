@@ -25,7 +25,7 @@ V1 scope:
 - current workspace user snapshot
 - FTS5 search
 - raw SQL access
-- desktop-local Slack discovery on macOS
+- desktop-local Slack discovery on macOS and Linux
 
 Out of scope for V1:
 
