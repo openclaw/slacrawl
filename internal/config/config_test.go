@@ -200,6 +200,19 @@ func TestNormalizeAutoDetectsLinuxDesktopPathFromHomeConfig(t *testing.T) {
 	require.Equal(t, filepath.Join(home, ".config", "Slack"), cfg.Slack.Desktop.Path)
 }
 
+func TestNormalizeIgnoresRelativeXDGConfigHome(t *testing.T) {
+	withRuntimeGOOS(t, "linux")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", ".xdg-config")
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".config", "Slack"), 0o750))
+
+	cfg := Default()
+	cfg.Slack.Desktop.Path = ""
+	require.NoError(t, cfg.Normalize())
+	require.Equal(t, filepath.Join(home, ".config", "Slack"), cfg.Slack.Desktop.Path)
+}
+
 func TestNormalizeLeavesDesktopPathEmptyWhenNoInstallFound(t *testing.T) {
 	withRuntimeGOOS(t, "linux")
 	t.Setenv("HOME", t.TempDir())

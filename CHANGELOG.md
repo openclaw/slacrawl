@@ -2,6 +2,10 @@
 
 ## 0.7.2 - Unreleased
 
+### Changes
+
+- Added automatic Slack Desktop cache discovery on Linux using `XDG_CONFIG_HOME` or `~/.config`. Thanks @TurboTheTurtle.
+
 ## 0.7.1 - 2026-06-08
 
 ### Fixes

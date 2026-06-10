@@ -499,7 +499,7 @@ func desktopPathCandidates() []string {
 	case "darwin":
 		return []string{macOSContainerDesktopPath, macOSDirectDesktopPath}
 	case "linux":
-		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfigHome != "" {
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfigHome) {
 			return []string{filepath.Join(xdgConfigHome, "Slack"), linuxHomeDesktopPathTemplate}
 		}
 		return []string{linuxHomeDesktopPathTemplate}
