@@ -204,6 +204,19 @@ func Push(ctx context.Context, opts Options) error {
 }
 
 func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+	if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
+		var manifest Manifest
+		err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
+			var err error
+			manifest, err = exportLocked(ctx, s, opts)
+			return err
+		})
+		return manifest, err
+	}
+	return exportLocked(ctx, s, opts)
+}
+
+func exportLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
 	if err := EnsureRepo(ctx, opts); err != nil {
 		return Manifest{}, err
 	}
@@ -227,7 +240,7 @@ func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 		manifest.Tables = append(manifest.Tables, entry)
 	}
 	if opts.IncludeMedia {
-		entry, err := exportMedia(ctx, s.DB(), opts)
+		entry, err := exportMediaLocked(ctx, s.DB(), opts)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -249,6 +262,19 @@ func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 }
 
 func Import(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+	if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
+		var manifest Manifest
+		err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
+			var err error
+			manifest, err = importLocked(ctx, s, opts)
+			return err
+		})
+		return manifest, err
+	}
+	return importLocked(ctx, s, opts)
+}
+
+func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
 	manifest, err := ReadManifest(opts.RepoPath)
 	if err != nil {
 		return Manifest{}, err
@@ -364,29 +390,42 @@ func ImportIfChanged(ctx context.Context, s *store.Store, opts Options) (Manifes
 		return Manifest{}, false, err
 	}
 	if ManifestAlreadyImported(ctx, s, manifest) {
-		if opts.IncludeMedia {
-			missing, err := mediaMetadataMissing(ctx, s.DB(), manifest.Media)
-			if err != nil {
-				return Manifest{}, false, err
-			}
-			if missing {
-				imported, err := Import(ctx, s, opts)
-				return imported, false, err
-			}
-			if _, err := importMedia(ctx, opts, manifest.Media); err != nil {
-				return Manifest{}, false, err
-			}
+		if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
+			var imported Manifest
+			err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
+				var err error
+				imported, err = importCurrentManifestLocked(ctx, s, opts, manifest)
+				return err
+			})
+			return imported, false, err
 		}
-		if err := MarkImported(ctx, s, manifest); err != nil {
-			return Manifest{}, false, err
-		}
-		return manifest, false, nil
+		imported, err := importCurrentManifestLocked(ctx, s, opts, manifest)
+		return imported, false, err
 	}
 	imported, err := Import(ctx, s, opts)
 	if err != nil {
 		return Manifest{}, false, err
 	}
 	return imported, true, nil
+}
+
+func importCurrentManifestLocked(ctx context.Context, s *store.Store, opts Options, manifest Manifest) (Manifest, error) {
+	if opts.IncludeMedia {
+		missing, err := mediaMetadataMissing(ctx, s.DB(), manifest.Media)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if missing {
+			return importLocked(ctx, s, opts)
+		}
+		if _, err := importMedia(ctx, opts, manifest.Media); err != nil {
+			return Manifest{}, err
+		}
+	}
+	if err := MarkImported(ctx, s, manifest); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
 }
 
 func ManifestAlreadyImported(ctx context.Context, s *store.Store, manifest Manifest) bool {
@@ -668,7 +707,7 @@ func sameStrings(left, right []string) bool {
 	return true
 }
 
-func exportMedia(ctx context.Context, db *sql.DB, opts Options) (*MediaManifest, error) {
+func exportMediaLocked(ctx context.Context, db *sql.DB, opts Options) (*MediaManifest, error) {
 	if strings.TrimSpace(opts.CacheDir) == "" {
 		return nil, nil
 	}

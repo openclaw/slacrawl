@@ -73,6 +73,11 @@ func TestDraftTSIncludesWorkspace(t *testing.T) {
 		ClientDraftID: "C111",
 		LastUpdatedTS: 1710000001.000200,
 	}))
+	require.Equal(t, "draft:1710000000:T111:C111", draftTS(Draft{
+		WorkspaceID:   "T111",
+		ClientDraftID: "C111",
+		LastUpdatedTS: 1710000000,
+	}))
 }
 
 func TestIngestDesktopState(t *testing.T) {
@@ -89,7 +94,7 @@ func TestIngestDesktopState(t *testing.T) {
 	localDB, err := leveldb.OpenFile(filepath.Join(root, "Local Storage", "leveldb"), nil)
 	require.NoError(t, err)
 	require.NoError(t, localDB.Put([]byte("_https://app.slack.comlocalConfig_v2"), []byte(`{"teams":{"T111":{"id":"T111","name":"Team One","domain":"team-one","user_id":"U111","token":"xoxc-secret"}}}`), nil))
-	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::drafts"), []byte(`{"unifiedDrafts":{"draft-1":{"id":"draft-1","client_draft_id":"draft-1","destinations":[{"channel_id":"C111"}],"ops":[{"insert":"draft body"}],"last_updated_ts":1710000001.000200}}}`), nil))
+	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::drafts"), []byte(`{"unifiedDrafts":{"draft-1":{"id":"draft-1","client_draft_id":"draft-1","destinations":[{"channel_id":"C111"}],"ops":[{"insert":"draft body"}],"last_updated_ts":1710000000}}}`), nil))
 	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::recentlyJoinedChannels"), []byte(`{"C222":{}}`), nil))
 	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::customStatus"), []byte(`{"status-1":{"id":"status-1","user_id":"U111","text":"Travel","emoji":":airplane:","is_active":true,"date_created":10}}`), nil))
 	require.NoError(t, localDB.Put([]byte("_https://app.slack.compersist-v1::T111::U111::persistedApiCalls"), []byte(`{"mark-1":{"method":"conversations.mark","persistKey":"mark-1","reason":"viewed","args":{"channel":"C333","ts":"1710000003.000400"}}}`), nil))
@@ -104,6 +109,11 @@ func TestIngestDesktopState(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)
 	defer func() { require.NoError(t, st.Close()) }()
+	require.NoError(t, st.UpsertMessage(context.Background(), store.Message{
+		ChannelID: "C111", TS: "draft:171:T111:draft-1", WorkspaceID: "T111",
+		Text: "legacy draft", NormalizedText: "legacy draft", Subtype: "desktop_draft",
+		SourceRank: 3, SourceName: draftSourceName, RawJSON: "{}", UpdatedAt: time.Now().UTC(),
+	}, nil))
 
 	snapshotParent := withSnapshotTempParent(t)
 	source, err := Ingest(context.Background(), st, root, IngestOptions{})
@@ -119,6 +129,9 @@ func TestIngestDesktopState(t *testing.T) {
 	require.Equal(t, 1, status.Workspaces)
 	require.Equal(t, 1, status.Users)
 	require.Equal(t, 1, status.Messages)
+	rows, err := st.QueryReadOnly(context.Background(), `select ts from messages`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"ts": "draft:1710000000:T111:draft-1"}}, rows)
 
 	channels, err := st.Channels(context.Background(), "", "", 10)
 	require.NoError(t, err)

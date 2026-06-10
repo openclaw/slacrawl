@@ -45,6 +45,16 @@ type FetchStats struct {
 }
 
 func Fetch(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, error) {
+	var stats FetchStats
+	err := WithCacheLock(ctx, opts.CacheDir, func() error {
+		var err error
+		stats, err = fetchLocked(ctx, s, opts)
+		return err
+	})
+	return stats, err
+}
+
+func fetchLocked(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, error) {
 	if strings.TrimSpace(opts.CacheDir) == "" {
 		return FetchStats{}, errors.New("cache dir is required")
 	}

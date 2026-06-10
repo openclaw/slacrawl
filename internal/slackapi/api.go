@@ -46,14 +46,15 @@ type Diagnostics struct {
 }
 
 type SyncOptions struct {
-	WorkspaceID     string
-	Channels        []string
-	ExcludeChannels []string
-	Since           string
-	Full            bool
-	LatestOnly      bool
-	Concurrency     int
-	AutoJoin        *bool
+	WorkspaceID      string
+	Channels         []string
+	ExcludeChannels  []string
+	Since            string
+	Full             bool
+	LatestOnly       bool
+	Concurrency      int
+	AutoJoin         *bool
+	enforceRetention bool
 }
 
 type Client struct {
@@ -353,10 +354,13 @@ func (c *Client) HandleEventsAPIEvent(ctx context.Context, st *store.Store, work
 	case *slackevents.MessageEvent:
 		msg := messageFromEvent(ev)
 		stored := toStoreMessage(workspaceID, msg, SourceBot, 2, rawMessagePayload(event), now)
-		if msg.SubType == "message_deleted" || msg.DeletedTimestamp != "" {
-			return st.MarkMessageDeleted(ctx, stored, toStoreMentions(msg))
+		deleted := msg.SubType == "message_deleted" || msg.DeletedTimestamp != ""
+		if deleted {
+			_, err := st.MarkMessageDeletedWithRetention(ctx, stored, toStoreMentions(msg))
+			return err
 		}
-		return st.UpsertMessage(ctx, stored, toStoreMentions(msg))
+		_, err := st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
+		return err
 	case *slackevents.ChannelRenameEvent:
 		return st.RenameChannel(ctx, ev.Channel.ID, ev.Channel.Name)
 	case *slackevents.ChannelArchiveEvent:
@@ -418,7 +422,7 @@ func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack
 	}
 }
 
-func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, oldest string, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
+func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, oldest string, restoreRequested bool, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
 	if source.historyClient == nil {
 		return errors.New("history client is required")
 	}
@@ -427,6 +431,38 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	}
 	if source.sourceRank == 0 {
 		source.sourceRank = 2
+	}
+	retentionFloor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
+	if err != nil {
+		return err
+	}
+	enforceRetention := store.ShouldEnforceRetention(oldest, retentionFloor, restoreRequested)
+	if !enforceRetention {
+		retentionFloor = ""
+	}
+	inclusive := retentionFloor != "" && oldest == retentionFloor
+	syncedThreads := map[string]struct{}{}
+	syncThreadOnce := func(threadTS string) error {
+		if _, ok := syncedThreads[threadTS]; ok {
+			return nil
+		}
+		syncedThreads[threadTS] = struct{}{}
+		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
+		if source.threadSkip != nil {
+			if reason, ok := source.threadSkip.SkipReason(channel.ID, threadSkipScope(channel)); ok {
+				return st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason)
+			}
+		}
+		if err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now); err != nil {
+			if isThreadRepliesSkipped(err) {
+				if source.threadSkip != nil {
+					source.threadSkip.Record(channel.ID, threadSkipScope(channel), channelSkipReason(err))
+				}
+				return st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, channelSkipReason(err))
+			}
+			return err
+		}
+		return st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey)
 	}
 
 	cursor := ""
@@ -437,6 +473,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			Cursor:    cursor,
 			Limit:     200,
 			Oldest:    oldest,
+			Inclusive: inclusive,
 		})
 		if err != nil {
 			if source.skipMissingScope && isMissingScopeError(err) {
@@ -465,44 +502,31 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			if msg.Channel == "" {
 				msg.Channel = channel.ID
 			}
-			if err := st.UpsertMessage(ctx, toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now), toStoreMentions(msg)); err != nil {
+			stored := toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now)
+			var err error
+			if enforceRetention {
+				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
+			} else {
+				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
+			}
+			if err != nil {
 				return err
 			}
 			if msg.ReplyCount > 0 && userRepliesAvailable {
-				threadKey := workspaceID + "|" + channel.ID + "|" + msg.Timestamp
-				if source.threadSkip != nil {
-					if reason, ok := source.threadSkip.SkipReason(channel.ID, threadSkipScope(channel)); ok {
-						if setErr := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason); setErr != nil {
-							return setErr
-						}
-						continue
-					}
-				}
-				if err := c.syncThread(ctx, st, workspaceID, channel.ID, msg.Timestamp, now); err != nil {
-					if isThreadRepliesSkipped(err) {
-						if source.threadSkip != nil {
-							source.threadSkip.Record(channel.ID, threadSkipScope(channel), channelSkipReason(err))
-						}
-						if setErr := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, channelSkipReason(err)); setErr != nil {
-							return setErr
-						}
-						continue
-					}
-					return err
-				}
-				if err := st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey); err != nil {
+				if err := syncThreadOnce(msg.Timestamp); err != nil {
 					return err
 				}
 			}
 		}
 		if resp.NextCursor == "" {
-			return nil
+			break
 		}
 		cursor = resp.NextCursor
 	}
+	return nil
 }
 
-func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, now time.Time) error {
+func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time) error {
 	cursor := ""
 	for {
 		resp, err := c.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{
@@ -519,7 +543,14 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			if msg.Channel == "" {
 				msg.Channel = channelID
 			}
-			if err := st.UpsertMessage(ctx, toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now), toStoreMentions(msg)); err != nil {
+			stored := toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now)
+			var err error
+			if enforceRetention {
+				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
+			} else {
+				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -563,15 +594,18 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 	if err != nil {
 		return err
 	}
-	latestByChannel := make(map[string]string, len(cursors))
+	latestByChannel := make(map[string]store.ChannelSyncCursor, len(cursors))
 	for _, cursor := range cursors {
-		latestByChannel[cursor.ID] = cursor.LatestTS
+		latestByChannel[cursor.ID] = cursor
 	}
 	now := c.now()
 	threadRepliesSkipped := newThreadSkipTracker()
 	for _, channel := range channels {
-		repairSince := repairOldest(latestByChannel[channel.ID], time.Hour)
-		if err := c.syncChannels(ctx, st, workspaceID, []slack.Channel{channel}, SyncOptions{Since: repairSince}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
+		cursor := latestByChannel[channel.ID]
+		repairSince := cursor.ApplyRetentionFloor(repairOldest(cursor.LatestTS, time.Hour))
+		if err := c.syncChannels(ctx, st, workspaceID, []slack.Channel{channel}, SyncOptions{
+			Since: repairSince, enforceRetention: true,
+		}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
 			return err
 		}
 	}
@@ -1117,6 +1151,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	if workerCount > len(channels) {
 		workerCount = len(channels)
 	}
+	restoreRequested := !opts.enforceRetention && (opts.Since != "" || opts.Full)
 	tracker := progress.New(c.logger, progress.Options{
 		Name:  "sync",
 		Unit:  "channels",
@@ -1129,7 +1164,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				tracker.Finish(err)
 				return err
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				tracker.Finish(err)
 				return err
 			}
@@ -1156,7 +1191,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				cancel()
 				return
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -1224,18 +1259,29 @@ func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspace
 	if err != nil {
 		return nil, nil, err
 	}
-	latestByChannel := make(map[string]string, len(cursors))
+	latestByChannel := make(map[string]store.ChannelSyncCursor, len(cursors))
 	for _, cursor := range cursors {
-		latestByChannel[cursor.ID] = cursor.LatestTS
+		latestByChannel[cursor.ID] = cursor
 	}
 	selected := make([]slack.Channel, 0, len(channels))
 	for _, channel := range channels {
-		latest := latestByChannel[channel.ID]
-		if opts.LatestOnly && latest == "" {
+		cursor, ok := latestByChannel[channel.ID]
+		if !ok {
+			floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			seeded, err := st.ChannelRetentionSeeded(ctx, workspaceID, channel.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			cursor = store.ChannelSyncCursor{ID: channel.ID, RetentionFloor: floor, RetentionSeeded: seeded}
+		}
+		if opts.LatestOnly && cursor.LatestTS == "" && !cursor.RetentionSeeded {
 			continue
 		}
 		selected = append(selected, channel)
-		out[channel.ID] = repairOldest(latest, time.Hour)
+		out[channel.ID] = cursor.ApplyRetentionFloor(repairOldest(cursor.LatestTS, time.Hour))
 	}
 	return selected, out, nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -457,8 +458,40 @@ type FileMediaUpdate struct {
 }
 
 type ChannelSyncCursor struct {
-	ID       string
-	LatestTS string
+	ID              string
+	LatestTS        string
+	RetentionFloor  string
+	RetentionSeeded bool
+}
+
+func (c ChannelSyncCursor) ApplyRetentionFloor(oldest string) string {
+	if c.RetentionFloor == "" {
+		return oldest
+	}
+	if oldest == "" {
+		return c.RetentionFloor
+	}
+	oldestValue, oldestErr := strconv.ParseFloat(oldest, 64)
+	floorValue, floorErr := strconv.ParseFloat(c.RetentionFloor, 64)
+	if oldestErr != nil || floorErr != nil || oldestValue < floorValue {
+		return c.RetentionFloor
+	}
+	return oldest
+}
+
+func ShouldEnforceRetention(oldest, floor string, restoreRequested bool) bool {
+	if !restoreRequested {
+		return true
+	}
+	if oldest == "" || floor == "" {
+		return false
+	}
+	oldestValue, oldestOK := parseRetentionTimestamp(oldest)
+	floorValue, floorOK := parseRetentionTimestamp(floor)
+	if !oldestOK || !floorOK {
+		return true
+	}
+	return oldestValue >= floorValue
 }
 
 type ThreadRoot struct {
@@ -726,23 +759,40 @@ on conflict(id) do nothing
 }
 
 func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []Mention) error {
-	_, err := s.upsertMessage(ctx, message, mentions, false)
+	_, err := s.upsertMessage(ctx, message, mentions, false, false)
 	return err
 }
 
 // UpsertMessageByPriority atomically skips updates from a lower-priority source.
 func (s *Store) UpsertMessageByPriority(ctx context.Context, message Message, mentions []Mention) (bool, error) {
-	return s.upsertMessage(ctx, message, mentions, true)
+	return s.upsertMessage(ctx, message, mentions, true, false)
 }
 
-func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []Mention, preserveHigherPriority bool) (bool, error) {
+func (s *Store) UpsertMessageWithRetention(ctx context.Context, message Message, mentions []Mention) (bool, error) {
+	return s.upsertMessage(ctx, message, mentions, false, true)
+}
+
+func (s *Store) UpsertMessageByPriorityWithRetention(ctx context.Context, message Message, mentions []Mention) (bool, error) {
+	return s.upsertMessage(ctx, message, mentions, true, true)
+}
+
+func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []Mention, preserveHigherPriority, enforceRetention bool) (bool, error) {
 	key := messageKey(message.ChannelID, message.TS)
-	tx, err := s.db.BeginTx(ctx, nil)
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, enforceRetention)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	qtx := s.q.WithTx(tx)
+	defer rollback()
+	if enforceRetention {
+		allowed, err := messageAllowedByRetention(ctx, dbtx, message)
+		if err != nil {
+			return false, err
+		}
+		if !allowed {
+			return false, nil
+		}
+	}
+	qtx := storedb.New(dbtx)
 
 	var rows int64
 	if preserveHigherPriority {
@@ -821,7 +871,7 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		}
 		filesForSearch = message.Files
 	} else {
-		filesForSearch, err = existingFilesForSearch(ctx, tx, message.ChannelID, message.TS)
+		filesForSearch, err = existingFilesForSearch(ctx, dbtx, message.ChannelID, message.TS)
 		if err != nil {
 			return false, err
 		}
@@ -847,20 +897,86 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		return false, err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := commit(); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mentions []Mention) error {
-	key := messageKey(message.ChannelID, message.TS)
-	tx, err := s.db.BeginTx(ctx, nil)
+	_, err := s.markMessageDeleted(ctx, message, mentions, false)
+	return err
+}
+
+func (s *Store) MarkMessageDeletedWithRetention(ctx context.Context, message Message, mentions []Mention) (bool, error) {
+	return s.markMessageDeleted(ctx, message, mentions, true)
+}
+
+func (s *Store) DeleteMessageBySource(ctx context.Context, workspaceID, channelID, ts, sourceName string) (bool, error) {
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	qtx := s.q.WithTx(tx)
+	defer rollback()
+
+	var exists bool
+	if err := dbtx.QueryRowContext(ctx, `
+select exists (
+  select 1
+  from messages
+  where workspace_id = ?
+    and channel_id = ?
+    and ts = ?
+    and source_name = ?
+)
+`, workspaceID, channelID, ts, sourceName).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	for _, query := range []string{
+		`delete from message_events where channel_id = ? and ts = ?`,
+		`delete from message_files where channel_id = ? and ts = ?`,
+		`delete from message_mentions where channel_id = ? and ts = ?`,
+		`delete from embedding_jobs where channel_id = ? and ts = ?`,
+	} {
+		if _, err := dbtx.ExecContext(ctx, query, channelID, ts); err != nil {
+			return false, err
+		}
+	}
+	if _, err := dbtx.ExecContext(ctx, `delete from message_fts where message_key = ?`, messageKey(channelID, ts)); err != nil {
+		return false, err
+	}
+	if _, err := dbtx.ExecContext(ctx, `
+delete from messages
+where workspace_id = ? and channel_id = ? and ts = ? and source_name = ?
+`, workspaceID, channelID, ts, sourceName); err != nil {
+		return false, err
+	}
+	if err := commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) markMessageDeleted(ctx context.Context, message Message, mentions []Mention, enforceRetention bool) (bool, error) {
+	key := messageKey(message.ChannelID, message.TS)
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, enforceRetention)
+	if err != nil {
+		return false, err
+	}
+	defer rollback()
+	if enforceRetention {
+		allowed, err := messageAllowedByRetention(ctx, dbtx, message)
+		if err != nil {
+			return false, err
+		}
+		if !allowed {
+			return false, nil
+		}
+	}
+	qtx := storedb.New(dbtx)
 
 	updatedAt := formatDBTime(message.UpdatedAt)
 	rows, err := qtx.MarkMessageDeleted(ctx, storedb.MarkMessageDeletedParams{
@@ -871,7 +987,7 @@ func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mention
 		WorkspaceID: message.WorkspaceID,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	switch rows {
 	case 0:
@@ -896,40 +1012,40 @@ func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mention
 			UpdatedAt:      updatedAt,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		if rows == 0 {
 			if err := rejectMessageWorkspaceCollision(ctx, qtx, message); err != nil {
-				return err
+				return false, err
 			}
-			return fmt.Errorf("message %q upsert affected no rows", key)
+			return false, fmt.Errorf("message %q upsert affected no rows", key)
 		}
 		if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-			return err
+			return false, err
 		}
 		if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(message)}); err != nil {
-			return err
+			return false, err
 		}
 		if err := replaceMessageMentions(ctx, qtx, message.ChannelID, message.TS, mentions); err != nil {
-			return err
+			return false, err
 		}
 	default:
 		normalizedText, err := qtx.GetMessageSearchText(ctx, storedb.GetMessageSearchTextParams{ChannelID: message.ChannelID, Ts: message.TS})
 		if err != nil {
-			return err
+			return false, err
 		}
-		filesForSearch, err := existingFilesForSearch(ctx, tx, message.ChannelID, message.TS)
+		filesForSearch, err := existingFilesForSearch(ctx, dbtx, message.ChannelID, message.TS)
 		if err != nil {
-			return err
+			return false, err
 		}
 		searchMessage := message
 		searchMessage.NormalizedText = normalizedText
 		searchMessage.Files = filesForSearch
 		if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-			return err
+			return false, err
 		}
 		if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
@@ -940,9 +1056,46 @@ func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mention
 		PayloadJson: message.RawJSON,
 		CreatedAt:   updatedAt,
 	}); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	if err := commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) beginMessageTransaction(ctx context.Context, immediate bool) (storedb.DBTX, func() error, func(), error) {
+	if !immediate {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return tx, tx.Commit, func() { _ = tx.Rollback() }, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "begin immediate"); err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
+	done := false
+	commit := func() error {
+		if _, err := conn.ExecContext(ctx, "commit"); err != nil {
+			return err
+		}
+		done = true
+		return conn.Close()
+	}
+	rollback := func() {
+		if !done {
+			_, _ = conn.ExecContext(context.Background(), "rollback")
+		}
+		_ = conn.Close()
+	}
+	return conn, commit, rollback, nil
 }
 
 func rejectMessageWorkspaceCollision(ctx context.Context, q *storedb.Queries, message Message) error {
@@ -1017,8 +1170,8 @@ func existingFileMedia(ctx context.Context, qtx *storedb.Queries, channelID, ts 
 	return out, nil
 }
 
-func existingFilesForSearch(ctx context.Context, tx *sql.Tx, channelID, ts string) ([]MessageFile, error) {
-	rows, err := tx.QueryContext(ctx, `
+func existingFilesForSearch(ctx context.Context, q storedb.DBTX, channelID, ts string) ([]MessageFile, error) {
+	rows, err := q.QueryContext(ctx, `
 select file_id, name, title, plain_text, preview_plain_text
 from message_files
 where channel_id = ? and ts = ?
@@ -1886,9 +2039,104 @@ func (s *Store) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]C
 	}
 	out := make([]ChannelSyncCursor, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, ChannelSyncCursor{ID: row.ID, LatestTS: row.LatestTs})
+		out = append(out, ChannelSyncCursor{
+			ID:              row.ID,
+			LatestTS:        row.LatestTs,
+			RetentionFloor:  row.RetentionFloor,
+			RetentionSeeded: row.RetentionSeeded != 0,
+		})
 	}
 	return out, nil
+}
+
+func (s *Store) ChannelRetentionFloor(ctx context.Context, workspaceID, channelID string) (string, error) {
+	return retentionFloor(ctx, s.db, workspaceID, channelID)
+}
+
+func (s *Store) ChannelRetentionSeeded(ctx context.Context, workspaceID, channelID string) (bool, error) {
+	var seeded bool
+	err := s.db.QueryRowContext(ctx, `
+select exists (
+  select 1
+  from sync_state
+  where source_name = ?
+    and entity_type = ?
+    and entity_id = ?
+)
+`, retentionFloorSource, retentionSeedEntityType, workspaceID+"|"+channelID).Scan(&seeded)
+	return seeded, err
+}
+
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func retentionFloor(ctx context.Context, q queryRower, workspaceID, channelID string) (string, error) {
+	var value string
+	err := q.QueryRowContext(ctx, `
+select value
+from sync_state
+where source_name = ?
+  and (
+    (entity_type = ? and entity_id = ?)
+    or (entity_type = ? and entity_id in (?, '*'))
+  )
+order by cast(value as real) desc
+limit 1
+`,
+		retentionFloorSource,
+		retentionFloorEntityType,
+		workspaceID+"|"+channelID,
+		retentionScopeEntityType,
+		workspaceID,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+func messageAllowedByRetention(ctx context.Context, q storedb.DBTX, message Message) (bool, error) {
+	floor, err := retentionFloor(ctx, q, message.WorkspaceID, message.ChannelID)
+	if err != nil {
+		return false, err
+	}
+	retentionTS := strings.TrimSpace(message.ThreadTS)
+	if retentionTS == "" {
+		retentionTS = message.TS
+	}
+	if floor == "" || retentionTimestampAtLeast(retentionTS, floor) {
+		return true, nil
+	}
+	var exists bool
+	err = q.QueryRowContext(ctx, `
+select exists (
+  select 1
+  from messages
+  where workspace_id = ? and channel_id = ? and ts = ?
+)
+`, message.WorkspaceID, message.ChannelID, message.TS).Scan(&exists)
+	return exists, err
+}
+
+func retentionTimestampAtLeast(value, floor string) bool {
+	valueNumber, valueOK := parseRetentionTimestamp(value)
+	floorNumber, floorOK := parseRetentionTimestamp(floor)
+	if valueOK && floorOK {
+		return valueNumber >= floorNumber
+	}
+	return value >= floor
+}
+
+func parseRetentionTimestamp(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		return parsed, true
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return float64(parsed.Unix()) + float64(parsed.Nanosecond())/float64(time.Second), true
+	}
+	return 0, false
 }
 
 func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID string) ([]ThreadRoot, error) {

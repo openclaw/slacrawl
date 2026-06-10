@@ -36,6 +36,7 @@ func TestParseLookback(t *testing.T) {
 		{"abc", 0, true},
 		{"-2d", 0, true},
 		{"-1h", 0, true},
+		{"213504d", 0, true},
 	}
 	for _, c := range cases {
 		d, err := parseLookback(c.in)
@@ -530,6 +531,8 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "wiretap")
 	require.Contains(t, out, "mcp")
 	require.Contains(t, out, "connector")
+	require.Contains(t, out, "purge")
+	require.Contains(t, out, "--older-than")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -550,6 +553,8 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "wiretap")
 	require.Contains(t, out, "mcp")
 	require.Contains(t, out, "connector")
+	require.Contains(t, out, "purge")
+	require.Contains(t, out, "--keep-media")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {

@@ -11,17 +11,38 @@ import (
 )
 
 const channelSyncCursors = `-- name: ChannelSyncCursors :many
-select c.id, cast(coalesce(max(case when m.ts not like 'draft:%' then m.ts end), '') as text) as latest_ts
+select c.id,
+       cast(coalesce(max(case when m.ts not like 'draft:%' then m.ts end), '') as text) as latest_ts,
+       cast(coalesce((
+         select s.value
+         from sync_state s
+         where s.source_name = 'retention'
+           and (
+             (s.entity_type = 'channel_floor' and s.entity_id = c.workspace_id || '|' || c.id)
+             or (s.entity_type = 'workspace_floor' and s.entity_id in (c.workspace_id, '*'))
+           )
+         order by cast(s.value as real) desc
+         limit 1
+       ), '') as text) as retention_floor,
+       cast(exists (
+         select 1
+         from sync_state s
+         where s.source_name = 'retention'
+           and s.entity_type = 'channel_seed'
+           and s.entity_id = c.workspace_id || '|' || c.id
+       ) as integer) as retention_seeded
 from channels c
 left join messages m on m.channel_id = c.id and m.workspace_id = c.workspace_id
 where c.workspace_id = ?1
-group by c.id
+group by c.id, c.workspace_id
 order by c.id asc
 `
 
 type ChannelSyncCursorsRow struct {
-	ID       string `json:"id"`
-	LatestTs string `json:"latest_ts"`
+	ID              string `json:"id"`
+	LatestTs        string `json:"latest_ts"`
+	RetentionFloor  string `json:"retention_floor"`
+	RetentionSeeded int64  `json:"retention_seeded"`
 }
 
 func (q *Queries) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]ChannelSyncCursorsRow, error) {
@@ -33,7 +54,12 @@ func (q *Queries) ChannelSyncCursors(ctx context.Context, workspaceID string) ([
 	var items []ChannelSyncCursorsRow
 	for rows.Next() {
 		var i ChannelSyncCursorsRow
-		if err := rows.Scan(&i.ID, &i.LatestTs); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.LatestTs,
+			&i.RetentionFloor,
+			&i.RetentionSeeded,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -404,7 +430,9 @@ func (q *Queries) InsertMessageFile(ctx context.Context, arg InsertMessageFilePa
 }
 
 const lastSyncAt = `-- name: LastSyncAt :one
-select cast(coalesce(max(updated_at), '') as text) as updated_at from sync_state where source_name != 'doctor'
+select cast(coalesce(max(updated_at), '') as text) as updated_at
+from sync_state
+where source_name not in ('doctor', 'retention')
 `
 
 func (q *Queries) LastSyncAt(ctx context.Context) (string, error) {

@@ -19,6 +19,7 @@ var (
 		"update",
 		"sync",
 		"import",
+		"purge",
 		"tail",
 		"watch",
 		"search",
@@ -84,7 +85,7 @@ _slacrawl()
     local i
     for ((i=1; i < ${#words[@]}; i++)); do
         case "${words[i]}" in
-            init|doctor|report|digest|analytics|publish|subscribe|update|sync|import|tail|watch|search|messages|files|mentions|sql|users|channels|status|completion)
+            init|doctor|report|digest|analytics|publish|subscribe|update|sync|import|purge|tail|watch|search|messages|files|mentions|sql|users|channels|status|completion)
                 command="${words[i]}"
                 break
                 ;;
@@ -166,6 +167,9 @@ _slacrawl()
             ;;
         import)
             COMPREPLY=( $(compgen -W "--workspace --dry-run --force --format --help -h ${global_flags}" -- "${cur}") )
+            ;;
+        purge)
+            COMPREPLY=( $(compgen -W "--before --older-than --workspace --force --keep-media --vacuum --help -h ${global_flags}" -- "${cur}") )
             ;;
         tail)
             COMPREPLY=( $(compgen -W "--workspace --repair-every --help -h ${global_flags}" -- "${cur}") )
@@ -282,6 +286,9 @@ _slacrawl() {
           ;;
         import)
           _arguments '--workspace[workspace id]:workspace id:' '--dry-run[walk and count without writing]' '--force[overwrite existing slack-export rows at the same rank]' '--format[output format]:format:(text json log)'
+          ;;
+        purge)
+          _arguments '--before[absolute cutoff]:time:' '--older-than[relative cutoff]:duration:' '--workspace[workspace id]:workspace id:' '--force[execute deletion]' '--keep-media[retain unreferenced cached media]' '--vacuum[compact database after deletion]'
           ;;
         tail)
           _arguments '--workspace[workspace id]:workspace id:' '--repair-every[repair interval]:duration:'

@@ -36,6 +36,7 @@ Data stays on your machine. You can run it in API mode, MCP connector mode, desk
 - desktop-local ingestion of workspace metadata, channels, users, cached channel/DM messages, drafts, read markers, recent-channel hints, and custom-status metadata
 - optional Socket Mode live tailing via app token
 - periodic desktop refresh with `watch`
+- retention previews and transactional message purging by absolute or relative cutoff
 - git-backed archive publishing, subscription, and read-time auto-refresh
 
 ## Current Coverage
@@ -151,6 +152,7 @@ go run ./cmd/slacrawl doctor
 go run ./cmd/slacrawl sync --source bot
 go run ./cmd/slacrawl sync --source mcp --workspace T01234567
 go run ./cmd/slacrawl search --workspace T01234567 "incident"
+go run ./cmd/slacrawl purge --older-than 90d
 go run ./cmd/slacrawl analytics trends --weeks 4
 go run ./cmd/slacrawl tail --repair-every 30m
 go run ./cmd/slacrawl watch --desktop-every 5m
@@ -191,6 +193,7 @@ Choose the path that matches your setup:
 - `update` pulls and imports the latest git snapshot
 - `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
 - `import` imports a Slack export ZIP or extracted export directory
+- `purge` previews or deletes messages and message-owned records older than a cutoff
 - `tail` listens for live events through Socket Mode, including one tail per configured workspace
 - `watch` refreshes desktop-local state on a schedule
 - `search` runs safe local text search with FTS and substring fallback, optionally filtered by workspace
@@ -208,6 +211,39 @@ Choose the path that matches your setup:
 - `digest` prints a per-channel activity summary for a time window
 - `analytics` groups analytics subcommands (`digest`, `quiet`, `trends`)
 - `completion` prints shell completion for `bash` or `zsh`
+
+## Retention Purge
+
+`purge` removes archived messages before an exclusive cutoff. Choose either an
+absolute UTC date/timestamp or a relative age. Threads are retained or removed
+as a unit using the parent message timestamp:
+
+```bash
+# Preview messages older than 90 days.
+slacrawl purge --older-than 90d
+
+# Preview one workspace before January 1, 2026 UTC.
+slacrawl purge --workspace T01234567 --before 2026-01-01
+
+# Delete matching rows and unreferenced cached media.
+slacrawl purge --older-than 90d --force
+
+# Also compact the SQLite file after deletion.
+slacrawl purge --older-than 90d --force --vacuum
+```
+
+Preview is the default. `--force` deletes matching messages plus their event
+history, file metadata, mentions, embedding jobs, and FTS entries in one SQLite
+transaction. Workspace/channel/user metadata and sync cursors remain so later
+API and MCP syncs can continue incrementally without crossing the retained
+cutoff. Cached media no longer referenced by another message is removed after
+the database commit; pass `--keep-media` to retain it. Explicit full syncs,
+older `--since` values, desktop ingestion, and imports can restore older data.
+
+SQLite normally reuses freed pages without shrinking the database file. Add
+`--vacuum` when you need to reclaim filesystem space immediately. If git-backed
+sharing is enabled, publish a fresh snapshot after purging; importing an older
+snapshot can restore records that were removed locally.
 
 ## Importing a Slack Export
 
@@ -501,6 +537,7 @@ Deep-dive docs:
 
 - [`docs/configuration.md`](./docs/configuration.md)
 - [`docs/desktop-mode.md`](./docs/desktop-mode.md)
+- [`docs/retention.md`](./docs/retention.md)
 
 ---
 

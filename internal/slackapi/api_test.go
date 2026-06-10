@@ -775,6 +775,41 @@ func TestRepairWorkspaceReconcilesIncrementalHistory(t *testing.T) {
 	require.Equal(t, "1709996400.000100", server.lastHistoryOldest("C123"))
 }
 
+func TestRepairWorkspaceKeepsPurgedThreadHistoryBelowFloor(t *testing.T) {
+	server := newRepairSlackServer(t)
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{
+		Bot: "xoxb-test", User: "xoxp-test",
+	}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	client.now = func() time.Time { return time.Date(2026, 3, 8, 4, 0, 0, 0, time.UTC) }
+
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	ctx := context.Background()
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: client.now(),
+	}))
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{
+		ChannelID: "C123", TS: "1710000000.000100", WorkspaceID: "T123",
+		Text: "old root", NormalizedText: "old root", ReplyCount: 1, LatestReply: "1710000001.000200",
+		SourceRank: 2, SourceName: SourceBot, RawJSON: "{}", UpdatedAt: client.now(),
+	}, nil))
+	cutoff := time.Unix(1710000600, 0).UTC()
+	_, err := st.PurgeMessages(ctx, store.PurgeOptions{
+		Before: cutoff, WorkspaceID: "T123", Delete: true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
+	rows, err := st.Messages(ctx, "", "C123", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "new repair message", rows[0].Text)
+	require.Equal(t, "1710000600.000000", server.lastHistoryOldest("C123"))
+}
+
 func TestRepairWorkspaceDowngradesThreadCoverageOnUnreadableThreads(t *testing.T) {
 	server := newUnreadableThreadSlackServer(t)
 	defer server.Close()
@@ -1332,6 +1367,86 @@ func TestHandleEventsAPIEventIgnoresUnknown(t *testing.T) {
 	require.NoError(t, client.HandleEventsAPIEvent(context.Background(), st, "T123", slackevents.EventsAPIEvent{}))
 }
 
+func TestHandleEventsAPIEventHonorsRetentionFloor(t *testing.T) {
+	ctx := context.Background()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := time.Date(2026, 3, 8, 3, 0, 0, 0, time.UTC)
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now,
+	}))
+	_, err := st.PurgeMessages(ctx, store.PurgeOptions{
+		Before: time.Unix(1710003600, 0).UTC(), WorkspaceID: "T123", Delete: true,
+	})
+	require.NoError(t, err)
+
+	client := New(config.Tokens{Bot: "xoxb-test"})
+	client.now = func() time.Time { return now }
+	oldDeletion, err := slackevents.ParseEvent([]byte(`{
+	  "type":"event_callback",
+	  "event":{
+	    "type":"message",
+	    "subtype":"message_deleted",
+	    "channel":"C123",
+	    "deleted_ts":"1710000000.000100",
+	    "previous_message":{"type":"message","channel":"C123","text":"old","ts":"1710000000.000100"}
+	  }
+	}`), slackevents.OptionNoVerifyToken())
+	require.NoError(t, err)
+	require.NoError(t, client.HandleEventsAPIEvent(ctx, st, "T123", oldDeletion))
+	rows, err := st.Messages(ctx, "", "C123", "", 10)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{
+		ChannelID: "C123", TS: "1710000000.000100", WorkspaceID: "T123",
+		Text: "restored old", NormalizedText: "restored old",
+		SourceRank: 2, SourceName: SourceBot, RawJSON: "{}", UpdatedAt: now,
+	}, nil))
+	oldEdit, err := slackevents.ParseEvent([]byte(`{
+	  "type":"event_callback",
+	  "event":{
+	    "type":"message",
+	    "subtype":"message_changed",
+	    "channel":"C123",
+	    "message":{"type":"message","channel":"C123","text":"edited restored old","ts":"1710000000.000100"},
+	    "previous_message":{"type":"message","channel":"C123","text":"restored old","ts":"1710000000.000100"}
+	  }
+	}`), slackevents.OptionNoVerifyToken())
+	require.NoError(t, err)
+	require.NoError(t, client.HandleEventsAPIEvent(ctx, st, "T123", oldEdit))
+	editedRows, err := st.Messages(ctx, "", "C123", "", 10)
+	require.NoError(t, err)
+	require.Len(t, editedRows, 1)
+	require.Equal(t, "edited restored old", editedRows[0].Text)
+	require.NoError(t, client.HandleEventsAPIEvent(ctx, st, "T123", oldDeletion))
+
+	newReply, err := slackevents.ParseEvent([]byte(`{
+	  "type":"event_callback",
+	  "event":{
+	    "type":"message",
+	    "channel":"C123",
+	    "user":"U123",
+	    "text":"new reply",
+	    "thread_ts":"1710000000.000100",
+	    "ts":"1710007200.000100"
+	  }
+	}`), slackevents.OptionNoVerifyToken())
+	require.NoError(t, err)
+	require.NoError(t, client.HandleEventsAPIEvent(ctx, st, "T123", newReply))
+
+	rows, err = st.Messages(ctx, "", "C123", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	deletedRows, err := st.QueryReadOnly(ctx, `
+select coalesce(deleted_ts, '') as deleted_ts
+from messages
+where channel_id = 'C123' and ts = '1710000000.000100'
+`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"deleted_ts": "1710000000.000100"}}, deletedRows)
+}
+
 func TestChannelSyncPlanLatestOnlySkipsUnsyncedChannels(t *testing.T) {
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()
@@ -1356,6 +1471,11 @@ func TestChannelSyncPlanLatestOnlySkipsUnsyncedChannels(t *testing.T) {
 		RawJSON:        "{}",
 		UpdatedAt:      now,
 	}, nil))
+	cutoff := time.Unix(1710003600, 0).UTC()
+	_, err := st.PurgeMessages(context.Background(), store.PurgeOptions{
+		Before: cutoff, WorkspaceID: "T123", Delete: true,
+	})
+	require.NoError(t, err)
 
 	client := &Client{}
 	channels, oldestByChannel, err := client.channelSyncPlan(context.Background(), st, "T123", []slack.Channel{
@@ -1366,7 +1486,100 @@ func TestChannelSyncPlanLatestOnlySkipsUnsyncedChannels(t *testing.T) {
 	require.Len(t, channels, 1)
 	require.Equal(t, "C123", channels[0].ID)
 	require.Contains(t, oldestByChannel, "C123")
+	require.Equal(t, "1710003600.000000", oldestByChannel["C123"])
 	require.NotContains(t, oldestByChannel, "C999")
+}
+
+func TestSyncChannelUsesInclusiveRetentionFloor(t *testing.T) {
+	var gotOldest, gotInclusive string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		gotOldest = r.Form.Get("oldest")
+		gotInclusive = r.Form.Get("inclusive")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[],"response_metadata":{"next_cursor":""}}`))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := time.Date(2026, 3, 8, 1, 2, 3, 0, time.UTC)
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now,
+	}))
+	_, err := st.PurgeMessages(ctx, store.PurgeOptions{
+		Before: now, WorkspaceID: "T123", Delete: true,
+	})
+	require.NoError(t, err)
+	floor, err := st.ChannelRetentionFloor(ctx, "T123", "C123")
+	require.NoError(t, err)
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	err = client.syncChannelMessagesWithSource(
+		ctx,
+		st,
+		"T123",
+		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
+		floor,
+		false,
+		now,
+		false,
+		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+	)
+	require.NoError(t, err)
+	require.Equal(t, floor, gotOldest)
+	require.Equal(t, "1", gotInclusive)
+}
+
+func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
+	replyCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.history":
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","subtype":"message_replied","user":"U234","text":"recent reply to purged root","thread_ts":"1710000000.000100","ts":"1710600001.000200"}],"response_metadata":{"next_cursor":""}}`))
+		case "/conversations.replies":
+			replyCalls++
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[],"response_metadata":{"next_cursor":""}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := time.Date(2026, 3, 8, 1, 2, 3, 0, time.UTC)
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now,
+	}))
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{
+		ChannelID: "C123", TS: "1710000000.000100", WorkspaceID: "T123",
+		Text: "old root", NormalizedText: "old root", ReplyCount: 1, LatestReply: "1710000001.000200",
+		SourceRank: 2, SourceName: SourceBot, RawJSON: "{}", UpdatedAt: now,
+	}, nil))
+	_, err := st.PurgeMessages(ctx, store.PurgeOptions{
+		Before: time.Unix(1710003600, 0).UTC(), WorkspaceID: "T123", Delete: true,
+	})
+	require.NoError(t, err)
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
+	err = client.syncChannelMessagesWithSource(
+		ctx,
+		st,
+		"T123",
+		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
+		"1710600000.000000",
+		true,
+		now,
+		true,
+		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+	)
+	require.NoError(t, err)
+	require.Zero(t, replyCalls)
+	rows, err := st.Messages(ctx, "", "C123", "", 10)
+	require.NoError(t, err)
+	require.Empty(t, rows)
 }
 
 func TestSyncSkipsExcludedChannels(t *testing.T) {

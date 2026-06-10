@@ -5,6 +5,7 @@
 ### Changes
 
 - Added automatic Slack Desktop cache discovery on Linux using `XDG_CONFIG_HOME` or `~/.config`. Thanks @TurboTheTurtle.
+- Added preview-first retention purging with absolute or relative cutoffs, workspace scoping, cached-media cleanup, and optional SQLite compaction. Thanks @barbieri.
 
 ## 0.7.1 - 2026-06-08
 

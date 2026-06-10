@@ -94,8 +94,13 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	restoreRequested := opts.Since != "" || opts.Full
 	summary := Summary{WorkspaceID: workspaceID, Users: userCount}
 	for _, channel := range selected {
+		enforceRetention, err := syncEnforcesRetention(ctx, st, workspaceID, channel.ID, oldestByChannel[channel.ID], restoreRequested)
+		if err != nil {
+			return summary, err
+		}
 		channelResult, err := client.channelMessages(ctx, tools, channel.ID, oldestByChannel[channel.ID])
 		if err != nil {
 			return summary, fmt.Errorf("read MCP channel %s: %w", channel.ID, err)
@@ -113,10 +118,13 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 
 		threadRoots := map[string]struct{}{}
 		for _, message := range channelResult.Messages {
-			if err := upsertMessage(ctx, st, workspaceID, message, now); err != nil {
+			stored, err := upsertMessage(ctx, st, workspaceID, message, enforceRetention, now)
+			if err != nil {
 				return summary, err
 			}
-			summary.Messages++
+			if stored {
+				summary.Messages++
+			}
 			if message.ReplyCount > 0 {
 				threadRoots[message.TS] = struct{}{}
 			}
@@ -137,7 +145,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		sort.Strings(orderedRoots)
 		for _, threadTS := range orderedRoots {
-			replies, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, now)
+			replies, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, enforceRetention, now)
 			if err != nil {
 				return summary, err
 			}
@@ -150,7 +158,21 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	return summary, nil
 }
 
-func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, now time.Time) (int, error) {
+func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, channelID, oldest string, restoreRequested bool) (bool, error) {
+	if !restoreRequested {
+		return true, nil
+	}
+	if oldest == "" {
+		return false, nil
+	}
+	floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channelID)
+	if err != nil {
+		return false, err
+	}
+	return store.ShouldEnforceRetention(oldest, floor, true), nil
+}
+
+func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time) (int, error) {
 	thread, err := client.threadMessages(ctx, tools, channelID, threadTS)
 	if err != nil {
 		return 0, fmt.Errorf("read MCP thread %s/%s: %w", channelID, threadTS, err)
@@ -158,16 +180,21 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
 		thread.Parent.LatestReply = latestReplyTS(thread.Parent.LatestReply, thread.Replies)
-		if err := upsertMessage(ctx, st, workspaceID, *thread.Parent, now); err != nil {
+		if _, err := upsertMessage(ctx, st, workspaceID, *thread.Parent, enforceRetention, now); err != nil {
 			return 0, err
 		}
 	}
+	stored := 0
 	for _, reply := range thread.Replies {
-		if err := upsertMessage(ctx, st, workspaceID, reply, now); err != nil {
+		written, err := upsertMessage(ctx, st, workspaceID, reply, enforceRetention, now)
+		if err != nil {
 			return 0, err
 		}
+		if written {
+			stored++
+		}
 	}
-	return len(thread.Replies), nil
+	return stored, nil
 }
 
 func resolveChannels(ctx context.Context, client *Client, tools toolset, selectors []string) ([]ChannelRecord, error) {
@@ -247,18 +274,33 @@ func syncPlan(ctx context.Context, st *store.Store, workspaceID string, channels
 	if err != nil {
 		return nil, nil, err
 	}
-	latest := make(map[string]string, len(cursors))
+	latest := make(map[string]store.ChannelSyncCursor, len(cursors))
 	for _, cursor := range cursors {
-		latest[cursor.ID] = cursor.LatestTS
+		latest[cursor.ID] = cursor
 	}
 	selected := make([]ChannelRecord, 0, len(channels))
 	for _, channel := range channels {
-		cursor := latest[channel.ID]
-		if opts.LatestOnly && cursor == "" {
+		cursor, ok := latest[channel.ID]
+		if !ok {
+			floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			seeded, err := st.ChannelRetentionSeeded(ctx, workspaceID, channel.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			cursor = store.ChannelSyncCursor{ID: channel.ID, RetentionFloor: floor, RetentionSeeded: seeded}
+		}
+		if opts.LatestOnly && cursor.LatestTS == "" && !cursor.RetentionSeeded {
 			continue
 		}
 		selected = append(selected, channel)
-		oldest[channel.ID] = overlapTimestamp(cursor, time.Hour)
+		channelOldest := cursor.ApplyRetentionFloor(overlapTimestamp(cursor.LatestTS, time.Hour))
+		if channelOldest != "" && channelOldest == cursor.RetentionFloor {
+			channelOldest = previousMicrosecondTimestamp(channelOldest)
+		}
+		oldest[channel.ID] = channelOldest
 	}
 	return oldest, selected, nil
 }
@@ -292,7 +334,7 @@ func toStoreUser(workspaceID string, user UserRecord, now time.Time) store.User 
 	}
 }
 
-func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, message MessageRecord, now time.Time) error {
+func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, message MessageRecord, enforceRetention bool, now time.Time) (bool, error) {
 	threadTS := message.ThreadTS
 	if threadTS == message.TS {
 		threadTS = ""
@@ -315,7 +357,7 @@ func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, mes
 			DisplayText: mention.DisplayText,
 		})
 	}
-	_, err := st.UpsertMessageByPriority(ctx, store.Message{
+	stored := store.Message{
 		ChannelID:      message.ChannelID,
 		TS:             message.TS,
 		WorkspaceID:    workspaceID,
@@ -330,8 +372,11 @@ func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, mes
 		RawJSON:        store.MarshalRaw(message),
 		UpdatedAt:      now,
 		Files:          nil,
-	}, storedMentions)
-	return err
+	}
+	if enforceRetention {
+		return st.UpsertMessageByPriorityWithRetention(ctx, stored, storedMentions)
+	}
+	return st.UpsertMessageByPriority(ctx, stored, storedMentions)
 }
 
 func latestReplyTS(current string, replies []MessageRecord) string {
@@ -356,6 +401,33 @@ func normalizeTimestamp(value string) string {
 		return fmt.Sprintf("%d.%06d", parsed.Unix(), parsed.Nanosecond()/1000)
 	}
 	return value
+}
+
+func previousMicrosecondTimestamp(value string) string {
+	parts := strings.SplitN(strings.TrimSpace(value), ".", 2)
+	seconds, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return value
+	}
+	fraction := ""
+	if len(parts) == 2 {
+		fraction = parts[1]
+	}
+	if len(fraction) > 6 {
+		fraction = fraction[:6]
+	}
+	fraction += strings.Repeat("0", 6-len(fraction))
+	microseconds, err := strconv.ParseInt(fraction, 10, 64)
+	if err != nil {
+		return value
+	}
+	if microseconds == 0 {
+		seconds--
+		microseconds = 999999
+	} else {
+		microseconds--
+	}
+	return fmt.Sprintf("%d.%06d", seconds, microseconds)
 }
 
 func overlapTimestamp(value string, overlap time.Duration) string {

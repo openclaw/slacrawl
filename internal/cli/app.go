@@ -136,6 +136,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runSync(ctx, configPath, rest[1:], outputFormat)
 	case "import":
 		return a.runImport(ctx, rest[1:])
+	case "purge":
+		return a.runPurge(ctx, configPath, rest[1:], outputFormat)
 	case "search":
 		return a.runSearch(ctx, configPath, rest[1:], outputFormat)
 	case "tui":
@@ -1457,14 +1459,18 @@ func parseLookback(value string) (time.Duration, error) {
 		return 0, errors.New("empty duration")
 	}
 	if strings.HasSuffix(value, "d") {
-		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		days, err := strconv.ParseInt(strings.TrimSuffix(value, "d"), 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("invalid day count: %w", err)
 		}
 		if days < 0 {
 			return 0, errors.New("negative duration")
 		}
-		return time.Duration(days) * 24 * time.Hour, nil
+		const day = 24 * time.Hour
+		if days > int64((1<<63-1)/day) {
+			return 0, errors.New("duration exceeds supported range")
+		}
+		return time.Duration(days) * day, nil
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil {

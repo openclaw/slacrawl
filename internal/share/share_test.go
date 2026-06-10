@@ -293,6 +293,26 @@ func TestExportImportRestoresMediaFiles(t *testing.T) {
 	dstPath, err := media.LocalPath(dstCache, mediaPath)
 	require.NoError(t, err)
 	require.FileExists(t, dstPath)
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- media.WithCacheLock(ctx, dstCache, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	_, _, err = ImportIfChanged(waitCtx, reader, Options{
+		RepoPath: opts.RepoPath, CacheDir: dstCache, Branch: "main", IncludeMedia: true,
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	close(release)
+	require.NoError(t, <-lockDone)
 }
 
 func TestNeedsImportUsesLastImportTime(t *testing.T) {

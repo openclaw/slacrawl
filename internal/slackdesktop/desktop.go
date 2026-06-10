@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -494,6 +495,11 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 		}
 		if err := upsertDesktopMessage(ctx, st, message, nil); err != nil {
 			return Source{}, err
+		}
+		if legacyTS := legacyDraftTS(draft); legacyTS != message.TS {
+			if _, err := st.DeleteMessageBySource(ctx, workspaceID, channelID, legacyTS, draftSourceName); err != nil {
+				return Source{}, err
+			}
 		}
 	}
 	for _, channel := range channelHints {
@@ -1129,6 +1135,17 @@ func draftTS(draft Draft) string {
 	return "draft:" + id
 }
 
+func legacyDraftTS(draft Draft) string {
+	id := draftID(draft)
+	if draft.LastUpdatedTS > 0 {
+		return "draft:" + legacyTrimFloat(draft.LastUpdatedTS) + ":" + id
+	}
+	if draft.LastUpdated > 0 {
+		return "draft:" + legacyTrimFloat(draft.LastUpdated) + ":" + id
+	}
+	return "draft:" + id
+}
+
 func draftID(draft Draft) string {
 	id := fallback(draft.ClientDraftID, draft.ID)
 	if draft.WorkspaceID == "" {
@@ -1138,12 +1155,11 @@ func draftID(draft Draft) string {
 }
 
 func trimFloat(value float64) string {
-	return strings.TrimRight(strings.TrimRight(strings.ReplaceAll(strings.TrimSpace(jsonNumber(value)), " ", ""), "0"), ".")
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
-func jsonNumber(value float64) string {
-	data, _ := json.Marshal(value)
-	return string(data)
+func legacyTrimFloat(value float64) string {
+	return strings.TrimRight(strings.TrimRight(trimFloat(value), "0"), ".")
 }
 
 func firstWorkspaceID(teams map[string]DesktopTeam) string {

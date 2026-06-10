@@ -133,6 +133,7 @@ Commands:
 - `update`
 - `sync`
 - `import`
+- `purge`
 - `tail`
 - `watch`
 - `search`
@@ -177,6 +178,32 @@ Must check:
 - if a configured user token actually auths successfully
 - recent API channel skips and tail connection/repair state when present
 - configured git-share repo plus last import / stale state when share mode is enabled
+
+### `purge`
+
+Purpose:
+
+- enforce local message-retention cutoffs
+- preview destructive impact before changing the archive
+
+Expected flags:
+
+- exactly one of `--before <RFC3339|YYYY-MM-DD>` or `--older-than <duration>`
+- optional `--workspace <id>`
+- `--force` to execute; omission is a preview
+- `--keep-media` to retain cached media no longer referenced by stored messages
+- `--vacuum` to compact SQLite after deletion
+
+Behavior:
+
+- cutoff is exclusive
+- thread retention uses the parent timestamp, deleting an expired parent and all replies together
+- desktop drafts use their own encoded timestamp or update time, even when attached to an expired thread
+- delete messages and message-owned events, file metadata, mentions, embedding jobs, and FTS rows in one transaction
+- preserve workspaces, channels, users, and sync state
+- record per-channel retention floors so incremental API/MCP repair overlap does not restore purged history
+- delete only cached media paths with no remaining database references
+- do not compact the SQLite file unless `--vacuum` is set
 
 ### `status`
 
