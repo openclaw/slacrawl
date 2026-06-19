@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/golang/snappy v1.0.0
-	github.com/openclaw/crawlkit v0.12.3-0.20260619112528-82bf1826da3f
+	github.com/openclaw/crawlkit v0.12.3-0.20260619115105-eb1aa35e0e78
 	github.com/slack-go/slack v0.26.0
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0

@@ -121,14 +121,21 @@ func Push(ctx context.Context, opts Options) error {
 	if strings.TrimSpace(opts.Tag) == "" {
 		return mirror.Push(ctx, mirrorOptions(opts))
 	}
-	return mirror.PushAtomic(ctx, mirrorOptions(opts), "HEAD:refs/heads/"+normalizeBranch(opts.Branch), "refs/tags/"+strings.TrimSpace(opts.Tag))
+	return mirror.PushSnapshot(ctx, mirrorOptions(opts), opts.Tag)
 }
 
 func ValidateTag(ctx context.Context, opts Options) error {
 	if strings.TrimSpace(opts.Tag) == "" {
 		return nil
 	}
-	if err := Pull(ctx, opts); err != nil {
+	if strings.TrimSpace(opts.Remote) != "" {
+		if err := mirror.EnsureRemote(ctx, mirrorOptions(opts)); err != nil {
+			return err
+		}
+	} else if err := mirror.EnsureRepo(ctx, mirrorOptions(opts)); err != nil {
+		return err
+	}
+	if err := mirror.SyncForWrite(ctx, mirrorOptions(opts)); err != nil {
 		return err
 	}
 	return mirror.ValidateTag(ctx, mirrorOptions(opts), opts.Tag)
