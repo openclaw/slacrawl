@@ -298,11 +298,13 @@ func TestDiscoverEmptyPathIsUnavailable(t *testing.T) {
 	require.Empty(t, source.Path)
 }
 
-func TestSnapshotPathRemovesPartialSnapshotOnError(t *testing.T) {
+func TestSnapshotPathRejectsEscapingSymlinkAndRemovesPartialSnapshot(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
-	loopPath := filepath.Join(root, "storage", "root-state.json")
-	if err := os.Symlink("root-state.json", loopPath); err != nil {
+	external := filepath.Join(t.TempDir(), "outside.json")
+	require.NoError(t, os.WriteFile(external, []byte(`{"outside":true}`), 0o600))
+	symlinkPath := filepath.Join(root, "storage", "root-state.json")
+	if err := os.Symlink(external, symlinkPath); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 

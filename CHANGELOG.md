@@ -2,6 +2,10 @@
 
 ## 0.7.3 - Unreleased
 
+### Fixes
+
+- Confined Slack Desktop snapshot reads to the discovered profile root and rejected symlink or special-file entries.
+
 ### Maintenance
 
 - Updated crawlkit through 0.12.2 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.

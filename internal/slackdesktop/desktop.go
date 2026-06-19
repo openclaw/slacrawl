@@ -273,6 +273,16 @@ func SnapshotPath(path string) (snapshot Snapshot, err error) {
 	if err := os.MkdirAll(target, 0o750); err != nil {
 		return Snapshot{}, err
 	}
+	sourceRoot, err := os.OpenRoot(path)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer func() { _ = sourceRoot.Close() }()
+	targetRoot, err := os.OpenRoot(target)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer func() { _ = targetRoot.Close() }()
 
 	copyTargets := []string{
 		rootStateFile,
@@ -282,15 +292,14 @@ func SnapshotPath(path string) (snapshot Snapshot, err error) {
 		indexedDBBlobDir,
 	}
 	for _, relative := range copyTargets {
-		src := filepath.Join(path, filepath.FromSlash(relative))
-		if _, err := os.Stat(src); err != nil {
+		relative = filepath.FromSlash(relative)
+		if _, err := sourceRoot.Lstat(relative); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return Snapshot{}, err
 		}
-		dst := filepath.Join(target, filepath.FromSlash(relative))
-		if err := copyPath(src, dst); err != nil {
+		if err := copyPath(sourceRoot, targetRoot, relative); err != nil {
 			return Snapshot{}, err
 		}
 	}
@@ -1283,34 +1292,48 @@ func intString(value int) string {
 	return string(data)
 }
 
-func copyPath(src string, dst string) error {
-	info, err := os.Stat(src)
+func copyPath(srcRoot *os.Root, dstRoot *os.Root, relative string) error {
+	info, err := srcRoot.Lstat(relative)
 	if err != nil {
 		return err
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("desktop snapshot source contains a symbolic link")
+	}
 	if info.IsDir() {
-		if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		if err := dstRoot.MkdirAll(relative, info.Mode().Perm()); err != nil {
 			return err
 		}
-		entries, err := os.ReadDir(src)
+		dir, err := srcRoot.Open(relative)
 		if err != nil {
 			return err
 		}
+		entries, readErr := dir.ReadDir(-1)
+		closeErr := dir.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 		for _, entry := range entries {
-			if err := copyPath(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+			if err := copyPath(srcRoot, dstRoot, filepath.Join(relative, entry.Name())); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if !info.Mode().IsRegular() {
+		return errors.New("desktop snapshot source contains a special file")
+	}
+	if err := dstRoot.MkdirAll(filepath.Dir(relative), 0o750); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(src) //nolint:gosec // Snapshot copy reads from discovered Slack desktop paths.
+	data, err := srcRoot.ReadFile(relative)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, info.Mode())
+	return dstRoot.WriteFile(relative, data, info.Mode().Perm())
 }
 
 func cleanKey(key []byte) string {
