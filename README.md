@@ -190,7 +190,7 @@ Choose the path that matches your setup:
 - `report` summarizes archive activity and git-share freshness without writing SQL
 - `publish` exports the local SQLite archive into a git repo as compressed JSONL shards plus a manifest
 - `subscribe` configures a git-backed reader that can run without Slack credentials
-- `update` pulls and imports the latest git snapshot
+- `update` pulls and imports the latest git snapshot, or restores a historical tag/ref without moving the share checkout
 - `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
 - `import` imports a Slack export ZIP or extracted export directory
 - `purge` previews or deletes messages and message-owned records older than a cutoff
@@ -380,10 +380,12 @@ stale_after = "15m"
 Behavior:
 
 - `publish` writes gzipped JSONL shards plus `manifest.json` into `repo_path`
+- `publish --tag <name>` attaches an immutable lightweight tag to the committed snapshot
 - cached non-DM/non-private file media is included by default; use `--no-media` to omit it
 - `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
 - pass `--db` to `subscribe` when you want the reader archive to land in a non-default SQLite path
 - `update` pulls and re-imports only when the manifest changes
+- `update --ref <tag-or-commit>` imports that historical snapshot without checking it out
 - `status`, `search`, `messages`, `mentions`, `sql`, `users`, `channels`, and `report` auto-refresh stale git snapshots before reading when `auto_update = true`
 - `sync --source bot` and `sync --source all` warm from the git snapshot before hitting Slack when a share remote is configured
 - `status` and `doctor` surface the current git-share repo, last import time, and whether the local snapshot is stale
@@ -395,6 +397,7 @@ Behavior:
 ```bash
 go run ./cmd/slacrawl publish --remote /path/to/private/slacrawl-archive.git --push
 go run ./cmd/slacrawl publish --repo ~/.slacrawl/share --branch main --message "archive: daily refresh" --push
+go run ./cmd/slacrawl publish --tag backup-2026-06-19 --push
 ```
 
 Relevant flags:
@@ -403,6 +406,7 @@ Relevant flags:
 - `--remote` sets or overrides the git remote used for publish
 - `--branch` chooses the target branch
 - `--message` sets the git commit message
+- `--tag` creates an immutable snapshot tag and requires a commit
 - `--no-commit` exports files without creating a git commit
 - `--push` pushes the new commit to `origin`
 - `--no-media` omits cached media files from the snapshot
@@ -435,7 +439,10 @@ Relevant flags:
 ```bash
 go run ./cmd/slacrawl update
 go run ./cmd/slacrawl update --repo ~/.slacrawl/share --branch main
+go run ./cmd/slacrawl update --ref backup-2026-06-19
 ```
+
+`--ref` accepts a tag, branch, or commit. Historical imports read Git objects directly and leave the share repo's current branch and working tree unchanged.
 
 ### `report`
 

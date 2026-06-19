@@ -1839,6 +1839,7 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
 	message := fs.String("message", "", "commit message")
+	tag := fs.String("tag", "", "immutable snapshot tag")
 	noCommit := fs.Bool("no-commit", false, "skip git commit")
 	push := fs.Bool("push", false, "push to origin")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "omit cached media files")
@@ -1848,6 +1849,9 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	if fs.NArg() != 0 {
 		return errors.New("publish takes no positional arguments")
 	}
+	if *noCommit && strings.TrimSpace(*tag) != "" {
+		return errors.New("publish --tag requires a commit")
+	}
 	st, err := a.openStore(cfg)
 	if err != nil {
 		return err
@@ -1856,6 +1860,10 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 
 	opts, err := shareOptions(*repoPath, *remote, *branch, cfg.CacheDir, !*noMedia)
 	if err != nil {
+		return err
+	}
+	opts.Tag = strings.TrimSpace(*tag)
+	if err := share.ValidateTag(ctx, opts); err != nil {
 		return err
 	}
 	manifest, err := share.Export(ctx, st, opts)
@@ -1868,6 +1876,10 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 		if err != nil {
 			return err
 		}
+	}
+	createdTag, err := share.CreateImmutableTag(ctx, opts)
+	if err != nil {
+		return err
 	}
 	if *push {
 		if err := share.Push(ctx, opts); err != nil {
@@ -1884,6 +1896,7 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 		"tables":       manifest.Tables,
 		"media":        manifest.Media,
 		"committed":    committed,
+		"tag":          createdTag,
 		"pushed":       *push,
 	}, format, true)
 }
@@ -1977,6 +1990,7 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "local clone path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
+	ref := fs.String("ref", "", "historical git ref to import")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1993,12 +2007,22 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
-	if err := share.Pull(ctx, opts); err != nil {
-		return err
-	}
-	manifest, imported, err := share.ImportIfChanged(ctx, st, opts)
-	if err != nil {
-		return err
+	var manifest share.Manifest
+	var imported bool
+	if strings.TrimSpace(*ref) == "" {
+		if err := share.Pull(ctx, opts); err != nil {
+			return err
+		}
+		manifest, imported, err = share.ImportIfChanged(ctx, st, opts)
+		if err != nil {
+			return err
+		}
+	} else {
+		manifest, err = share.ImportAt(ctx, st, opts, *ref)
+		if err != nil {
+			return err
+		}
+		imported = true
 	}
 	return a.writeOutput("Update", map[string]any{
 		"repo_path":    opts.RepoPath,
@@ -2007,6 +2031,7 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 		"tables":       manifest.Tables,
 		"media":        manifest.Media,
 		"imported":     imported,
+		"ref":          strings.TrimSpace(*ref),
 	}, format, true)
 }
 

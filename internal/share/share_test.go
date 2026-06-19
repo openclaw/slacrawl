@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,23 +151,23 @@ func TestPullPreservesLocalCommitsAheadOfOrigin(t *testing.T) {
 	remoteRepo := filepath.Join(dir, "remote.git")
 	shareRepo := filepath.Join(dir, "share")
 
-	require.NoError(t, gitRun(ctx, "", "init", "-b", "main", remoteWork))
+	require.NoError(t, testGitRun(ctx, "", "init", "-b", "main", remoteWork))
 	require.NoError(t, os.WriteFile(filepath.Join(remoteWork, "manifest.json"), []byte("{}\n"), 0o600))
 	testGitCommit(t, ctx, remoteWork, "seed")
-	require.NoError(t, gitRun(ctx, "", "clone", "--bare", remoteWork, remoteRepo))
+	require.NoError(t, testGitRun(ctx, "", "clone", "--bare", remoteWork, remoteRepo))
 
 	opts := Options{RepoPath: shareRepo, Remote: remoteRepo, Branch: "main"}
 	require.NoError(t, Pull(ctx, opts))
 	require.NoError(t, os.WriteFile(filepath.Join(shareRepo, "local.txt"), []byte("local\n"), 0o600))
 	testGitCommit(t, ctx, shareRepo, "local")
-	localHead, err := gitOutput(ctx, shareRepo, "rev-parse", "HEAD")
+	localHead, err := testGitOutput(ctx, shareRepo, "rev-parse", "HEAD")
 	require.NoError(t, err)
-	originHead, err := gitOutput(ctx, shareRepo, "rev-parse", "origin/main")
+	originHead, err := testGitOutput(ctx, shareRepo, "rev-parse", "origin/main")
 	require.NoError(t, err)
 	require.NotEqual(t, strings.TrimSpace(originHead), strings.TrimSpace(localHead))
 
 	require.NoError(t, Pull(ctx, opts))
-	afterHead, err := gitOutput(ctx, shareRepo, "rev-parse", "HEAD")
+	afterHead, err := testGitOutput(ctx, shareRepo, "rev-parse", "HEAD")
 	require.NoError(t, err)
 	require.Equal(t, strings.TrimSpace(localHead), strings.TrimSpace(afterHead))
 }
@@ -177,13 +179,13 @@ func TestPullInitializesRequestedRemoteBranchOnClone(t *testing.T) {
 	remoteRepo := filepath.Join(dir, "remote.git")
 	shareRepo := filepath.Join(dir, "share")
 
-	require.NoError(t, gitRun(ctx, "", "init", "-b", "main", remoteWork))
+	require.NoError(t, testGitRun(ctx, "", "init", "-b", "main", remoteWork))
 	require.NoError(t, os.WriteFile(filepath.Join(remoteWork, "manifest.json"), []byte("release\n"), 0o600))
 	testGitCommit(t, ctx, remoteWork, "release")
-	require.NoError(t, gitRun(ctx, remoteWork, "branch", "release"))
+	require.NoError(t, testGitRun(ctx, remoteWork, "branch", "release"))
 	require.NoError(t, os.WriteFile(filepath.Join(remoteWork, "manifest.json"), []byte("main\n"), 0o600))
 	testGitCommit(t, ctx, remoteWork, "main")
-	require.NoError(t, gitRun(ctx, "", "clone", "--bare", remoteWork, remoteRepo))
+	require.NoError(t, testGitRun(ctx, "", "clone", "--bare", remoteWork, remoteRepo))
 
 	opts := Options{RepoPath: shareRepo, Remote: remoteRepo, Branch: "release"}
 	require.NoError(t, Pull(ctx, opts))
@@ -215,6 +217,48 @@ func TestImportIfChangedSkipsCurrentManifest(t *testing.T) {
 	_, changed, err = ImportIfChanged(ctx, reader, opts)
 	require.NoError(t, err)
 	require.False(t, changed)
+}
+
+func TestImportAtRestoresTaggedSnapshotWithoutMovingCheckout(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+
+	opts := Options{RepoPath: filepath.Join(dir, "share"), Branch: "main", Tag: "snapshot-old"}
+	_, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+	committed, err := Commit(ctx, opts, "old snapshot")
+	require.NoError(t, err)
+	require.True(t, committed)
+	tag, err := CreateImmutableTag(ctx, opts)
+	require.NoError(t, err)
+	require.Equal(t, "snapshot-old", tag)
+
+	_, err = source.DB().ExecContext(ctx, `update messages set text = 'new snapshot', normalized_text = 'new snapshot'`)
+	require.NoError(t, err)
+	opts.Tag = ""
+	_, err = Export(ctx, source, opts)
+	require.NoError(t, err)
+	committed, err = Commit(ctx, opts, "new snapshot")
+	require.NoError(t, err)
+	require.True(t, committed)
+	headBefore, err := testGitOutput(ctx, opts.RepoPath, "rev-parse", "HEAD")
+	require.NoError(t, err)
+
+	reader, err := store.Open(filepath.Join(dir, "reader.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reader.Close()) }()
+	manifest, err := ImportAt(ctx, reader, opts, "snapshot-old")
+	require.NoError(t, err)
+	require.False(t, manifest.GeneratedAt.IsZero())
+	rows, err := reader.Search(ctx, "", "archive", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "git backed archive works", rows[0].Text)
+	headAfter, err := testGitOutput(ctx, opts.RepoPath, "rev-parse", "HEAD")
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(headBefore), strings.TrimSpace(headAfter))
 }
 
 func TestExportImportRestoresMediaFiles(t *testing.T) {
@@ -347,13 +391,30 @@ func assertArchiveStillPresent(t *testing.T, ctx context.Context, s *store.Store
 
 func testGitCommit(t *testing.T, ctx context.Context, repoPath string, message string) {
 	t.Helper()
-	require.NoError(t, gitRun(ctx, repoPath, "add", "."))
-	require.NoError(t, gitRun(ctx, repoPath,
+	require.NoError(t, testGitRun(ctx, repoPath, "add", "."))
+	require.NoError(t, testGitRun(ctx, repoPath,
 		"-c", "commit.gpgsign=false",
 		"-c", "user.name=slacrawl-test",
 		"-c", "user.email=slacrawl-test@example.invalid",
 		"commit", "-m", message,
 	))
+}
+
+func testGitRun(ctx context.Context, dir string, args ...string) error {
+	_, err := testGitOutput(ctx, dir, args...)
+	return err
+}
+
+func testGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	body, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(body), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(body)))
+	}
+	return string(body), nil
 }
 
 func seedStore(t *testing.T, path string) *store.Store {

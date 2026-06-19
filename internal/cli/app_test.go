@@ -611,7 +611,12 @@ func TestPublishSubscribeAndSearchGitArchive(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stdout}
-	require.NoError(t, app.Run(ctx, []string{"--config", publisherCfgPath, "--json", "publish", "--push"}))
+	require.NoError(t, app.Run(ctx, []string{"--config", publisherCfgPath, "--json", "publish", "--tag", "test-snapshot", "--push"}))
+	var publish map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &publish))
+	require.Equal(t, "test-snapshot", publish["tag"])
+	require.Equal(t, true, publish["pushed"])
+	require.ErrorContains(t, app.Run(ctx, []string{"--config", publisherCfgPath, "publish", "--tag", "invalid", "--no-commit"}), "requires a commit")
 
 	readerCfgPath := filepath.Join(dir, "reader.toml")
 	stdout.Reset()
@@ -633,6 +638,12 @@ func TestPublishSubscribeAndSearchGitArchive(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
 	require.Len(t, rows, 1)
 	require.Equal(t, "archive seed message", rows[0]["text"])
+
+	stdout.Reset()
+	require.NoError(t, app.Run(ctx, []string{"--config", readerCfgPath, "--json", "update", "--ref", "test-snapshot"}))
+	var update map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &update))
+	require.Equal(t, "test-snapshot", update["ref"])
 }
 
 func TestSubscribePersistsNoMedia(t *testing.T) {

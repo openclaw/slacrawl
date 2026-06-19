@@ -1318,7 +1318,7 @@ func (s *Store) SearchMessages(ctx context.Context, opts SearchOptions) ([]Messa
 	case SearchModeRawFTS:
 		return s.searchFTS(ctx, opts.WorkspaceID, query, opts.Limit)
 	case SearchModePhrase:
-		return s.searchFTS(ctx, opts.WorkspaceID, quoteFTS5Phrase(query), opts.Limit)
+		return s.searchFTS(ctx, opts.WorkspaceID, crawlstore.FTS5Phrase(query), opts.Limit)
 	case SearchModeTerms:
 		return s.searchFTS(ctx, opts.WorkspaceID, termsFTS5Query(query), opts.Limit)
 	case SearchModeAuto:
@@ -1329,7 +1329,7 @@ func (s *Store) SearchMessages(ctx context.Context, opts SearchOptions) ([]Messa
 }
 
 func (s *Store) searchAuto(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
-	candidates := []string{quoteFTS5Phrase(query)}
+	candidates := []string{crawlstore.FTS5Phrase(query)}
 	if terms := termsFTS5Query(query); terms != "" && terms != candidates[0] {
 		candidates = append(candidates, terms)
 	}
@@ -1400,18 +1400,14 @@ limit ?
 	return out, s.resolveMessageRowMentions(ctx, out)
 }
 
-func quoteFTS5Phrase(query string) string {
-	return `"` + strings.ReplaceAll(strings.TrimSpace(query), `"`, `""`) + `"`
-}
-
 func termsFTS5Query(query string) string {
 	terms := searchTerms(query)
 	if len(terms) == 0 {
-		return quoteFTS5Phrase(query)
+		return crawlstore.FTS5Phrase(query)
 	}
 	quoted := make([]string, 0, len(terms))
 	for _, term := range terms {
-		quoted = append(quoted, quoteFTS5Phrase(term))
+		quoted = append(quoted, crawlstore.FTS5Phrase(term))
 	}
 	return strings.Join(quoted, " AND ")
 }

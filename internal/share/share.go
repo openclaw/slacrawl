@@ -11,12 +11,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/openclaw/crawlkit/mirror"
 	"github.com/openclaw/slacrawl/internal/media"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -55,6 +56,7 @@ type Options struct {
 	RepoPath     string
 	Remote       string
 	Branch       string
+	Tag          string
 	CacheDir     string
 	IncludeMedia bool
 }
@@ -93,114 +95,47 @@ type SyncState struct {
 }
 
 func EnsureRepo(ctx context.Context, opts Options) error {
-	if strings.TrimSpace(opts.RepoPath) == "" {
-		return errors.New("share repo path is empty")
-	}
-	if _, err := os.Stat(filepath.Join(opts.RepoPath, ".git")); err == nil {
-		return nil
-	}
-	if strings.TrimSpace(opts.Remote) != "" {
-		if err := os.MkdirAll(filepath.Dir(opts.RepoPath), 0o750); err != nil {
-			return fmt.Errorf("mkdir share parent: %w", err)
-		}
-		if err := gitRun(ctx, "", "clone", opts.Remote, opts.RepoPath); err != nil {
-			return err
-		}
-		if branch := normalizeBranch(opts.Branch); branch != "" {
-			remoteRef := "refs/remotes/origin/" + branch
-			if _, err := gitOutput(ctx, opts.RepoPath, "rev-parse", "--verify", remoteRef); err == nil {
-				return gitRun(ctx, opts.RepoPath, "checkout", "-B", branch, "origin/"+branch)
-			}
-			if err := gitRun(ctx, opts.RepoPath, "checkout", "-B", branch); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := os.MkdirAll(opts.RepoPath, 0o750); err != nil {
-		return fmt.Errorf("mkdir share repo: %w", err)
-	}
-	if err := gitRun(ctx, opts.RepoPath, "init"); err != nil {
-		return err
-	}
-	if branch := normalizeBranch(opts.Branch); branch != "" {
-		if err := gitRun(ctx, opts.RepoPath, "checkout", "-B", branch); err != nil {
-			return err
-		}
-	}
-	return nil
+	return mirror.EnsureRepo(ctx, mirrorOptions(opts))
 }
 
 func Pull(ctx context.Context, opts Options) error {
 	if strings.TrimSpace(opts.Remote) == "" {
 		return EnsureRepo(ctx, opts)
 	}
-	if err := EnsureRepo(ctx, opts); err != nil {
+	if err := mirror.EnsureRemote(ctx, mirrorOptions(opts)); err != nil {
 		return err
 	}
-	if err := gitRun(ctx, opts.RepoPath, "fetch", "--prune", "origin"); err != nil {
-		return err
-	}
-	branch := normalizeBranch(opts.Branch)
-	remoteRef := "refs/remotes/origin/" + branch
-	_, remoteErr := gitOutput(ctx, opts.RepoPath, "rev-parse", "--verify", remoteRef)
-	_, localErr := gitOutput(ctx, opts.RepoPath, "rev-parse", "--verify", "refs/heads/"+branch)
-	if localErr == nil {
-		if err := gitRun(ctx, opts.RepoPath, "checkout", branch); err != nil {
-			return err
-		}
-		if remoteErr != nil {
-			return nil
-		}
-		if err := gitRun(ctx, opts.RepoPath, "merge", "--ff-only", "origin/"+branch); err != nil {
-			return fmt.Errorf("fast-forward %s from origin/%s: %w", branch, branch, err)
-		}
-		return nil
-	}
-	if remoteErr != nil {
-		return gitRun(ctx, opts.RepoPath, "checkout", "-B", branch)
-	}
-	return gitRun(ctx, opts.RepoPath, "checkout", "-B", branch, "origin/"+branch)
+	pullOpts := mirrorOptions(opts)
+	pullOpts.Remote = ""
+	return mirror.PullCurrent(ctx, pullOpts)
 }
 
 func Commit(ctx context.Context, opts Options, message string) (bool, error) {
-	if err := gitRun(ctx, opts.RepoPath, "add", "."); err != nil {
-		return false, err
-	}
-	out, err := gitOutput(ctx, opts.RepoPath, "status", "--porcelain")
-	if err != nil {
-		return false, err
-	}
-	if strings.TrimSpace(out) == "" {
-		return false, nil
-	}
 	if strings.TrimSpace(message) == "" {
 		message = "sync: slack archive"
 	}
-	if err := gitRun(ctx, opts.RepoPath,
-		"-c", "commit.gpgsign=false",
-		"-c", "user.name=slacrawl",
-		"-c", "user.email=slacrawl@example.invalid",
-		"commit", "-m", message,
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+	return mirror.CommitPaths(ctx, mirrorOptions(opts), message, []string{"."})
 }
 
 func Push(ctx context.Context, opts Options) error {
-	branch := normalizeBranch(opts.Branch)
-	out, err := gitOutput(ctx, opts.RepoPath, "push", "-u", "origin", branch)
-	if err == nil {
+	if strings.TrimSpace(opts.Tag) == "" {
+		return mirror.Push(ctx, mirrorOptions(opts))
+	}
+	return mirror.PushAtomic(ctx, mirrorOptions(opts), "HEAD:refs/heads/"+normalizeBranch(opts.Branch), "refs/tags/"+strings.TrimSpace(opts.Tag))
+}
+
+func ValidateTag(ctx context.Context, opts Options) error {
+	if strings.TrimSpace(opts.Tag) == "" {
 		return nil
 	}
-	if !isNonFastForwardPush(out) {
-		return fmt.Errorf("git push -u origin %s: %w\n%s", branch, err, strings.TrimSpace(out))
+	if err := Pull(ctx, opts); err != nil {
+		return err
 	}
-	if pullErr := gitRun(ctx, opts.RepoPath, "pull", "--rebase", "--autostash", "origin", branch); pullErr != nil {
-		return fmt.Errorf("rebase before push retry: %w", pullErr)
-	}
-	return gitRun(ctx, opts.RepoPath, "push", "-u", "origin", branch)
+	return mirror.ValidateTag(ctx, mirrorOptions(opts), opts.Tag)
+}
+
+func CreateImmutableTag(ctx context.Context, opts Options) (string, error) {
+	return mirror.CreateImmutableTag(ctx, mirrorOptions(opts), opts.Tag)
 }
 
 func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
@@ -217,7 +152,12 @@ func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error)
 }
 
 func exportLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
-	if err := EnsureRepo(ctx, opts); err != nil {
+	if strings.TrimSpace(opts.Remote) != "" {
+		if err := mirror.EnsureRemote(ctx, mirrorOptions(opts)); err != nil {
+			return Manifest{}, err
+		}
+	}
+	if err := mirror.SyncForWrite(ctx, mirrorOptions(opts)); err != nil {
 		return Manifest{}, err
 	}
 	dataDir := filepath.Join(opts.RepoPath, "tables")
@@ -489,6 +429,10 @@ func ReadManifest(repoPath string) (Manifest, error) {
 		}
 		return Manifest{}, fmt.Errorf("read share manifest: %w", err)
 	}
+	return parseManifest(data)
+}
+
+func parseManifest(data []byte) (Manifest, error) {
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("parse share manifest: %w", err)
@@ -497,6 +441,71 @@ func ReadManifest(repoPath string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("unsupported share manifest version %d", manifest.Version)
 	}
 	return manifest, nil
+}
+
+// ImportAt restores a snapshot from a Git ref without changing the share checkout.
+func ImportAt(ctx context.Context, s *store.Store, opts Options, ref string) (Manifest, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return Import(ctx, s, opts)
+	}
+	if err := mirror.Fetch(ctx, mirrorOptions(opts)); err != nil {
+		return Manifest{}, err
+	}
+	manifestBody, commit, err := mirror.ReadFileAt(ctx, mirrorOptions(opts), ref, ManifestName)
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest, err := parseManifest(manifestBody)
+	if err != nil {
+		return Manifest{}, err
+	}
+	tempDir, err := os.MkdirTemp("", "slacrawl-share-ref-*")
+	if err != nil {
+		return Manifest{}, fmt.Errorf("create historical share directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+	if err := os.WriteFile(filepath.Join(tempDir, ManifestName), manifestBody, 0o600); err != nil {
+		return Manifest{}, fmt.Errorf("write historical manifest: %w", err)
+	}
+	for _, table := range manifest.Tables {
+		for _, file := range tableManifestFiles(table) {
+			if err := materializeRefFile(ctx, mirrorOptions(opts), commit, file, tempDir); err != nil {
+				return Manifest{}, err
+			}
+		}
+	}
+	if opts.IncludeMedia && manifest.Media != nil {
+		for _, item := range manifest.Media.Items {
+			if err := materializeRefFile(ctx, mirrorOptions(opts), commit, item.Path, tempDir); err != nil {
+				return Manifest{}, err
+			}
+		}
+	}
+	historicalOpts := opts
+	historicalOpts.RepoPath = tempDir
+	historicalOpts.Remote = ""
+	historicalOpts.Tag = ""
+	return Import(ctx, s, historicalOpts)
+}
+
+func materializeRefFile(ctx context.Context, opts mirror.Options, ref, filePath, targetRoot string) error {
+	clean := path.Clean(filepath.ToSlash(strings.TrimSpace(filePath)))
+	if clean == "." || clean == ".." || path.IsAbs(clean) || strings.HasPrefix(clean, "../") || strings.ContainsRune(clean, '\x00') {
+		return fmt.Errorf("invalid historical share path %q", filePath)
+	}
+	body, _, err := mirror.ReadFileAt(ctx, opts, ref, clean)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(targetRoot, filepath.FromSlash(clean))
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		return fmt.Errorf("create historical share directory: %w", err)
+	}
+	if err := os.WriteFile(target, body, 0o600); err != nil {
+		return fmt.Errorf("write historical share file %s: %w", clean, err)
+	}
+	return nil
 }
 
 func exportTable(ctx context.Context, db *sql.DB, dataDir, table string) (TableManifest, error) {
@@ -1194,29 +1203,13 @@ func normalizeBranch(branch string) string {
 	return strings.TrimSpace(branch)
 }
 
-func gitRun(ctx context.Context, dir string, args ...string) error {
-	out, err := gitOutput(ctx, dir, args...)
-	if err != nil {
-		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(out))
+func mirrorOptions(opts Options) mirror.Options {
+	return mirror.Options{
+		RepoPath: strings.TrimSpace(opts.RepoPath),
+		Remote:   strings.TrimSpace(opts.Remote),
+		Branch:   normalizeBranch(opts.Branch),
+		DirMode:  0o750,
 	}
-	return nil
-}
-
-func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	//nolint:gosec // This helper only invokes git with caller-controlled subcommands.
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	body, err := cmd.CombinedOutput()
-	return string(body), err
-}
-
-func isNonFastForwardPush(out string) bool {
-	lower := strings.ToLower(out)
-	return strings.Contains(lower, "non-fast-forward") ||
-		strings.Contains(lower, "fetch first") ||
-		strings.Contains(lower, "failed to push some refs")
 }
 
 func parseSyncTime(raw string) time.Time {

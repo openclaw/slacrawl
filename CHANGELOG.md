@@ -4,6 +4,8 @@
 
 ### Maintenance
 
+- Added immutable Git-share snapshot tags and non-mutating historical restores with `update --ref`, using CrawlKit for shared Git history mechanics.
+- Moved FTS5 query escaping onto CrawlKit and refreshed Go dependencies.
 - Updated crawlkit through 0.12.2 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.
 
 ## 0.7.2 - 2026-06-10

@@ -312,6 +312,8 @@ Share config:
 - `[share].repo_path` is the local clone / working repo path used for publish and update
 - `[share].branch` defaults to `main`
 - `[share].auto_update` controls whether read commands import stale git snapshots before querying
+- `publish --tag <name>` creates an immutable tag for a committed snapshot
+- `update --ref <tag-or-commit>` restores a historical snapshot without changing the share checkout
 - `[share].stale_after` defines how old the last successful import can be before auto-refresh runs
 - share sync state should record both the last successful import time and the last imported manifest generation time
 
