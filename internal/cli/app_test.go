@@ -533,6 +533,8 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "connector")
 	require.Contains(t, out, "purge")
 	require.Contains(t, out, "--older-than")
+	require.Contains(t, out, "--tag")
+	require.Contains(t, out, "--ref")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -555,6 +557,8 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "connector")
 	require.Contains(t, out, "purge")
 	require.Contains(t, out, "--keep-media")
+	require.Contains(t, out, "--tag[immutable snapshot tag]")
+	require.Contains(t, out, "--ref[historical Git ref to import]")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {
