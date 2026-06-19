@@ -2,6 +2,10 @@
 
 ## 0.7.3 - Unreleased
 
+### Maintenance
+
+- Updated crawlkit through 0.12.2 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.
+
 ## 0.7.2 - 2026-06-10
 
 ### Changes
