@@ -10,6 +10,7 @@
 
 - Updated crawlkit through 0.12.2 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.
 - Updated the pinned GoReleaser CI action to 7.2.2.
+- Updated the TruffleHog secret-scanning action to 3.95.6.
 
 ## 0.7.2 - 2026-06-10
 
