@@ -61,9 +61,10 @@ func (s *Store) PurgeMessages(ctx context.Context, opts PurgeOptions) (PurgeRepo
 	}
 	if _, err := tx.ExecContext(ctx, `
 create temporary table slacrawl_purge_message_keys (
+  workspace_id text not null,
   channel_id text not null,
   ts text not null,
-  primary key (channel_id, ts)
+  primary key (workspace_id, channel_id, ts)
 )
 `); err != nil {
 		return PurgeReport{}, fmt.Errorf("create purge selection: %w", err)
@@ -77,8 +78,8 @@ create temporary table slacrawl_purge_message_keys (
 		args = append(args, workspaceID)
 	}
 	if _, err := tx.ExecContext(ctx, `
-insert into `+purgeMessageKeysTable+` (channel_id, ts)
-select channel_id, ts
+insert into `+purgeMessageKeysTable+` (workspace_id, channel_id, ts)
+select workspace_id, channel_id, ts
 from messages
 where (
   (
@@ -235,7 +236,7 @@ func selectUntimestampedPurgeDrafts(ctx context.Context, tx *sql.Tx, before time
 		args = append(args, workspaceID)
 	}
 	rows, err := tx.QueryContext(ctx, `
-select channel_id, ts, updated_at
+select workspace_id, channel_id, ts, updated_at
 from messages
 where ts like 'draft:%'
   and not (`+timestampedDraftSQL+`)
@@ -244,13 +245,14 @@ where ts like 'draft:%'
 		return fmt.Errorf("select untimestamped purge drafts: %w", err)
 	}
 	type draftKey struct {
-		channelID string
-		ts        string
+		workspaceID string
+		channelID   string
+		ts          string
 	}
 	var selected []draftKey
 	for rows.Next() {
-		var channelID, ts, updatedAtValue string
-		if err := rows.Scan(&channelID, &ts, &updatedAtValue); err != nil {
+		var workspaceID, channelID, ts, updatedAtValue string
+		if err := rows.Scan(&workspaceID, &channelID, &ts, &updatedAtValue); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("read untimestamped purge draft: %w", err)
 		}
@@ -264,7 +266,7 @@ where ts like 'draft:%'
 			draftCutoff = before.Truncate(time.Second)
 		}
 		if updatedAt.Before(draftCutoff) {
-			selected = append(selected, draftKey{channelID: channelID, ts: ts})
+			selected = append(selected, draftKey{workspaceID: workspaceID, channelID: channelID, ts: ts})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -276,9 +278,9 @@ where ts like 'draft:%'
 	}
 	for _, key := range selected {
 		if _, err := tx.ExecContext(ctx, `
-insert or ignore into `+purgeMessageKeysTable+` (channel_id, ts)
-values (?, ?)
-`, key.channelID, key.ts); err != nil {
+insert or ignore into `+purgeMessageKeysTable+` (workspace_id, channel_id, ts)
+values (?, ?, ?)
+`, key.workspaceID, key.channelID, key.ts); err != nil {
 			return fmt.Errorf("select untimestamped purge draft %s/%s: %w", key.channelID, key.ts, err)
 		}
 	}
@@ -297,21 +299,24 @@ func readPurgeReport(ctx context.Context, tx *sql.Tx) (PurgeReport, error) {
 select count(*)
 from message_events e
 join ` + purgeMessageKeysTable + ` p on p.channel_id = e.channel_id and p.ts = e.ts
+join messages m on m.workspace_id = p.workspace_id and m.channel_id = e.channel_id and m.ts = e.ts
 `, &report.MessageEvents},
 		{"message files", `
 select count(*)
 from message_files f
-join ` + purgeMessageKeysTable + ` p on p.channel_id = f.channel_id and p.ts = f.ts
+join ` + purgeMessageKeysTable + ` p on p.workspace_id = f.workspace_id and p.channel_id = f.channel_id and p.ts = f.ts
 `, &report.MessageFiles},
 		{"mentions", `
 select count(*)
 from message_mentions m
 join ` + purgeMessageKeysTable + ` p on p.channel_id = m.channel_id and p.ts = m.ts
+join messages msg on msg.workspace_id = p.workspace_id and msg.channel_id = m.channel_id and msg.ts = m.ts
 `, &report.Mentions},
 		{"embedding jobs", `
 select count(*)
 from embedding_jobs e
 join ` + purgeMessageKeysTable + ` p on p.channel_id = e.channel_id and p.ts = e.ts
+join messages m on m.workspace_id = p.workspace_id and m.channel_id = e.channel_id and m.ts = e.ts
 `, &report.EmbeddingJobs},
 		{"FTS entries", `
 select count(*)
@@ -328,7 +333,7 @@ join ` + purgeMessageKeysTable + ` p on f.message_key = p.channel_id || '|' || p
 	rows, err := tx.QueryContext(ctx, `
 select f.media_path, max(f.content_size)
 from message_files f
-join `+purgeMessageKeysTable+` p on p.channel_id = f.channel_id and p.ts = f.ts
+join `+purgeMessageKeysTable+` p on p.workspace_id = f.workspace_id and p.channel_id = f.channel_id and p.ts = f.ts
 where trim(coalesce(f.media_path, '')) <> ''
   and not exists (
     select 1
@@ -337,7 +342,7 @@ where trim(coalesce(f.media_path, '')) <> ''
       and not exists (
         select 1
         from `+purgeMessageKeysTable+` selected
-        where selected.channel_id = other.channel_id and selected.ts = other.ts
+        where selected.workspace_id = other.workspace_id and selected.channel_id = other.channel_id and selected.ts = other.ts
       )
   )
 group by f.media_path
@@ -369,24 +374,27 @@ func deletePurgeSelection(ctx context.Context, tx *sql.Tx) error {
 delete from message_events
 where exists (
   select 1 from ` + purgeMessageKeysTable + ` p
+  join messages m on m.workspace_id = p.workspace_id and m.channel_id = message_events.channel_id and m.ts = message_events.ts
   where p.channel_id = message_events.channel_id and p.ts = message_events.ts
 )`},
 		{"message files", `
 delete from message_files
 where exists (
   select 1 from ` + purgeMessageKeysTable + ` p
-  where p.channel_id = message_files.channel_id and p.ts = message_files.ts
+  where p.workspace_id = message_files.workspace_id and p.channel_id = message_files.channel_id and p.ts = message_files.ts
 )`},
 		{"mentions", `
 delete from message_mentions
 where exists (
   select 1 from ` + purgeMessageKeysTable + ` p
+  join messages m on m.workspace_id = p.workspace_id and m.channel_id = message_mentions.channel_id and m.ts = message_mentions.ts
   where p.channel_id = message_mentions.channel_id and p.ts = message_mentions.ts
 )`},
 		{"embedding jobs", `
 delete from embedding_jobs
 where exists (
   select 1 from ` + purgeMessageKeysTable + ` p
+  join messages m on m.workspace_id = p.workspace_id and m.channel_id = embedding_jobs.channel_id and m.ts = embedding_jobs.ts
   where p.channel_id = embedding_jobs.channel_id and p.ts = embedding_jobs.ts
 )`},
 		{"FTS entries", `
@@ -399,7 +407,7 @@ where exists (
 delete from messages
 where exists (
   select 1 from ` + purgeMessageKeysTable + ` p
-  where p.channel_id = messages.channel_id and p.ts = messages.ts
+  where p.workspace_id = messages.workspace_id and p.channel_id = messages.channel_id and p.ts = messages.ts
 )`},
 	}
 	for _, deletion := range deletes {

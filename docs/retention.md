@@ -33,6 +33,11 @@ When `workspace_id` is set in configuration, purge uses that workspace by
 default. Pass `--workspace` for a different workspace or `--all-workspaces` for
 an explicit archive-wide purge.
 
+Workspace-scoped purge carries `workspace_id` through its temporary selection
+and deletion set. The archive schema still treats Slack `channel_id` plus `ts`
+as the persistent message identity, so imports and syncs must not create two
+messages with the same `channel_id` and `ts` in different workspaces.
+
 Pass `--force` to execute:
 
 ```bash
