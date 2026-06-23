@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/openclaw/slacrawl/internal/config"
@@ -49,6 +50,8 @@ type Options struct {
 	LatestOnly      bool
 	Concurrency     int
 	AutoJoin        *bool
+	APIURL          string
+	HTTPClient      *http.Client
 	Logger          *slog.Logger
 }
 
@@ -64,7 +67,7 @@ func Run(ctx context.Context, cfg config.Config, st *store.Store, opts Options) 
 func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts Options, tokens config.Tokens) (Summary, error) {
 	summary := Summary{}
 	includeDMs := cfg.IncludeDMsResolved(tokens.User != "")
-	apiClient := slackapi.New(tokens).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
+	apiClient := slackapi.NewWithOptions(tokens, opts.APIURL, opts.HTTPClient).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
 
 	switch opts.Source {
 	case SourceAPI:

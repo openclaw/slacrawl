@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
+	"github.com/openclaw/slacrawl/internal/syncer"
 )
 
 func TestParseLookback(t *testing.T) {
@@ -316,6 +319,60 @@ func TestSyncWithoutWorkspaceFansOutConfiguredWorkspaces(t *testing.T) {
 
 	targets = resolveWorkspaceTargets(cfg, resolveSyncWorkspaceID("T222", true))
 	require.Equal(t, []string{"T222"}, targets)
+}
+
+func TestRunSyncTargetsUsesWorkspaceTokensAndRejectsMismatchedAuth(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("SLACK_T1_BOT_TOKEN", "xoxb-t1")
+	t.Setenv("SLACK_T2_BOT_TOKEN", "xoxb-t2")
+
+	cfg := config.Default()
+	cfg.WorkspaceID = ""
+	cfg.Workspaces = []config.Workspace{{ID: "T1"}, {ID: "T2"}}
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Enabled = false
+	cfg.Sync.Concurrency = 1
+
+	server := newCLIFanoutSlackServer(t, map[string]string{"xoxb-t1": "T1", "xoxb-t2": "T2"})
+	defer server.Close()
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	app := &App{}
+	_, err = app.runSyncTargets(ctx, cfg, st, syncer.Options{
+		Source:      syncer.SourceAPI,
+		Concurrency: 1,
+		APIURL:      server.URL + "/",
+		HTTPClient:  server.Client(),
+	})
+	require.NoError(t, err)
+	rows, err := st.QueryReadOnly(ctx, "select workspace_id, text from messages order by workspace_id")
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"workspace_id": "T1", "text": "message from xoxb-t1"},
+		{"workspace_id": "T2", "text": "message from xoxb-t2"},
+	}, rows)
+
+	mismatchServer := newCLIFanoutSlackServer(t, map[string]string{"xoxb-t1": "T1", "xoxb-t2": "T999"})
+	defer mismatchServer.Close()
+	mismatchStore, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mismatchStore.Close()) }()
+	_, err = app.runSyncTargets(ctx, cfg, mismatchStore, syncer.Options{
+		Source:      syncer.SourceAPI,
+		Concurrency: 1,
+		APIURL:      mismatchServer.URL + "/",
+		HTTPClient:  mismatchServer.Client(),
+	})
+	require.ErrorContains(t, err, "sync workspace T2")
+	require.ErrorContains(t, err, "authenticated workspace T999 does not match requested workspace T2")
+	rows, err = mismatchStore.QueryReadOnly(ctx, "select workspace_id, text from messages order by workspace_id")
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"workspace_id": "T1", "text": "message from xoxb-t1"},
+	}, rows)
 }
 
 func TestWorkspaceFilteredReadCommands(t *testing.T) {
@@ -1028,4 +1085,49 @@ type cliRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn cliRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return fn(r)
+}
+
+func newCLIFanoutSlackServer(t *testing.T, teamByToken map[string]string) *httptest.Server {
+	t.Helper()
+	channelByTeam := map[string]string{"T1": "C111", "T2": "C222", "T999": "C999"}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		token := cliSlackToken(r)
+		teamID := teamByToken[token]
+		if teamID == "" {
+			_, _ = w.Write([]byte(`{"ok":false,"error":"invalid_auth"}`))
+			return
+		}
+		switch r.URL.Path {
+		case "/auth.test":
+			_, _ = fmt.Fprintf(w, `{"ok":true,"team":"%s","team_id":"%s","user":"bot","user_id":"Ubot","bot_id":"B%s"}`, teamID, teamID, teamID)
+		case "/conversations.list":
+			values := cliSlackForm(r)
+			if values.Get("team_id") != "" && values.Get("team_id") != teamID {
+				_, _ = fmt.Fprintf(w, `{"ok":false,"error":"wrong_team","needed":"%s","got":"%s"}`, teamID, values.Get("team_id"))
+				return
+			}
+			channelID := channelByTeam[teamID]
+			_, _ = fmt.Fprintf(w, `{"ok":true,"channels":[{"id":"%s","name":"general-%s","is_channel":true,"is_private":false,"is_archived":false,"is_shared":false,"is_general":true,"topic":{"value":""},"purpose":{"value":""}}],"response_metadata":{"next_cursor":""}}`, channelID, teamID)
+		case "/conversations.history":
+			_, _ = fmt.Fprintf(w, `{"ok":true,"messages":[{"type":"message","user":"U%s","text":"message from %s","ts":"1710000000.%06d"}],"response_metadata":{"next_cursor":""}}`, teamID, token, len(token))
+		case "/users.list":
+			_, _ = fmt.Fprintf(w, `{"ok":true,"members":[{"id":"U%s","name":"user-%s","real_name":"User %s","profile":{"display_name":"user-%s","title":"Engineer"}}],"response_metadata":{"next_cursor":""}}`, teamID, teamID, teamID, teamID)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func cliSlackToken(r *http.Request) string {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	return cliSlackForm(r).Get("token")
+}
+
+func cliSlackForm(r *http.Request) url.Values {
+	_ = r.ParseForm()
+	return r.Form
 }

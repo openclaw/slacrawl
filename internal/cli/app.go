@@ -37,6 +37,7 @@ type App struct {
 	outputFormat OutputFormat
 	now          func() time.Time
 	httpClient   *http.Client
+	apiURL       string
 }
 
 type OutputFormat string
@@ -554,6 +555,8 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 		LatestOnly:  *latestOnly,
 		Concurrency: *concurrency,
 		AutoJoin:    boolPtr(*autoJoin),
+		APIURL:      a.apiURL,
+		HTTPClient:  a.httpClient,
 		Logger:      progressLogger(a.Stderr),
 	}
 	st, err := a.openStore(cfg)
@@ -1344,7 +1347,7 @@ func (a *App) runTail(ctx context.Context, configPath string, args []string) err
 		targets = []string{coalesce(*workspaceID, cfg.WorkspaceID)}
 	}
 	if len(targets) == 1 {
-		return slackapi.New(cfg.ResolveTokensForWorkspace(targets[0])).Tail(ctx, st, targets[0], repairDuration)
+		return slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(targets[0]), a.apiURL, a.httpClient).Tail(ctx, st, targets[0], repairDuration)
 	}
 	return a.runTailTargets(ctx, st, cfg, targets, repairDuration)
 }
@@ -1640,7 +1643,7 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 			runOpts.WorkspaceID = workspaceID
 			summary, err := syncer.RunWithTokens(ctx, cfg, st, runOpts, cfg.ResolveTokensForWorkspace(workspaceID))
 			if err != nil {
-				return syncer.Summary{}, err
+				return syncer.Summary{}, fmt.Errorf("sync workspace %s: %w", workspaceID, err)
 			}
 			last = summary
 		}
@@ -1664,7 +1667,7 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 		runOpts.WorkspaceID = workspaceID
 		summary, err := syncer.RunWithTokens(ctx, cfg, st, runOpts, cfg.ResolveTokensForWorkspace(workspaceID))
 		if err != nil {
-			return syncer.Summary{}, err
+			return syncer.Summary{}, fmt.Errorf("sync workspace %s: %w", workspaceID, err)
 		}
 		last = summary
 	}
@@ -1731,7 +1734,7 @@ func (a *App) runTailTargets(ctx context.Context, st *store.Store, cfg config.Co
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := slackapi.New(cfg.ResolveTokensForWorkspace(workspaceID)).Tail(ctx, st, workspaceID, repairEvery)
+			err := slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(workspaceID), a.apiURL, a.httpClient).Tail(ctx, st, workspaceID, repairEvery)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- fmt.Errorf("tail %s: %w", workspaceID, err)
 				cancel()

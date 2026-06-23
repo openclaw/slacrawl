@@ -63,6 +63,40 @@ func TestSyncHandlesRateLimitAndThreadCoverage(t *testing.T) {
 	require.Contains(t, progressLogs.String(), `source=api-bot`)
 }
 
+func TestSyncRejectsRequestedWorkspaceAuthMismatch(t *testing.T) {
+	server := newMockSlackServer(t)
+	defer server.Close()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	err := client.Sync(context.Background(), st, SyncOptions{WorkspaceID: "T999"})
+	require.ErrorContains(t, err, "authenticated workspace T123 does not match requested workspace T999")
+	require.Equal(t, 2, server.calls("auth.test"))
+
+	status, err := st.Status(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, status.Workspaces)
+	require.Zero(t, status.Messages)
+}
+
+func TestTailRejectsRequestedWorkspaceAuthMismatch(t *testing.T) {
+	server := newMockSlackServer(t)
+	defer server.Close()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", App: "xapp-test"}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	client.socketModeFn = func(*slack.Client) socketModeRunner {
+		return &fakeSocketMode{events: make(chan socketmode.Event)}
+	}
+	err := client.Tail(context.Background(), st, "T999", 0)
+	require.ErrorContains(t, err, "authenticated workspace T123 does not match requested workspace T999")
+	require.Equal(t, 2, server.calls("auth.test"))
+}
+
 func TestSyncIndexesRawHistoryBlockPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -943,6 +977,8 @@ func newRepairSlackServer(t *testing.T) *mockSlackServer {
 
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/auth.test":
+			_, _ = w.Write([]byte(`{"ok":true,"team":"Test Team","team_id":"T123","user":"bot","user_id":"Ubot","bot_id":"B123"}`))
 		case "/conversations.list":
 			_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C123","name":"general","is_channel":true,"is_private":false,"is_archived":false,"is_shared":false,"is_general":true,"topic":{"value":"topic"},"purpose":{"value":"purpose"}}],"response_metadata":{"next_cursor":""}}`))
 		case "/conversations.history":
