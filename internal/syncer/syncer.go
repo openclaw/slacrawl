@@ -41,6 +41,7 @@ func ParseSource(value string) (Source, error) {
 type Options struct {
 	Source          Source
 	WorkspaceID     string
+	WorkspaceSet    bool
 	Channels        []string
 	ExcludeChannels []string
 	Since           string
@@ -108,10 +109,17 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		}); err != nil {
 			return summary, err
 		}
-		return syncDesktop(ctx, cfg, st, opts)
+		return syncDesktop(ctx, cfg, st, desktopOptionsForSourceAll(opts))
 	default:
 		return summary, errors.New("unsupported source")
 	}
+}
+
+func desktopOptionsForSourceAll(opts Options) Options {
+	if !opts.WorkspaceSet {
+		opts.WorkspaceID = ""
+	}
+	return opts
 }
 
 func syncDesktop(ctx context.Context, cfg config.Config, st *store.Store, opts Options) (Summary, error) {

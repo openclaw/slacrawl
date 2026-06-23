@@ -538,14 +538,13 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	if err != nil {
 		return err
 	}
-	resolvedWorkspaceID := coalesce(*workspaceID, cfg.WorkspaceID)
-	if resolvedSource == syncer.SourceDesktop && !flagWasSet(fs, "workspace") {
-		resolvedWorkspaceID = ""
-	}
+	workspaceSet := flagWasSet(fs, "workspace")
+	resolvedWorkspaceID := resolveSyncWorkspaceID(*workspaceID, workspaceSet)
 	runOptions := syncer.Options{
-		Source:      resolvedSource,
-		WorkspaceID: resolvedWorkspaceID,
-		Channels:    csv(*channels),
+		Source:       resolvedSource,
+		WorkspaceID:  resolvedWorkspaceID,
+		WorkspaceSet: workspaceSet,
+		Channels:     csv(*channels),
 		ExcludeChannels: mergeStringSlices(
 			cfg.Sync.ExcludeChannels,
 			csv(*excludeChannels),
@@ -1633,6 +1632,28 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 		opts.WorkspaceID = workspaceID
 		return syncer.Run(ctx, cfg, st, opts)
 	}
+	if opts.Source == syncer.SourceAll && !opts.WorkspaceSet && len(targets) > 0 {
+		var last syncer.Summary
+		for _, workspaceID := range targets {
+			runOpts := opts
+			runOpts.Source = syncer.SourceAPI
+			runOpts.WorkspaceID = workspaceID
+			summary, err := syncer.RunWithTokens(ctx, cfg, st, runOpts, cfg.ResolveTokensForWorkspace(workspaceID))
+			if err != nil {
+				return syncer.Summary{}, err
+			}
+			last = summary
+		}
+		runOpts := opts
+		runOpts.Source = syncer.SourceDesktop
+		runOpts.WorkspaceID = ""
+		summary, err := syncer.Run(ctx, cfg, st, runOpts)
+		if err != nil {
+			return syncer.Summary{}, err
+		}
+		last.Desktop = summary.Desktop
+		return last, nil
+	}
 	if len(targets) == 0 {
 		return syncer.Run(ctx, cfg, st, opts)
 	}
@@ -1777,6 +1798,13 @@ func coalesce(primary string, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+func resolveSyncWorkspaceID(workspaceID string, workspaceSet bool) string {
+	if workspaceSet {
+		return strings.TrimSpace(workspaceID)
+	}
+	return ""
 }
 
 func mediaToken(cfg config.Config, workspaceID string) string {

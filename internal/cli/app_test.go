@@ -303,6 +303,21 @@ func TestDesktopSyncDoesNotInheritDefaultWorkspaceFilter(t *testing.T) {
 	requireWorkspaceCounts(t, cfg.DBPath, map[string]int{"T111": 0, "T222": 1})
 }
 
+func TestSyncWithoutWorkspaceFansOutConfiguredWorkspaces(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceID = "T111"
+	cfg.Workspaces = []config.Workspace{
+		{ID: "T111"},
+		{ID: "T222"},
+	}
+
+	targets := resolveWorkspaceTargets(cfg, resolveSyncWorkspaceID("", false))
+	require.Equal(t, []string{"T111", "T222"}, targets)
+
+	targets = resolveWorkspaceTargets(cfg, resolveSyncWorkspaceID("T222", true))
+	require.Equal(t, []string{"T222"}, targets)
+}
+
 func TestWorkspaceFilteredReadCommands(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.toml")
