@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -275,6 +276,33 @@ func TestSyncAcceptsWiretapSourceAlias(t *testing.T) {
 	require.Equal(t, false, desktop["available"])
 }
 
+func TestDesktopSyncDoesNotInheritDefaultWorkspaceFilter(t *testing.T) {
+	tmp := t.TempDir()
+	desktopPath := writeDesktopFixture(t, filepath.Join(tmp, "Slack"))
+
+	cfg := config.Default()
+	cfg.WorkspaceID = "T111"
+	cfg.DBPath = filepath.Join(tmp, "all.db")
+	cfg.Slack.Bot.Enabled = false
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Path = desktopPath
+	configPath := filepath.Join(tmp, "config.toml")
+	require.NoError(t, cfg.Save(configPath))
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	require.NoError(t, app.Run(context.Background(), []string{"--config", configPath, "--json", "sync", "--source", "desktop"}))
+	requireWorkspaceCounts(t, cfg.DBPath, map[string]int{"T111": 1, "T222": 1})
+
+	cfg.DBPath = filepath.Join(tmp, "filtered.db")
+	filteredConfigPath := filepath.Join(tmp, "filtered.toml")
+	require.NoError(t, cfg.Save(filteredConfigPath))
+	stdout.Reset()
+	require.NoError(t, app.Run(context.Background(), []string{"--config", filteredConfigPath, "--json", "sync", "--source", "desktop", "--workspace", "T222"}))
+	requireWorkspaceCounts(t, cfg.DBPath, map[string]int{"T111": 0, "T222": 1})
+}
+
 func TestWorkspaceFilteredReadCommands(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.toml")
@@ -396,6 +424,34 @@ func mustTime(t *testing.T, value string) time.Time {
 	parsed, err := time.Parse(time.RFC3339, value)
 	require.NoError(t, err)
 	return parsed
+}
+
+func writeDesktopFixture(t *testing.T, root string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "storage", "root-state.json"), []byte(`{"appTeams":{"T111":{},"T222":{}},"workspaces":{"T111":{},"T222":{}}}`), 0o600))
+
+	db, err := leveldb.OpenFile(filepath.Join(root, "Local Storage", "leveldb"), nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte("_https://app.slack.comlocalConfig_v2"), []byte(`{"teams":{"T111":{"id":"T111","name":"Team One","domain":"one","user_id":"U111"},"T222":{"id":"T222","name":"Team Two","domain":"two","user_id":"U222"}}}`), nil))
+	require.NoError(t, db.Put([]byte("_https://app.slack.compersist-v1::T111::U111::recentlyJoinedChannels"), []byte(`{"C111":{}}`), nil))
+	require.NoError(t, db.Put([]byte("_https://app.slack.compersist-v1::T222::U222::recentlyJoinedChannels"), []byte(`{"C222":{}}`), nil))
+	require.NoError(t, db.Close())
+	return root
+}
+
+func requireWorkspaceCounts(t *testing.T, dbPath string, want map[string]int) {
+	t.Helper()
+	st, err := store.OpenReadOnly(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	for workspaceID, expected := range want {
+		rows, err := st.QueryReadOnly(context.Background(), fmt.Sprintf(`select count(*) as count from workspaces where id = '%s'`, workspaceID))
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		require.Equal(t, int64(expected), int64Value(rows[0]["count"]))
+	}
 }
 
 func TestStatusHumanOutputIsStructured(t *testing.T) {

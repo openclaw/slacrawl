@@ -538,9 +538,13 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	if err != nil {
 		return err
 	}
+	resolvedWorkspaceID := coalesce(*workspaceID, cfg.WorkspaceID)
+	if resolvedSource == syncer.SourceDesktop && !flagWasSet(fs, "workspace") {
+		resolvedWorkspaceID = ""
+	}
 	runOptions := syncer.Options{
 		Source:      resolvedSource,
-		WorkspaceID: coalesce(*workspaceID, cfg.WorkspaceID),
+		WorkspaceID: resolvedWorkspaceID,
 		Channels:    csv(*channels),
 		ExcludeChannels: mergeStringSlices(
 			cfg.Sync.ExcludeChannels,
@@ -1377,7 +1381,6 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 	syncOnce := func() error {
 		summary, err := syncer.Run(ctx, cfg, st, syncer.Options{
 			Source:          syncer.SourceDesktop,
-			WorkspaceID:     cfg.WorkspaceID,
 			ExcludeChannels: cfg.Sync.ExcludeChannels,
 		})
 		if err != nil {
@@ -1568,6 +1571,16 @@ func mergeStringSlices(values ...[]string) []string {
 		}
 	}
 	return out
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	wasSet := false
+	fs.Visit(func(candidate *flag.Flag) {
+		if candidate.Name == name {
+			wasSet = true
+		}
+	})
+	return wasSet
 }
 
 func boolPtr(value bool) *bool {
