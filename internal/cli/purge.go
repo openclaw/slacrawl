@@ -44,7 +44,6 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	before := fs.String("before", "", "delete messages before RFC3339 timestamp or YYYY-MM-DD")
 	olderThan := fs.String("older-than", "", "delete messages older than duration, such as 90d or 2160h")
 	workspaceID := fs.String("workspace", "", "limit purge to workspace id")
-	allWorkspaces := fs.Bool("all-workspaces", false, "purge all workspaces")
 	force := fs.Bool("force", false, "execute deletion instead of previewing")
 	keepMedia := fs.Bool("keep-media", false, "retain unreferenced cached media files")
 	vacuum := fs.Bool("vacuum", false, "compact the SQLite database after deletion")
@@ -70,9 +69,6 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	if workspaceSet && workspace == "" {
 		return errors.New("--workspace cannot be empty")
 	}
-	if workspaceSet && *allWorkspaces {
-		return errors.New("--workspace and --all-workspaces cannot be combined")
-	}
 
 	now := a.nowUTC()
 	cutoff, err := resolvePurgeCutoff(now, *before, *olderThan)
@@ -86,9 +82,6 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
-	}
-	if !workspaceSet && !*allWorkspaces {
-		workspace = strings.TrimSpace(cfg.WorkspaceID)
 	}
 	st, err := a.openStore(cfg)
 	if err != nil {
@@ -317,7 +310,6 @@ Flags:
   -before string       RFC3339 timestamp or YYYY-MM-DD cutoff
   -older-than string   relative cutoff, such as 90d or 2160h
   -workspace string    limit purge to one workspace
-  -all-workspaces      purge all workspaces
   -force               execute deletion
   -keep-media          retain unreferenced cached media files
   -vacuum              compact the database after deletion; requires --force

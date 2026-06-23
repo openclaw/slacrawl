@@ -120,8 +120,6 @@ func TestPurgeCommandValidatesSafetyFlags(t *testing.T) {
 	require.ErrorContains(t, err, "future")
 	err = app.Run(context.Background(), []string{"purge", "--before", "2026-01-01", "--workspace", " "})
 	require.ErrorContains(t, err, "--workspace cannot be empty")
-	err = app.Run(context.Background(), []string{"purge", "--before", "2026-01-01", "--workspace", "T1", "--all-workspaces"})
-	require.ErrorContains(t, err, "--workspace and --all-workspaces cannot be combined")
 }
 
 func TestPurgeCommandKeepMedia(t *testing.T) {
@@ -165,49 +163,6 @@ func TestPurgeCommandKeepMedia(t *testing.T) {
 	require.Zero(t, response.CachedMediaDeleted)
 	require.FileExists(t, target)
 	require.Zero(t, purgeTestMessageCount(t, dbPath))
-}
-
-func TestPurgeCommandUsesConfigWorkspaceByDefault(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	dbPath := filepath.Join(dir, "slacrawl.db")
-	cfg := config.Default()
-	cfg.DBPath = dbPath
-	cfg.WorkspaceID = "T1"
-	require.NoError(t, cfg.Save(configPath))
-
-	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
-	oldTime := now.Add(-120 * 24 * time.Hour)
-	st, err := store.Open(dbPath)
-	require.NoError(t, err)
-	require.NoError(t, st.UpsertMessage(context.Background(), store.Message{
-		WorkspaceID: "T1", ChannelID: "C1", TS: purgeTestSlackTS(oldTime),
-		Text: "old t1", NormalizedText: "old t1", SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: oldTime,
-	}, nil))
-	require.NoError(t, st.UpsertMessage(context.Background(), store.Message{
-		WorkspaceID: "T2", ChannelID: "C2", TS: purgeTestSlackTS(oldTime),
-		Text: "old t2", NormalizedText: "old t2", SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: oldTime,
-	}, nil))
-	require.NoError(t, st.Close())
-
-	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stdout, now: func() time.Time { return now }}
-	require.NoError(t, app.Run(context.Background(), []string{
-		"--config", configPath, "--json", "purge", "--older-than", "90d", "--force", "--keep-media",
-	}))
-	var response purgeResponse
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &response))
-	require.Equal(t, "T1", response.WorkspaceID)
-	require.Equal(t, int64(1), response.Messages)
-	require.Equal(t, map[string]int64{"T2": 1}, purgeTestMessageCountsByWorkspace(t, dbPath))
-	require.Equal(t, map[string]string{"T1": purgeTestSlackTS(now.Add(-90 * 24 * time.Hour))}, purgeTestWorkspaceFloors(t, dbPath))
-
-	stdout.Reset()
-	require.NoError(t, app.Run(context.Background(), []string{
-		"--config", configPath, "--json", "purge", "--older-than", "90d", "--force", "--keep-media", "--all-workspaces",
-	}))
-	require.Zero(t, purgeTestMessageCount(t, dbPath))
-	require.Contains(t, purgeTestWorkspaceFloors(t, dbPath), "*")
 }
 
 func TestPurgeCommandRequiresCacheDirBeforeDeletingMedia(t *testing.T) {
@@ -420,34 +375,6 @@ func purgeTestMessageCount(t *testing.T, dbPath string) int64 {
 	rows, err := st.QueryReadOnly(context.Background(), "select count(*) as n from messages")
 	require.NoError(t, err)
 	return rows[0]["n"].(int64)
-}
-
-func purgeTestMessageCountsByWorkspace(t *testing.T, dbPath string) map[string]int64 {
-	t.Helper()
-	st, err := store.Open(dbPath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, st.Close()) }()
-	rows, err := st.QueryReadOnly(context.Background(), "select workspace_id, count(*) as n from messages group by workspace_id order by workspace_id")
-	require.NoError(t, err)
-	counts := map[string]int64{}
-	for _, row := range rows {
-		counts[row["workspace_id"].(string)] = row["n"].(int64)
-	}
-	return counts
-}
-
-func purgeTestWorkspaceFloors(t *testing.T, dbPath string) map[string]string {
-	t.Helper()
-	st, err := store.Open(dbPath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, st.Close()) }()
-	rows, err := st.QueryReadOnly(context.Background(), "select entity_id, value from sync_state where source_name = 'retention' and entity_type = 'workspace_floor' order by entity_id")
-	require.NoError(t, err)
-	floors := map[string]string{}
-	for _, row := range rows {
-		floors[row["entity_id"].(string)] = row["value"].(string)
-	}
-	return floors
 }
 
 func purgeTestSlackTS(value time.Time) string {
