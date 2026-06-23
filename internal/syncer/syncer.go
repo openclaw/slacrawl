@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/openclaw/slacrawl/internal/config"
@@ -41,6 +42,7 @@ func ParseSource(value string) (Source, error) {
 type Options struct {
 	Source          Source
 	WorkspaceID     string
+	WorkspaceSet    bool
 	Channels        []string
 	ExcludeChannels []string
 	Since           string
@@ -48,6 +50,8 @@ type Options struct {
 	LatestOnly      bool
 	Concurrency     int
 	AutoJoin        *bool
+	APIURL          string
+	HTTPClient      *http.Client
 	Logger          *slog.Logger
 }
 
@@ -63,7 +67,7 @@ func Run(ctx context.Context, cfg config.Config, st *store.Store, opts Options) 
 func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts Options, tokens config.Tokens) (Summary, error) {
 	summary := Summary{}
 	includeDMs := cfg.IncludeDMsResolved(tokens.User != "")
-	apiClient := slackapi.New(tokens).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
+	apiClient := slackapi.NewWithOptions(tokens, opts.APIURL, opts.HTTPClient).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
 
 	switch opts.Source {
 	case SourceAPI:
@@ -108,10 +112,17 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		}); err != nil {
 			return summary, err
 		}
-		return syncDesktop(ctx, cfg, st, opts)
+		return syncDesktop(ctx, cfg, st, desktopOptionsForSourceAll(opts))
 	default:
 		return summary, errors.New("unsupported source")
 	}
+}
+
+func desktopOptionsForSourceAll(opts Options) Options {
+	if !opts.WorkspaceSet {
+		opts.WorkspaceID = ""
+	}
+	return opts
 }
 
 func syncDesktop(ctx context.Context, cfg config.Config, st *store.Store, opts Options) (Summary, error) {

@@ -171,9 +171,9 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	if err != nil {
 		return err
 	}
-	workspaceID := auth.TeamID
-	if opts.WorkspaceID != "" {
-		workspaceID = opts.WorkspaceID
+	workspaceID, err := authenticatedWorkspaceID(auth, opts.WorkspaceID)
+	if err != nil {
+		return err
 	}
 
 	now := c.now()
@@ -311,8 +311,9 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 	if err != nil {
 		return err
 	}
-	if workspaceID == "" {
-		workspaceID = auth.TeamID
+	workspaceID, err = authenticatedWorkspaceID(auth, workspaceID)
+	if err != nil {
+		return err
 	}
 
 	socketClient := c.socketModeFn(c.bot)
@@ -665,6 +666,18 @@ func (c *Client) authTest(ctx context.Context, client *slack.Client) (*slack.Aut
 	return retry(ctx, c.sleep, 3, func() (*slack.AuthTestResponse, error) {
 		return client.AuthTestContext(ctx)
 	})
+}
+
+func authenticatedWorkspaceID(auth *slack.AuthTestResponse, requested string) (string, error) {
+	authTeamID := strings.TrimSpace(auth.TeamID)
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		if authTeamID != requested {
+			return "", fmt.Errorf("authenticated workspace %s does not match requested workspace %s", authTeamID, requested)
+		}
+		return requested, nil
+	}
+	return authTeamID, nil
 }
 
 func (c *Client) getConversations(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {

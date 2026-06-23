@@ -37,6 +37,7 @@ type App struct {
 	outputFormat OutputFormat
 	now          func() time.Time
 	httpClient   *http.Client
+	apiURL       string
 }
 
 type OutputFormat string
@@ -538,10 +539,13 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	if err != nil {
 		return err
 	}
+	workspaceSet := flagWasSet(fs, "workspace")
+	resolvedWorkspaceID := resolveSyncWorkspaceID(*workspaceID, workspaceSet)
 	runOptions := syncer.Options{
-		Source:      resolvedSource,
-		WorkspaceID: coalesce(*workspaceID, cfg.WorkspaceID),
-		Channels:    csv(*channels),
+		Source:       resolvedSource,
+		WorkspaceID:  resolvedWorkspaceID,
+		WorkspaceSet: workspaceSet,
+		Channels:     csv(*channels),
 		ExcludeChannels: mergeStringSlices(
 			cfg.Sync.ExcludeChannels,
 			csv(*excludeChannels),
@@ -551,6 +555,8 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 		LatestOnly:  *latestOnly,
 		Concurrency: *concurrency,
 		AutoJoin:    boolPtr(*autoJoin),
+		APIURL:      a.apiURL,
+		HTTPClient:  a.httpClient,
 		Logger:      progressLogger(a.Stderr),
 	}
 	st, err := a.openStore(cfg)
@@ -1341,7 +1347,7 @@ func (a *App) runTail(ctx context.Context, configPath string, args []string) err
 		targets = []string{coalesce(*workspaceID, cfg.WorkspaceID)}
 	}
 	if len(targets) == 1 {
-		return slackapi.New(cfg.ResolveTokensForWorkspace(targets[0])).Tail(ctx, st, targets[0], repairDuration)
+		return slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(targets[0]), a.apiURL, a.httpClient).Tail(ctx, st, targets[0], repairDuration)
 	}
 	return a.runTailTargets(ctx, st, cfg, targets, repairDuration)
 }
@@ -1377,7 +1383,6 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 	syncOnce := func() error {
 		summary, err := syncer.Run(ctx, cfg, st, syncer.Options{
 			Source:          syncer.SourceDesktop,
-			WorkspaceID:     cfg.WorkspaceID,
 			ExcludeChannels: cfg.Sync.ExcludeChannels,
 		})
 		if err != nil {
@@ -1570,6 +1575,16 @@ func mergeStringSlices(values ...[]string) []string {
 	return out
 }
 
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	wasSet := false
+	fs.Visit(func(candidate *flag.Flag) {
+		if candidate.Name == name {
+			wasSet = true
+		}
+	})
+	return wasSet
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
@@ -1620,6 +1635,28 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 		opts.WorkspaceID = workspaceID
 		return syncer.Run(ctx, cfg, st, opts)
 	}
+	if opts.Source == syncer.SourceAll && !opts.WorkspaceSet && len(targets) > 0 {
+		var last syncer.Summary
+		for _, workspaceID := range targets {
+			runOpts := opts
+			runOpts.Source = syncer.SourceAPI
+			runOpts.WorkspaceID = workspaceID
+			summary, err := syncer.RunWithTokens(ctx, cfg, st, runOpts, cfg.ResolveTokensForWorkspace(workspaceID))
+			if err != nil {
+				return syncer.Summary{}, fmt.Errorf("sync workspace %s: %w", workspaceID, err)
+			}
+			last = summary
+		}
+		runOpts := opts
+		runOpts.Source = syncer.SourceDesktop
+		runOpts.WorkspaceID = ""
+		summary, err := syncer.Run(ctx, cfg, st, runOpts)
+		if err != nil {
+			return syncer.Summary{}, err
+		}
+		last.Desktop = summary.Desktop
+		return last, nil
+	}
 	if len(targets) == 0 {
 		return syncer.Run(ctx, cfg, st, opts)
 	}
@@ -1630,7 +1667,7 @@ func (a *App) runSyncTargets(ctx context.Context, cfg config.Config, st *store.S
 		runOpts.WorkspaceID = workspaceID
 		summary, err := syncer.RunWithTokens(ctx, cfg, st, runOpts, cfg.ResolveTokensForWorkspace(workspaceID))
 		if err != nil {
-			return syncer.Summary{}, err
+			return syncer.Summary{}, fmt.Errorf("sync workspace %s: %w", workspaceID, err)
 		}
 		last = summary
 	}
@@ -1697,7 +1734,7 @@ func (a *App) runTailTargets(ctx context.Context, st *store.Store, cfg config.Co
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := slackapi.New(cfg.ResolveTokensForWorkspace(workspaceID)).Tail(ctx, st, workspaceID, repairEvery)
+			err := slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(workspaceID), a.apiURL, a.httpClient).Tail(ctx, st, workspaceID, repairEvery)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- fmt.Errorf("tail %s: %w", workspaceID, err)
 				cancel()
@@ -1764,6 +1801,13 @@ func coalesce(primary string, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+func resolveSyncWorkspaceID(workspaceID string, workspaceSet bool) string {
+	if workspaceSet {
+		return strings.TrimSpace(workspaceID)
+	}
+	return ""
 }
 
 func mediaToken(cfg config.Config, workspaceID string) string {

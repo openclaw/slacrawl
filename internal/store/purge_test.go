@@ -68,6 +68,69 @@ values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
 	require.Empty(t, empty.Media)
 }
 
+func TestPurgeMessagesWorkspaceScopeKeepsOtherWorkspaceRows(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	oldTime := time.Date(2025, 12, 1, 12, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	upsertPurgeTestMessage(t, st, "T1", "C1", oldTime, "target workspace", "F1", "files/aa/t1.txt", 10)
+	upsertPurgeTestMessage(t, st, "T2", "C2", oldTime, "other workspace", "F2", "files/bb/t2.txt", 20)
+	_, err = st.DB().ExecContext(ctx, `
+insert into embedding_jobs (channel_id, ts, state, created_at)
+values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
+`, "C1", slackTSFromTime(oldTime), formatDBTime(oldTime), "C2", slackTSFromTime(oldTime), formatDBTime(oldTime))
+	require.NoError(t, err)
+
+	report, err := st.PurgeMessages(ctx, PurgeOptions{Before: cutoff, WorkspaceID: "T1", Delete: true})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), report.Messages)
+	require.Equal(t, int64(1), report.MessageEvents)
+	require.Equal(t, int64(1), report.MessageFiles)
+	require.Equal(t, int64(1), report.Mentions)
+	require.Equal(t, int64(1), report.EmbeddingJobs)
+
+	rows, err := st.QueryReadOnly(ctx, `select workspace_id, channel_id, ts, text from messages order by workspace_id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"workspace_id": "T2",
+		"channel_id":   "C2",
+		"ts":           slackTSFromTime(oldTime),
+		"text":         "other workspace",
+	}}, rows)
+	rows, err = st.QueryReadOnly(ctx, `select workspace_id, channel_id, ts, file_id from message_files order by workspace_id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"workspace_id": "T2",
+		"channel_id":   "C2",
+		"ts":           slackTSFromTime(oldTime),
+		"file_id":      "F2",
+	}}, rows)
+	rows, err = st.QueryReadOnly(ctx, `select channel_id, ts, target_id from message_mentions order by channel_id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"channel_id": "C2",
+		"ts":         slackTSFromTime(oldTime),
+		"target_id":  "U1",
+	}}, rows)
+	rows, err = st.QueryReadOnly(ctx, `select channel_id, ts, state from embedding_jobs order by channel_id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"channel_id": "C2",
+		"ts":         slackTSFromTime(oldTime),
+		"state":      "pending",
+	}}, rows)
+	rows, err = st.QueryReadOnly(ctx, `select channel_id, ts, event_type from message_events order by channel_id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"channel_id": "C2",
+		"ts":         slackTSFromTime(oldTime),
+		"event_type": "message",
+	}}, rows)
+}
+
 func TestPurgeMessagesIncludesDesktopDraftTimestamps(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)

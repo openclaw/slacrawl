@@ -600,7 +600,6 @@ func newIngestFilter(opts IngestOptions) ingestFilter {
 		channels:         stringSet(opts.Channels),
 		excludeChannels:  excludeChannels,
 		excludeSelectors: excludeSelectors,
-		hasNameExclude:   len(excludeSelectors) > 0,
 	}
 }
 
@@ -679,7 +678,7 @@ func (f ingestFilter) excludesChannel(channelID string, channelNames []string) b
 		return true
 	}
 	if len(channelNames) == 0 {
-		return f.hasNameExclude
+		return false
 	}
 	sawName := false
 	for _, channelName := range channelNames {
@@ -693,22 +692,13 @@ func (f ingestFilter) excludesChannel(channelID string, channelNames []string) b
 		}
 	}
 	if !sawName {
-		return f.hasNameExclude
+		return false
 	}
 	return false
 }
 
 func (f *ingestFilter) resolveKnownChannelIDs(channelIDs map[string]struct{}) {
-	hasNameExclude := false
-	for _, selector := range f.excludeSelectors {
-		if _, ok := channelIDs[selector.normalized]; !ok {
-			if !selector.explicitID {
-				hasNameExclude = true
-				break
-			}
-		}
-	}
-	f.hasNameExclude = hasNameExclude
+	f.hasNameExclude = false
 }
 
 func desktopChannelIDs(extracted ExtractedData) map[string]struct{} {

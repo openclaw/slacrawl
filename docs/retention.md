@@ -29,6 +29,14 @@ rows, and unreferenced cached media without changing the archive:
 slacrawl --json purge --workspace T01234567 --older-than 90d
 ```
 
+Without `--workspace`, purge applies archive-wide across every workspace. Pass
+`--workspace` to scope it to a single workspace.
+
+Workspace-scoped purge carries `workspace_id` through its temporary selection
+and deletion set. The archive schema still treats Slack `channel_id` plus `ts`
+as the persistent message identity, so imports and syncs must not create two
+messages with the same `channel_id` and `ts` in different workspaces.
+
 Pass `--force` to execute:
 
 ```bash

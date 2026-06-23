@@ -208,7 +208,7 @@ func TestIngestDesktopStateRespectsWorkspaceFilter(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestIngestDesktopStateSkipsUnknownChannelsForNameExcludes(t *testing.T) {
+func TestIngestDesktopStateAllowsUnknownChannelsForNameExcludes(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Local Storage", "leveldb"), 0o750))
 
@@ -234,14 +234,14 @@ func TestIngestDesktopStateSkipsUnknownChannelsForNameExcludes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, status.Workspaces)
 	require.Equal(t, 1, status.Users)
-	require.Equal(t, 0, status.Channels)
-	require.Equal(t, 0, status.Messages)
+	require.Equal(t, 1, status.Channels)
+	require.Equal(t, 1, status.Messages)
 
 	_, err = st.GetSyncState(context.Background(), sourceName, "read_marker", "C111")
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
-func TestIngestReduxStatesSkipsUnknownChannelsForNameExcludesWithWorkspaceFilter(t *testing.T) {
+func TestIngestReduxStatesAllowsUnknownChannelsForNameExcludesWithWorkspaceFilter(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)
 	defer func() { require.NoError(t, st.Close()) }()
@@ -264,7 +264,7 @@ func TestIngestReduxStatesSkipsUnknownChannelsForNameExcludesWithWorkspaceFilter
 	status, err := st.Status(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, status.Workspaces)
-	require.Equal(t, 0, status.Messages)
+	require.Equal(t, 1, status.Messages)
 }
 
 func TestIngestDesktopDraftUsesPersistWorkspace(t *testing.T) {
@@ -841,8 +841,8 @@ func TestChannelNameHintsAreWorkspaceQualifiedAndDerived(t *testing.T) {
 
 	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"c2"}})
 	filter.resolveKnownChannelIDs(map[string]struct{}{"c555": {}})
-	require.True(t, filter.hasNameExclude)
-	require.False(t, filter.allowChannelNames("T555", "C555", nil))
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C555", nil))
 	require.True(t, filter.allowChannelNames("T555", "C555", []string{"kept"}))
 
 	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C000000223"}})
@@ -866,20 +866,20 @@ func TestChannelNameHintsAreWorkspaceQualifiedAndDerived(t *testing.T) {
 
 	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C000000223"}})
 	filter.resolveKnownChannelIDs(map[string]struct{}{"c000000222": {}})
-	require.True(t, filter.hasNameExclude)
-	require.False(t, filter.allowChannelNames("T555", "C000000222", nil))
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C000000222", nil))
 	require.True(t, filter.allowChannelNames("T555", "C000000222", []string{"kept"}))
 
 	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"C123"}})
 	filter.resolveKnownChannelIDs(map[string]struct{}{"c999": {}})
-	require.True(t, filter.hasNameExclude)
-	require.False(t, filter.allowChannelNames("T555", "C999", nil))
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C999", nil))
 	require.True(t, filter.allowChannelNames("T555", "C999", []string{"kept"}))
 
 	filter = newIngestFilter(IngestOptions{ExcludeChannels: []string{"DEV2"}})
 	filter.resolveKnownChannelIDs(map[string]struct{}{"c999": {}})
-	require.True(t, filter.hasNameExclude)
-	require.False(t, filter.allowChannelNames("T555", "C999", nil))
+	require.False(t, filter.hasNameExclude)
+	require.True(t, filter.allowChannelNames("T555", "C999", nil))
 	require.True(t, filter.allowChannelNames("T555", "C999", []string{"kept"}))
 }
 
