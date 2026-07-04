@@ -2,6 +2,10 @@
 
 ## 0.7.5 - Unreleased
 
+### Performance
+
+- Made event-history upgrades constant-time by lazily seeding compact message heads on update instead of scanning the entire archive.
+
 ## 0.7.4 - 2026-07-04
 
 ### Fixes
@@ -10,10 +14,6 @@
 - Prevented unchanged desktop refreshes from duplicating message events and added preview-first retained-history compaction with `purge --keep-message-events`. Thanks @barbieri.
 - Normalized relative runtime paths to absolute paths so commands can open databases created with `init --db <relative-path>`.
 - Treated nullable optional message metadata as empty when reading historical archives.
-
-### Performance
-
-- Made event-history upgrades constant-time by lazily seeding compact message heads on update instead of scanning the entire archive.
 
 ### Maintenance
 

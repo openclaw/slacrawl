@@ -17,7 +17,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/store/storedb"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schemaPragmas = `
 pragma foreign_keys = on;
@@ -25,7 +25,7 @@ pragma journal_mode = wal;
 pragma busy_timeout = 5000;
 `
 
-const messageEventHeadsSchema = `
+const messageEventHeadsTableSchema = `
 create table if not exists message_event_heads (
   channel_id text not null,
   ts text not null,
@@ -34,7 +34,9 @@ create table if not exists message_event_heads (
   payload_json text not null,
   primary key (channel_id, ts, event_type, source_name)
 ) without rowid;
+`
 
+const messageEventHeadTriggerSchema = `
 create trigger if not exists seed_message_event_head_before_update
 before update on messages
 begin
@@ -53,6 +55,8 @@ begin
   ) on conflict (channel_id, ts, event_type, source_name) do nothing;
 end;
 `
+
+const messageEventHeadsSchema = messageEventHeadsTableSchema + messageEventHeadTriggerSchema
 
 const schema = `
 pragma foreign_keys = on;
@@ -244,6 +248,7 @@ create index if not exists idx_message_files_name on message_files(name);
 `
 
 const schemaV4Migration = messageEventHeadsSchema
+const schemaV5Migration = messageEventHeadTriggerSchema
 
 type Store struct {
 	db *sql.DB
@@ -2421,6 +2426,12 @@ func migrateSchema(db *sql.DB, currentVersion int) error {
 			return fmt.Errorf("migrate sqlite schema to v4: %w", err)
 		}
 		currentVersion = 4
+	}
+	if currentVersion < 5 {
+		if _, err := tx.Exec(schemaV5Migration); err != nil {
+			return fmt.Errorf("migrate sqlite schema to v5: %w", err)
+		}
+		currentVersion = 5
 	}
 	if currentVersion != schemaVersion {
 		return fmt.Errorf("no migration path from sqlite schema version %d to %d", currentVersion, schemaVersion)
