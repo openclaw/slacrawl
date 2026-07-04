@@ -1372,9 +1372,10 @@ func (s *Store) searchAuto(ctx context.Context, workspaceID string, query string
 
 func (s *Store) searchFTS(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
 	sqlQuery := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, m.user_id,
+select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
        coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, m.thread_ts, m.reply_count, m.latest_reply, m.subtype, m.source_name
+       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
+       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
 from message_fts f
 join messages m on f.message_key = m.channel_id || '|' || m.ts
 left join workspaces w on w.id = m.workspace_id
@@ -1400,9 +1401,10 @@ limit ?
 func (s *Store) searchLike(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
 	pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(query))) + "%"
 	sqlQuery := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, m.user_id,
+select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
        coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, m.thread_ts, m.reply_count, m.latest_reply, m.subtype, m.source_name
+       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
+       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
 from messages m
 left join workspaces w on w.id = m.workspace_id
 left join channels c on c.id = m.channel_id
@@ -1471,9 +1473,10 @@ func escapeLike(value string) string {
 
 func (s *Store) Messages(ctx context.Context, workspaceID string, channelID string, userID string, limit int) ([]MessageRow, error) {
 	query := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, m.user_id,
+select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
        coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, m.thread_ts, m.reply_count, m.latest_reply, m.subtype, m.source_name
+       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
+       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
 from messages m
 left join workspaces w on w.id = m.workspace_id
 left join channels c on c.id = m.channel_id
@@ -1557,9 +1560,10 @@ func (s *Store) hydrateThreadContext(ctx context.Context, rows []MessageRow, lim
 		contextLimit = 2000
 	}
 	query := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, m.user_id,
+select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
        coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, m.thread_ts, m.reply_count, m.latest_reply, m.subtype, m.source_name
+       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
+       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
 from messages m
 left join workspaces w on w.id = m.workspace_id
 left join channels c on c.id = m.channel_id

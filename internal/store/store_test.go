@@ -52,6 +52,52 @@ func TestStoreRoundTrip(t *testing.T) {
 	require.Equal(t, 1, status.Messages)
 }
 
+func TestMessageReadsHandleNullableOptionalFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, s.UpsertWorkspace(ctx, Workspace{ID: "T1", Name: "team", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, s.UpsertChannel(ctx, Channel{ID: "C1", WorkspaceID: "T1", Name: "eng", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID:      "C1",
+		TS:             "123.45",
+		WorkspaceID:    "T1",
+		Text:           "nullable optionals",
+		NormalizedText: "nullable optionals",
+		SourceRank:     1,
+		SourceName:     "api-user",
+		RawJSON:        "{}",
+		UpdatedAt:      now,
+	}, nil))
+	_, err = s.DB().ExecContext(ctx, `
+update messages
+set user_id = null, thread_ts = null, latest_reply = null, subtype = null
+where channel_id = 'C1' and ts = '123.45'
+`)
+	require.NoError(t, err)
+
+	assertEmptyOptionals := func(t *testing.T, rows []MessageRow, err error) {
+		t.Helper()
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		require.Empty(t, rows[0].UserID)
+		require.Empty(t, rows[0].ThreadTS)
+		require.Empty(t, rows[0].LatestReply)
+		require.Empty(t, rows[0].Subtype)
+	}
+
+	rows, err := s.Search(ctx, "", "nullable", 10)
+	assertEmptyOptionals(t, rows, err)
+	rows, err = s.searchLike(ctx, "", "optionals", 10)
+	assertEmptyOptionals(t, rows, err)
+	rows, err = s.Messages(ctx, "T1", "C1", "", 10)
+	assertEmptyOptionals(t, rows, err)
+}
+
 func TestSearchMessagesAutoEscapesAndFallsBack(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
