@@ -118,6 +118,15 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	require.Equal(t, "https://example.com/private/slacrawl.git", loaded.Share.Remote)
 }
 
+func TestExpandPathMakesRelativePathsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	expanded, err := ExpandPath(filepath.Join("state", "slacrawl.db"))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "state", "slacrawl.db"), expanded)
+}
+
 func TestSaveAndLoadStdioMCPConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

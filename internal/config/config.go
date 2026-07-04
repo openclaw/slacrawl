@@ -317,7 +317,11 @@ func ExpandPath(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	return filepath.Clean(crawlconfig.ExpandHome(path)), nil
+	expanded := filepath.Clean(crawlconfig.ExpandHome(path))
+	if filepath.IsAbs(expanded) {
+		return expanded, nil
+	}
+	return filepath.Abs(expanded)
 }
 
 func (c Config) ResolveTokens() Tokens {

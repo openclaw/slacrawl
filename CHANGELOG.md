@@ -6,6 +6,13 @@
 
 - Fixed multi-workspace desktop/API sync scoping, fail-closed workspace authentication, workspace-qualified purges, and explicit watch workspace selection. Thanks @zm2231.
 - Prevented unchanged desktop refreshes from duplicating message events and added preview-first retained-history compaction with `purge --keep-message-events`. Thanks @barbieri.
+- Normalized relative runtime paths to absolute paths so commands can open databases created with `init --db <relative-path>`.
+
+### Maintenance
+
+- Hardened release workflows, MCP stdio environment forwarding, command completion, and canonical Homebrew tap targeting.
+- Updated CrawlKit to 0.13.1, slack-go to 0.27.0, and `golang.org/x/net` to 0.55.0.
+- Corrected Linux package examples to use version-matched GitHub Release assets.
 
 ## 0.7.3 - 2026-06-19
 
@@ -19,7 +26,7 @@
 - Retry concurrent Git snapshot branch-and-tag pushes after rebasing and retargeting the unpublished tag.
 - Added immutable Git-share snapshot tags and non-mutating historical restores with `update --ref`, using CrawlKit for shared Git history mechanics.
 - Moved FTS5 query escaping onto CrawlKit and refreshed Go dependencies.
-- Updated crawlkit through 0.12.2 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.
+- Updated crawlkit through 0.13.0 for shared runtime hardening, SQLite 1.52, and absolute Windows database paths.
 - Updated the pinned GoReleaser CI action to 7.2.2.
 - Updated the TruffleHog secret-scanning action to 3.95.6.
 - Updated GitHub Actions checkout steps to v7.

@@ -54,6 +54,23 @@ func TestParseLookback(t *testing.T) {
 	}
 }
 
+func TestInitAcceptsRelativeDatabasePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	require.NoError(t, app.Run(context.Background(), []string{"--config", "config.toml", "init", "--db", "archive.db"}))
+
+	cfg, err := config.Load("config.toml")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "archive.db"), cfg.DBPath)
+	st, err := store.Open(cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	require.FileExists(t, cfg.DBPath)
+}
+
 func TestResolveMCPWorkspaceID(t *testing.T) {
 	workspaceID, err := resolveMCPWorkspaceID([]string{"T123"})
 	require.NoError(t, err)
