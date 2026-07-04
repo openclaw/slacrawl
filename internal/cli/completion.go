@@ -188,7 +188,7 @@ _slacrawl()
             COMPREPLY=( $(compgen -W "--workspace --repair-every --help -h ${global_flags}" -- "${cur}") )
             ;;
         watch)
-            COMPREPLY=( $(compgen -W "--desktop-every --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--desktop-every --workspace --help -h ${global_flags}" -- "${cur}") )
             ;;
         tui)
             COMPREPLY=( $(compgen -W "--json --limit --help -h ${global_flags}" -- "${cur}") )
@@ -326,7 +326,7 @@ _slacrawl() {
           _arguments '--workspace[workspace id]:workspace id:' '--repair-every[repair interval]:duration:'
           ;;
         watch)
-          _arguments '--desktop-every[desktop refresh interval]:duration:'
+          _arguments '--desktop-every[desktop refresh interval]:duration:' '--workspace[workspace id]:workspace id:'
           ;;
         tui)
           _arguments '--json[json output]' '--limit[row limit]:limit:'

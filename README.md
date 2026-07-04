@@ -160,7 +160,7 @@ go run ./cmd/slacrawl watch --desktop-every 5m
 
 If you built the binary, replace `go run ./cmd/slacrawl` with `./bin/slacrawl`.
 
-`tail` is the live API side of the tool. `watch` is the recurring desktop-side refresh loop.
+`tail` is the live API side of the tool. `watch` is the recurring desktop-side refresh loop. By default, `watch` refreshes every workspace in the signed-in desktop profile; pass `--workspace T01234567` to restrict it to one workspace.
 
 ## Visibility Model
 
@@ -195,7 +195,7 @@ Choose the path that matches your setup:
 - `import` imports a Slack export ZIP or extracted export directory
 - `purge` previews or deletes messages and message-owned records older than a cutoff
 - `tail` listens for live events through Socket Mode, including one tail per configured workspace
-- `watch` refreshes desktop-local state on a schedule
+- `watch` refreshes desktop-local state on a schedule, optionally scoped with `--workspace <id>`
 - `search` runs safe local text search with FTS and substring fallback, optionally filtered by workspace
 - `messages` lists stored messages with filters
 - `mentions` lists structured mention records

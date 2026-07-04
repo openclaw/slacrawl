@@ -1360,6 +1360,7 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
 	desktopEvery := fs.String("desktop-every", cfg.Sync.DesktopRefreshEvery, "desktop refresh interval")
+	workspaceID := fs.String("workspace", "", "workspace id")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1383,6 +1384,7 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 	syncOnce := func() error {
 		summary, err := syncer.Run(ctx, cfg, st, syncer.Options{
 			Source:          syncer.SourceDesktop,
+			WorkspaceID:     strings.TrimSpace(*workspaceID),
 			ExcludeChannels: cfg.Sync.ExcludeChannels,
 		})
 		if err != nil {

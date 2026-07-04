@@ -87,7 +87,7 @@ Use `watch` to keep refreshing the DB from local desktop state:
 slacrawl watch --desktop-every 5m
 ```
 
-This loop does not truncate the database. It repeatedly upserts and appends event history so the local DB stays current as Slack Desktop changes.
+This loop does not truncate the database. It repeatedly upserts and appends event history so the local DB stays current as Slack Desktop changes. It refreshes every workspace in the signed-in desktop profile by default; pass `--workspace T01234567` to restrict each refresh to one workspace.
 
 ## Validation Commands
 

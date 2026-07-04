@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,6 +205,34 @@ func TestWatchFailsWhenDesktopDisabled(t *testing.T) {
 
 	err := app.Run(context.Background(), []string{"--config", configPath, "watch", "--desktop-every", "1s"})
 	require.ErrorContains(t, err, "desktop sync is disabled in config")
+}
+
+func TestWatchWorkspaceFlagScopesDesktopSync(t *testing.T) {
+	tmp := t.TempDir()
+	desktopPath := writeDesktopFixture(t, filepath.Join(tmp, "Slack"))
+
+	cfg := config.Default()
+	cfg.WorkspaceID = "T111"
+	cfg.DBPath = filepath.Join(tmp, "slacrawl.db")
+	cfg.Slack.Bot.Enabled = false
+	cfg.Slack.App.Enabled = false
+	cfg.Slack.User.Enabled = false
+	cfg.Slack.Desktop.Path = desktopPath
+	configPath := filepath.Join(tmp, "config.toml")
+	require.NoError(t, cfg.Save(configPath))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &cancelAfterWrite{Writer: &stdout, cancel: cancel},
+		Stderr: &stderr,
+	}
+
+	err := app.Run(ctx, []string{"--config", configPath, "--json", "watch", "--workspace", "T222", "--desktop-every", "1h"})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, stderr.String())
+	requireWorkspaceCounts(t, cfg.DBPath, map[string]int{"T111": 0, "T222": 1})
 }
 
 func TestDoctorIncludesOperationalSyncState(t *testing.T) {
@@ -498,6 +527,18 @@ func mustTime(t *testing.T, value string) time.Time {
 	return parsed
 }
 
+type cancelAfterWrite struct {
+	io.Writer
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelAfterWrite) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	w.once.Do(w.cancel)
+	return n, err
+}
+
 func writeDesktopFixture(t *testing.T, root string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "storage"), 0o750))
@@ -668,6 +709,7 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--tag")
 	require.Contains(t, out, "--ref")
 	require.Contains(t, out, "--max-bytes")
+	require.Contains(t, out, "--desktop-every --workspace")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -696,6 +738,7 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--keep-media")
 	require.Contains(t, out, "--tag[immutable snapshot tag]")
 	require.Contains(t, out, "--ref[historical Git ref to import]")
+	require.Contains(t, out, "--workspace[workspace id]")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {

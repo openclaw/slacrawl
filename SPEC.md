@@ -281,6 +281,8 @@ Requirements:
 
 - desktop source must be enabled
 - interval defaults from config
+- `--workspace <id>` optionally restricts refreshes to one desktop workspace
+- omission of `--workspace` refreshes every workspace in the signed-in desktop profile
 - append/upsert into the existing DB
 
 ## Config Spec

@@ -2,6 +2,10 @@
 
 ## 0.7.4 - Unreleased
 
+### Fixes
+
+- Fixed multi-workspace desktop/API sync scoping, fail-closed workspace authentication, workspace-qualified purges, and explicit watch workspace selection. Thanks @zm2231.
+
 ## 0.7.3 - 2026-06-19
 
 ### Fixes
