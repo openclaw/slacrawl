@@ -43,6 +43,19 @@ Pass `--force` to execute:
 slacrawl purge --workspace T01234567 --older-than 90d --force
 ```
 
+Retained messages can also accumulate historical snapshots. Add
+`--keep-message-events N` to preview keeping only the newest `N` events for
+each message, event type, and source:
+
+```bash
+slacrawl --json purge --older-than 90d --keep-message-events 5
+slacrawl purge --older-than 90d --keep-message-events 5 --force --vacuum
+```
+
+The preview reports `compacted_message_events` without changing the database.
+Compaction never removes the canonical current row in `messages`, does not mix
+event sources or event types, and follows `--workspace` when supplied.
+
 The SQLite transaction deletes:
 
 - messages
@@ -51,6 +64,10 @@ The SQLite transaction deletes:
 - extracted mentions
 - embedding jobs
 - FTS entries
+
+Consecutive identical message snapshots are suppressed during normal ingest;
+real transitions, including a value changing and later reverting, remain in
+event history.
 
 Workspaces, channels, users, and sync state remain. Executed purges also record
 a per-channel retention floor so ordinary incremental API and MCP syncs do not

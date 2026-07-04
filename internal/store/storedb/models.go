@@ -62,6 +62,14 @@ type MessageEvent struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type MessageEventHead struct {
+	ChannelID   string `json:"channel_id"`
+	Ts          string `json:"ts"`
+	EventType   string `json:"event_type"`
+	SourceName  string `json:"source_name"`
+	PayloadJson string `json:"payload_json"`
+}
+
 type MessageFile struct {
 	WorkspaceID        string         `json:"workspace_id"`
 	ChannelID          string         `json:"channel_id"`

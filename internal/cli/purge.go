@@ -15,23 +15,25 @@ import (
 )
 
 type purgeResponse struct {
-	Cutoff              time.Time `json:"cutoff"`
-	WorkspaceID         string    `json:"workspace_id,omitempty"`
-	DryRun              bool      `json:"dry_run"`
-	Messages            int64     `json:"messages"`
-	MessageEvents       int64     `json:"message_events"`
-	MessageFiles        int64     `json:"message_files"`
-	Mentions            int64     `json:"mentions"`
-	EmbeddingJobs       int64     `json:"embedding_jobs"`
-	FTSEntries          int64     `json:"fts_entries"`
-	CachedMediaFiles    int64     `json:"cached_media_files"`
-	CachedMediaBytes    int64     `json:"cached_media_bytes"`
-	CachedMediaDeleted  int64     `json:"cached_media_deleted"`
-	CachedMediaMissing  int64     `json:"cached_media_missing"`
-	CachedMediaRetained int64     `json:"cached_media_retained"`
-	CachedMediaFailures []string  `json:"cached_media_failures,omitempty"`
-	KeepMedia           bool      `json:"keep_media"`
-	Vacuumed            bool      `json:"vacuumed"`
+	Cutoff                 time.Time `json:"cutoff"`
+	WorkspaceID            string    `json:"workspace_id,omitempty"`
+	DryRun                 bool      `json:"dry_run"`
+	Messages               int64     `json:"messages"`
+	MessageEvents          int64     `json:"message_events"`
+	CompactedMessageEvents int64     `json:"compacted_message_events"`
+	KeepMessageEvents      int       `json:"keep_message_events,omitempty"`
+	MessageFiles           int64     `json:"message_files"`
+	Mentions               int64     `json:"mentions"`
+	EmbeddingJobs          int64     `json:"embedding_jobs"`
+	FTSEntries             int64     `json:"fts_entries"`
+	CachedMediaFiles       int64     `json:"cached_media_files"`
+	CachedMediaBytes       int64     `json:"cached_media_bytes"`
+	CachedMediaDeleted     int64     `json:"cached_media_deleted"`
+	CachedMediaMissing     int64     `json:"cached_media_missing"`
+	CachedMediaRetained    int64     `json:"cached_media_retained"`
+	CachedMediaFailures    []string  `json:"cached_media_failures,omitempty"`
+	KeepMedia              bool      `json:"keep_media"`
+	Vacuumed               bool      `json:"vacuumed"`
 }
 
 func (a *App) runPurge(ctx context.Context, configPath string, args []string, format OutputFormat) error {
@@ -46,6 +48,7 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	workspaceID := fs.String("workspace", "", "limit purge to workspace id")
 	force := fs.Bool("force", false, "execute deletion instead of previewing")
 	keepMedia := fs.Bool("keep-media", false, "retain unreferenced cached media files")
+	keepMessageEvents := fs.Int("keep-message-events", 0, "keep newest message events per source and type")
 	vacuum := fs.Bool("vacuum", false, "compact the SQLite database after deletion")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -60,14 +63,21 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 		return errors.New("--vacuum requires --force")
 	}
 	workspaceSet := false
+	keepMessageEventsSet := false
 	fs.Visit(func(item *flag.Flag) {
-		if item.Name == "workspace" {
+		switch item.Name {
+		case "workspace":
 			workspaceSet = true
+		case "keep-message-events":
+			keepMessageEventsSet = true
 		}
 	})
 	workspace := strings.TrimSpace(*workspaceID)
 	if workspaceSet && workspace == "" {
 		return errors.New("--workspace cannot be empty")
+	}
+	if keepMessageEventsSet && *keepMessageEvents <= 0 {
+		return errors.New("--keep-message-events must be greater than zero")
 	}
 
 	now := a.nowUTC()
@@ -90,9 +100,10 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	defer func() { _ = st.Close() }()
 
 	opts := store.PurgeOptions{
-		Before:      cutoff,
-		WorkspaceID: workspace,
-		Delete:      *force,
+		Before:            cutoff,
+		WorkspaceID:       workspace,
+		Delete:            *force,
+		KeepMessageEvents: *keepMessageEvents,
 	}
 	var report store.PurgeReport
 	var mediaDeleted, mediaMissing, mediaRetained int64
@@ -103,8 +114,9 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 	if *force && !*keepMedia {
 		if strings.TrimSpace(cfg.CacheDir) == "" {
 			preview, err := st.PurgeMessages(ctx, store.PurgeOptions{
-				Before:      cutoff,
-				WorkspaceID: opts.WorkspaceID,
+				Before:            cutoff,
+				WorkspaceID:       opts.WorkspaceID,
+				KeepMessageEvents: opts.KeepMessageEvents,
 			})
 			if err != nil {
 				return err
@@ -121,8 +133,9 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 		} else {
 			err := media.WithCacheLock(ctx, cfg.CacheDir, func() error {
 				preview, err := st.PurgeMessages(ctx, store.PurgeOptions{
-					Before:      cutoff,
-					WorkspaceID: opts.WorkspaceID,
+					Before:            cutoff,
+					WorkspaceID:       opts.WorkspaceID,
+					KeepMessageEvents: opts.KeepMessageEvents,
 				})
 				if err != nil {
 					return err
@@ -190,7 +203,7 @@ func (a *App) runPurge(ctx context.Context, configPath string, args []string, fo
 			}
 		}
 	}
-	response := purgeResponseFromStore(cutoff, opts.WorkspaceID, !*force, *keepMedia, report)
+	response := purgeResponseFromStore(cutoff, opts.WorkspaceID, !*force, *keepMedia, opts.KeepMessageEvents, report)
 	response.CachedMediaDeleted = mediaDeleted
 	response.CachedMediaMissing = mediaMissing
 	response.CachedMediaRetained = mediaRetained
@@ -279,19 +292,21 @@ func resolvePurgeCutoff(now time.Time, before, olderThan string) (time.Time, err
 	return now.Add(-duration), nil
 }
 
-func purgeResponseFromStore(cutoff time.Time, workspaceID string, dryRun, keepMedia bool, report store.PurgeReport) purgeResponse {
+func purgeResponseFromStore(cutoff time.Time, workspaceID string, dryRun, keepMedia bool, keepMessageEvents int, report store.PurgeReport) purgeResponse {
 	response := purgeResponse{
-		Cutoff:           cutoff,
-		WorkspaceID:      workspaceID,
-		DryRun:           dryRun,
-		Messages:         report.Messages,
-		MessageEvents:    report.MessageEvents,
-		MessageFiles:     report.MessageFiles,
-		Mentions:         report.Mentions,
-		EmbeddingJobs:    report.EmbeddingJobs,
-		FTSEntries:       report.FTSEntries,
-		CachedMediaFiles: int64(len(report.Media)),
-		KeepMedia:        keepMedia,
+		Cutoff:                 cutoff,
+		WorkspaceID:            workspaceID,
+		DryRun:                 dryRun,
+		Messages:               report.Messages,
+		MessageEvents:          report.MessageEvents,
+		CompactedMessageEvents: report.CompactedMessageEvents,
+		KeepMessageEvents:      keepMessageEvents,
+		MessageFiles:           report.MessageFiles,
+		Mentions:               report.Mentions,
+		EmbeddingJobs:          report.EmbeddingJobs,
+		FTSEntries:             report.FTSEntries,
+		CachedMediaFiles:       int64(len(report.Media)),
+		KeepMedia:              keepMedia,
 	}
 	for _, item := range report.Media {
 		response.CachedMediaBytes += item.Size
@@ -312,6 +327,8 @@ Flags:
   -workspace string    limit purge to one workspace
   -force               execute deletion
   -keep-media          retain unreferenced cached media files
+  -keep-message-events int
+                       keep newest events per message, source, and type
   -vacuum              compact the database after deletion; requires --force
 `)
 }

@@ -120,6 +120,60 @@ func TestPurgeCommandValidatesSafetyFlags(t *testing.T) {
 	require.ErrorContains(t, err, "future")
 	err = app.Run(context.Background(), []string{"purge", "--before", "2026-01-01", "--workspace", " "})
 	require.ErrorContains(t, err, "--workspace cannot be empty")
+	err = app.Run(context.Background(), []string{"purge", "--before", "2026-01-01", "--keep-message-events", "0"})
+	require.ErrorContains(t, err, "--keep-message-events must be greater than zero")
+}
+
+func TestPurgeCommandPreviewsAndCompactsRetainedMessageEvents(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "slacrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.CacheDir = ""
+	require.NoError(t, cfg.Save(configPath))
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	messageTime := now.Add(-24 * time.Hour)
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, st.UpsertMessage(context.Background(), store.Message{
+		WorkspaceID: "T1", ChannelID: "C1", TS: purgeTestSlackTS(messageTime),
+		Text: "retained", NormalizedText: "retained", SourceRank: 3,
+		SourceName: "desktop-indexeddb", RawJSON: `{"version":0}`, UpdatedAt: messageTime,
+	}, nil))
+	for i := 1; i <= 4; i++ {
+		_, err := st.DB().ExecContext(context.Background(), `
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
+values ('C1', ?, 'message', 'desktop-indexeddb', ?, ?)
+`, purgeTestSlackTS(messageTime), fmt.Sprintf(`{"version":%d}`, i), messageTime.Add(time.Duration(i)*time.Second).Format(time.RFC3339))
+		require.NoError(t, err)
+	}
+	require.NoError(t, st.Close())
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout, now: func() time.Time { return now }}
+	args := []string{
+		"--config", configPath, "--json", "purge", "--before", "2026-01-01",
+		"--keep-message-events", "2", "--keep-media",
+	}
+	require.NoError(t, app.Run(context.Background(), args))
+	var preview purgeResponse
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &preview))
+	require.True(t, preview.DryRun)
+	require.Equal(t, 2, preview.KeepMessageEvents)
+	require.Equal(t, int64(3), preview.CompactedMessageEvents)
+	require.Equal(t, int64(5), purgeTestTableCount(t, dbPath, "message_events"))
+
+	stdout.Reset()
+	args = append(args, "--force")
+	require.NoError(t, app.Run(context.Background(), args))
+	var executed purgeResponse
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &executed))
+	require.False(t, executed.DryRun)
+	require.Equal(t, int64(3), executed.CompactedMessageEvents)
+	require.Equal(t, int64(2), purgeTestTableCount(t, dbPath, "message_events"))
+	require.Equal(t, int64(1), purgeTestMessageCount(t, dbPath))
 }
 
 func TestPurgeCommandKeepMedia(t *testing.T) {
@@ -368,11 +422,15 @@ func TestRemovePurgeMediaContinuesAfterFailure(t *testing.T) {
 }
 
 func purgeTestMessageCount(t *testing.T, dbPath string) int64 {
+	return purgeTestTableCount(t, dbPath, "messages")
+}
+
+func purgeTestTableCount(t *testing.T, dbPath, table string) int64 {
 	t.Helper()
 	st, err := store.Open(dbPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, st.Close()) }()
-	rows, err := st.QueryReadOnly(context.Background(), "select count(*) as n from messages")
+	rows, err := st.QueryReadOnly(context.Background(), "select count(*) as n from "+table)
 	require.NoError(t, err)
 	return rows[0]["n"].(int64)
 }

@@ -107,6 +107,15 @@ create table message_events (
   created_at text not null
 );
 
+create table message_event_heads (
+  channel_id text not null,
+  ts text not null,
+  event_type text not null,
+  source_name text not null,
+  payload_json text not null,
+  primary key (channel_id, ts, event_type, source_name)
+);
+
 create table sync_state (
   source_name text not null,
   entity_type text not null,

@@ -192,6 +192,7 @@ Expected flags:
 - optional `--workspace <id>`
 - `--force` to execute; omission is a preview
 - `--keep-media` to retain cached media no longer referenced by stored messages
+- optional `--keep-message-events <n>` to retain the newest events per message, event type, and source
 - `--vacuum` to compact SQLite after deletion
 
 Behavior:
@@ -203,6 +204,7 @@ Behavior:
 - preserve workspaces, channels, users, and sync state
 - record per-channel retention floors so incremental API/MCP repair overlap does not restore purged history
 - delete only cached media paths with no remaining database references
+- preview and compact retained event history only when `--keep-message-events` is provided
 - do not compact the SQLite file unless `--vacuum` is set
 
 ### `status`

@@ -710,6 +710,7 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--ref")
 	require.Contains(t, out, "--max-bytes")
 	require.Contains(t, out, "--desktop-every --workspace")
+	require.Contains(t, out, "--keep-message-events")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -736,6 +737,7 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "connector")
 	require.Contains(t, out, "purge")
 	require.Contains(t, out, "--keep-media")
+	require.Contains(t, out, "--keep-message-events[events retained per message, source, and type]")
 	require.Contains(t, out, "--tag[immutable snapshot tag]")
 	require.Contains(t, out, "--ref[historical Git ref to import]")
 	require.Contains(t, out, "--workspace[workspace id]")

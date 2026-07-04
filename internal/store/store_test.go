@@ -112,6 +112,77 @@ func TestUpsertMessageDeduplicatesMentions(t *testing.T) {
 	require.Equal(t, int64(1), rows[0]["n"])
 }
 
+func TestUpsertMessageSuppressesConsecutiveDuplicateEventsAndPreservesReversions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	message := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1",
+		Text: "alpha", NormalizedText: "alpha", SourceRank: 3,
+		SourceName: "desktop-indexeddb", RawJSON: `{"text":"alpha"}`, UpdatedAt: now,
+	}
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	message.UpdatedAt = now.Add(time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+
+	message.Text = "beta"
+	message.NormalizedText = "beta"
+	message.RawJSON = `{"text":"beta"}`
+	message.UpdatedAt = now.Add(2 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+
+	message.Text = "alpha"
+	message.NormalizedText = "alpha"
+	message.RawJSON = `{"text":"alpha"}`
+	message.UpdatedAt = now.Add(3 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+
+	rows, err := s.QueryReadOnly(ctx, `select payload_json from message_events order by id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"payload_json": `{"text":"alpha"}`},
+		{"payload_json": `{"text":"beta"}`},
+		{"payload_json": `{"text":"alpha"}`},
+	}, rows)
+}
+
+func TestUpsertMessageDeduplicatesLowerPrioritySourceEvents(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	apiMessage := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1",
+		Text: "api", NormalizedText: "api", SourceRank: 1,
+		SourceName: "api-user", RawJSON: `{"source":"api"}`, UpdatedAt: now,
+	}
+	require.NoError(t, s.UpsertMessage(ctx, apiMessage, nil))
+	desktopMessage := apiMessage
+	desktopMessage.Text = "desktop"
+	desktopMessage.NormalizedText = "desktop"
+	desktopMessage.SourceRank = 3
+	desktopMessage.SourceName = "desktop-indexeddb"
+	desktopMessage.RawJSON = `{"source":"desktop"}`
+	desktopMessage.UpdatedAt = now.Add(time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, desktopMessage, nil))
+	desktopMessage.UpdatedAt = now.Add(2 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, desktopMessage, nil))
+
+	rows, err := s.QueryReadOnly(ctx, `select source_name, payload_json from message_events order by id`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"source_name": "api-user", "payload_json": `{"source":"api"}`},
+		{"source_name": "desktop-indexeddb", "payload_json": `{"source":"desktop"}`},
+	}, rows)
+}
+
 func TestUpsertMessagePreservesSourcePrecedenceAndRefreshesSearch(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
@@ -549,6 +620,36 @@ func TestOpenMigratesVersion2Schema(t *testing.T) {
 	matches, err := s.Search(ctx, "", "appendix", 10)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
+	requireTableCount(t, s, "message_event_heads", 1)
+}
+
+func TestOpenMigratesVersion3AndSeedsCanonicalEventHeads(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	message := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1",
+		Text: "unchanged", NormalizedText: "unchanged", SourceRank: 3,
+		SourceName: "desktop-indexeddb", RawJSON: `{"text":"unchanged"}`, UpdatedAt: now,
+	}
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	require.NoError(t, s.Close())
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`drop table message_event_heads; pragma user_version = 3;`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	requireTableCount(t, s, "message_event_heads", 1)
+	message.UpdatedAt = now.Add(time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_events", 1)
 }
 
 func TestOpenDoesNotStampInvalidOldSchema(t *testing.T) {

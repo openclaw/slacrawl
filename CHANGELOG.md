@@ -5,6 +5,7 @@
 ### Fixes
 
 - Fixed multi-workspace desktop/API sync scoping, fail-closed workspace authentication, workspace-qualified purges, and explicit watch workspace selection. Thanks @zm2231.
+- Prevented unchanged desktop refreshes from duplicating message events and added preview-first retained-history compaction with `purge --keep-message-events`. Thanks @barbieri.
 
 ## 0.7.3 - 2026-06-19
 

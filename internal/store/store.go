@@ -17,7 +17,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/store/storedb"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schemaPragmas = `
 pragma foreign_keys = on;
@@ -138,6 +138,15 @@ create table if not exists message_events (
   created_at text not null
 );
 
+create table if not exists message_event_heads (
+  channel_id text not null,
+  ts text not null,
+  event_type text not null,
+  source_name text not null,
+  payload_json text not null,
+  primary key (channel_id, ts, event_type, source_name)
+);
+
 create table if not exists sync_state (
   source_name text not null,
   entity_type text not null,
@@ -212,6 +221,34 @@ create table if not exists message_files (
 create index if not exists idx_message_files_workspace_ts on message_files(workspace_id, ts desc);
 create index if not exists idx_message_files_file_id on message_files(file_id);
 create index if not exists idx_message_files_name on message_files(name);
+`
+
+const schemaV4Migration = `
+create table if not exists message_event_heads (
+  channel_id text not null,
+  ts text not null,
+  event_type text not null,
+  source_name text not null,
+  payload_json text not null,
+  primary key (channel_id, ts, event_type, source_name)
+);
+
+-- Seed canonical snapshots without scanning potentially multi-gigabyte event
+-- history during database open. Non-canonical source/type partitions seed
+-- lazily on their next event, bounding upgrade overhead to one row per active
+-- partition instead of an unbounded migration.
+insert or ignore into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
+select
+  channel_id,
+  ts,
+  case
+    when trim(coalesce(deleted_ts, '')) <> '' then 'message_deleted'
+    when trim(coalesce(edited_ts, '')) <> '' then 'message_changed'
+    else 'message'
+  end,
+  source_name,
+  raw_json
+from messages;
 `
 
 type Store struct {
@@ -886,14 +923,7 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		return false, err
 	}
 
-	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
-		ChannelID:   message.ChannelID,
-		Ts:          message.TS,
-		EventType:   eventType(message),
-		SourceName:  message.SourceName,
-		PayloadJson: message.RawJSON,
-		CreatedAt:   formatDBTime(message.UpdatedAt),
-	}); err != nil {
+	if err := appendMessageEvent(ctx, qtx, message, formatDBTime(message.UpdatedAt)); err != nil {
 		return false, err
 	}
 
@@ -937,6 +967,7 @@ select exists (
 	}
 	for _, query := range []string{
 		`delete from message_events where channel_id = ? and ts = ?`,
+		`delete from message_event_heads where channel_id = ? and ts = ?`,
 		`delete from message_files where channel_id = ? and ts = ?`,
 		`delete from message_mentions where channel_id = ? and ts = ?`,
 		`delete from embedding_jobs where channel_id = ? and ts = ?`,
@@ -1048,14 +1079,7 @@ func (s *Store) markMessageDeleted(ctx context.Context, message Message, mention
 			return false, err
 		}
 	}
-	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
-		ChannelID:   message.ChannelID,
-		Ts:          message.TS,
-		EventType:   eventType(message),
-		SourceName:  message.SourceName,
-		PayloadJson: message.RawJSON,
-		CreatedAt:   updatedAt,
-	}); err != nil {
+	if err := appendMessageEvent(ctx, qtx, message, updatedAt); err != nil {
 		return false, err
 	}
 	if err := commit(); err != nil {
@@ -2305,6 +2329,41 @@ func eventType(message Message) string {
 	}
 }
 
+func appendMessageEvent(ctx context.Context, qtx *storedb.Queries, message Message, createdAt string) error {
+	typeName := eventType(message)
+	head, err := qtx.GetMessageEventHead(ctx, storedb.GetMessageEventHeadParams{
+		ChannelID:  message.ChannelID,
+		Ts:         message.TS,
+		EventType:  typeName,
+		SourceName: message.SourceName,
+	})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read message event head: %w", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) || head != message.RawJSON {
+		if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
+			ChannelID:   message.ChannelID,
+			Ts:          message.TS,
+			EventType:   typeName,
+			SourceName:  message.SourceName,
+			PayloadJson: message.RawJSON,
+			CreatedAt:   createdAt,
+		}); err != nil {
+			return err
+		}
+	}
+	if err := qtx.UpsertMessageEventHead(ctx, storedb.UpsertMessageEventHeadParams{
+		ChannelID:   message.ChannelID,
+		Ts:          message.TS,
+		EventType:   typeName,
+		SourceName:  message.SourceName,
+		PayloadJson: message.RawJSON,
+	}); err != nil {
+		return fmt.Errorf("update message event head: %w", err)
+	}
+	return nil
+}
+
 func messageKey(channelID string, ts string) string {
 	return strings.TrimSpace(channelID) + "|" + strings.TrimSpace(ts)
 }
@@ -2384,6 +2443,12 @@ func migrateSchema(db *sql.DB, currentVersion int) error {
 		}
 		currentVersion = 3
 	}
+	if currentVersion < 4 {
+		if _, err := tx.Exec(schemaV4Migration); err != nil {
+			return fmt.Errorf("migrate sqlite schema to v4: %w", err)
+		}
+		currentVersion = 4
+	}
 	if currentVersion != schemaVersion {
 		return fmt.Errorf("no migration path from sqlite schema version %d to %d", currentVersion, schemaVersion)
 	}
@@ -2405,16 +2470,17 @@ type schemaQueryer interface {
 
 func validateCurrentSchema(q schemaQueryer) error {
 	required := map[string][]string{
-		"workspaces":       {"id", "name", "domain", "enterprise_id", "raw_json", "updated_at"},
-		"channels":         {"id", "workspace_id", "name", "kind", "topic", "purpose", "is_private", "is_archived", "is_shared", "is_general", "raw_json", "updated_at"},
-		"users":            {"id", "workspace_id", "name", "real_name", "display_name", "title", "is_bot", "is_deleted", "raw_json", "updated_at"},
-		"messages":         {"channel_id", "ts", "workspace_id", "user_id", "subtype", "client_msg_id", "thread_ts", "parent_user_id", "text", "normalized_text", "reply_count", "latest_reply", "edited_ts", "deleted_ts", "source_rank", "source_name", "raw_json", "updated_at"},
-		"message_files":    {"workspace_id", "channel_id", "ts", "file_id", "user_id", "name", "title", "mimetype", "filetype", "pretty_type", "mode", "size", "url_private", "url_private_download", "permalink", "is_public", "plain_text", "preview_plain_text", "media_path", "content_sha256", "content_size", "fetched_at", "fetch_status", "fetch_error", "raw_json", "updated_at"},
-		"message_events":   {"id", "channel_id", "ts", "event_type", "source_name", "payload_json", "created_at"},
-		"sync_state":       {"source_name", "entity_type", "entity_id", "value", "updated_at"},
-		"message_mentions": {"channel_id", "ts", "mention_type", "target_id", "display_text"},
-		"embedding_jobs":   {"id", "channel_id", "ts", "state", "created_at"},
-		"message_fts":      {"message_key", "content"},
+		"workspaces":          {"id", "name", "domain", "enterprise_id", "raw_json", "updated_at"},
+		"channels":            {"id", "workspace_id", "name", "kind", "topic", "purpose", "is_private", "is_archived", "is_shared", "is_general", "raw_json", "updated_at"},
+		"users":               {"id", "workspace_id", "name", "real_name", "display_name", "title", "is_bot", "is_deleted", "raw_json", "updated_at"},
+		"messages":            {"channel_id", "ts", "workspace_id", "user_id", "subtype", "client_msg_id", "thread_ts", "parent_user_id", "text", "normalized_text", "reply_count", "latest_reply", "edited_ts", "deleted_ts", "source_rank", "source_name", "raw_json", "updated_at"},
+		"message_files":       {"workspace_id", "channel_id", "ts", "file_id", "user_id", "name", "title", "mimetype", "filetype", "pretty_type", "mode", "size", "url_private", "url_private_download", "permalink", "is_public", "plain_text", "preview_plain_text", "media_path", "content_sha256", "content_size", "fetched_at", "fetch_status", "fetch_error", "raw_json", "updated_at"},
+		"message_events":      {"id", "channel_id", "ts", "event_type", "source_name", "payload_json", "created_at"},
+		"message_event_heads": {"channel_id", "ts", "event_type", "source_name", "payload_json"},
+		"sync_state":          {"source_name", "entity_type", "entity_id", "value", "updated_at"},
+		"message_mentions":    {"channel_id", "ts", "mention_type", "target_id", "display_text"},
+		"embedding_jobs":      {"id", "channel_id", "ts", "state", "created_at"},
+		"message_fts":         {"message_key", "content"},
 	}
 	for table, columns := range required {
 		if err := requireSchemaColumns(q, table, columns); err != nil {

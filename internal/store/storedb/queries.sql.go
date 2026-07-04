@@ -232,6 +232,31 @@ func (q *Queries) GetChannelWorkspace(ctx context.Context, id string) (string, e
 	return workspace_id, err
 }
 
+const getMessageEventHead = `-- name: GetMessageEventHead :one
+select payload_json
+from message_event_heads
+where channel_id = ? and ts = ? and event_type = ? and source_name = ?
+`
+
+type GetMessageEventHeadParams struct {
+	ChannelID  string `json:"channel_id"`
+	Ts         string `json:"ts"`
+	EventType  string `json:"event_type"`
+	SourceName string `json:"source_name"`
+}
+
+func (q *Queries) GetMessageEventHead(ctx context.Context, arg GetMessageEventHeadParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getMessageEventHead,
+		arg.ChannelID,
+		arg.Ts,
+		arg.EventType,
+		arg.SourceName,
+	)
+	var payload_json string
+	err := row.Scan(&payload_json)
+	return payload_json, err
+}
+
 const getMessageSearchText = `-- name: GetMessageSearchText :one
 select normalized_text
 from messages
@@ -1572,6 +1597,32 @@ func (q *Queries) UpsertMessageByPriority(ctx context.Context, arg UpsertMessage
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertMessageEventHead = `-- name: UpsertMessageEventHead :exec
+insert into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
+values (?, ?, ?, ?, ?)
+on conflict(channel_id, ts, event_type, source_name) do update set
+  payload_json = excluded.payload_json
+`
+
+type UpsertMessageEventHeadParams struct {
+	ChannelID   string `json:"channel_id"`
+	Ts          string `json:"ts"`
+	EventType   string `json:"event_type"`
+	SourceName  string `json:"source_name"`
+	PayloadJson string `json:"payload_json"`
+}
+
+func (q *Queries) UpsertMessageEventHead(ctx context.Context, arg UpsertMessageEventHeadParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMessageEventHead,
+		arg.ChannelID,
+		arg.Ts,
+		arg.EventType,
+		arg.SourceName,
+		arg.PayloadJson,
+	)
+	return err
 }
 
 const upsertMessageMention = `-- name: UpsertMessageMention :exec

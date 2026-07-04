@@ -187,6 +187,17 @@ insert into message_fts (message_key, content) values (?, ?);
 insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
 values (?, ?, ?, ?, ?, ?);
 
+-- name: GetMessageEventHead :one
+select payload_json
+from message_event_heads
+where channel_id = ? and ts = ? and event_type = ? and source_name = ?;
+
+-- name: UpsertMessageEventHead :exec
+insert into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
+values (?, ?, ?, ?, ?)
+on conflict(channel_id, ts, event_type, source_name) do update set
+  payload_json = excluded.payload_json;
+
 -- name: MarkMessageDeleted :execrows
 update messages
 set deleted_ts = ?,

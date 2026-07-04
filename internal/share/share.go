@@ -246,6 +246,9 @@ func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, 
 	if _, err := tx.ExecContext(ctx, `delete from message_fts`); err != nil {
 		return Manifest{}, fmt.Errorf("clear message_fts: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `delete from message_event_heads`); err != nil {
+		return Manifest{}, fmt.Errorf("clear message event heads: %w", err)
+	}
 	for i := len(SnapshotTables) - 1; i >= 0; i-- {
 		table := SnapshotTables[i]
 		if _, err := tx.ExecContext(ctx, "delete from "+quoteIdent(table)); err != nil { //nolint:gosec // Snapshot table names are quoted identifiers from the fixed schema list.

@@ -11,7 +11,10 @@ import (
 	"github.com/openclaw/slacrawl/internal/store/storedb"
 )
 
-const purgeMessageKeysTable = "temp.slacrawl_purge_message_keys"
+const (
+	purgeMessageKeysTable     = "temp.slacrawl_purge_message_keys"
+	purgeMessageEventIDsTable = "temp.slacrawl_purge_message_event_ids"
+)
 
 const (
 	retentionFloorSource     = "retention"
@@ -25,10 +28,11 @@ and cast(substr(ts, 7, instr(substr(ts, 7), ':') - 1) as real) >= 1000000000`
 )
 
 type PurgeOptions struct {
-	Before         time.Time
-	WorkspaceID    string
-	Delete         bool
-	RequireNoMedia bool
+	Before            time.Time
+	WorkspaceID       string
+	Delete            bool
+	RequireNoMedia    bool
+	KeepMessageEvents int
 }
 
 type PurgeMedia struct {
@@ -37,18 +41,22 @@ type PurgeMedia struct {
 }
 
 type PurgeReport struct {
-	Messages      int64
-	MessageEvents int64
-	MessageFiles  int64
-	Mentions      int64
-	EmbeddingJobs int64
-	FTSEntries    int64
-	Media         []PurgeMedia
+	Messages               int64
+	MessageEvents          int64
+	CompactedMessageEvents int64
+	MessageFiles           int64
+	Mentions               int64
+	EmbeddingJobs          int64
+	FTSEntries             int64
+	Media                  []PurgeMedia
 }
 
 func (s *Store) PurgeMessages(ctx context.Context, opts PurgeOptions) (PurgeReport, error) {
 	if opts.Before.IsZero() {
 		return PurgeReport{}, errors.New("purge cutoff is required")
+	}
+	if opts.KeepMessageEvents < 0 {
+		return PurgeReport{}, errors.New("message event retention cannot be negative")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -102,8 +110,11 @@ where (
 	if err := selectUntimestampedPurgeDrafts(ctx, tx, before, opts.WorkspaceID); err != nil {
 		return PurgeReport{}, err
 	}
+	if err := selectMessageEventsForCompaction(ctx, tx, opts.WorkspaceID, opts.KeepMessageEvents); err != nil {
+		return PurgeReport{}, err
+	}
 
-	report, err := readPurgeReport(ctx, tx)
+	report, err := readPurgeReport(ctx, tx, opts.KeepMessageEvents > 0)
 	if err != nil {
 		return PurgeReport{}, err
 	}
@@ -122,6 +133,14 @@ where (
 		}
 		if err := deletePurgeSelection(ctx, tx); err != nil {
 			return PurgeReport{}, err
+		}
+		if err := deleteMessageEventCompactionSelection(ctx, tx, opts.KeepMessageEvents > 0); err != nil {
+			return PurgeReport{}, err
+		}
+	}
+	if opts.KeepMessageEvents > 0 {
+		if _, err := tx.ExecContext(ctx, `drop table `+purgeMessageEventIDsTable); err != nil {
+			return PurgeReport{}, fmt.Errorf("drop message event compaction selection: %w", err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `drop table `+purgeMessageKeysTable); err != nil {
@@ -287,7 +306,48 @@ values (?, ?, ?)
 	return nil
 }
 
-func readPurgeReport(ctx context.Context, tx *sql.Tx) (PurgeReport, error) {
+func selectMessageEventsForCompaction(ctx context.Context, tx *sql.Tx, workspaceID string, keep int) error {
+	if keep == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `drop table if exists `+purgeMessageEventIDsTable); err != nil {
+		return fmt.Errorf("reset message event compaction selection: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+create temporary table slacrawl_purge_message_event_ids (
+  id integer primary key
+)
+`); err != nil {
+		return fmt.Errorf("create message event compaction selection: %w", err)
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if _, err := tx.ExecContext(ctx, `
+insert into `+purgeMessageEventIDsTable+` (id)
+select id
+from (
+  select
+    e.id,
+    row_number() over (
+      partition by e.channel_id, e.ts, e.event_type, e.source_name
+      order by e.id desc
+    ) as retention_rank
+  from message_events e
+  join messages m on m.channel_id = e.channel_id and m.ts = e.ts
+  where (? = '' or m.workspace_id = ?)
+    and not exists (
+      select 1
+      from `+purgeMessageKeysTable+` p
+      where p.workspace_id = m.workspace_id and p.channel_id = e.channel_id and p.ts = e.ts
+    )
+)
+where retention_rank > ?
+`, workspaceID, workspaceID, keep); err != nil {
+		return fmt.Errorf("select message events for compaction: %w", err)
+	}
+	return nil
+}
+
+func readPurgeReport(ctx context.Context, tx *sql.Tx, compactMessageEvents bool) (PurgeReport, error) {
 	report := PurgeReport{}
 	counts := []struct {
 		label string
@@ -327,6 +387,11 @@ join ` + purgeMessageKeysTable + ` p on f.message_key = p.channel_id || '|' || p
 	for _, count := range counts {
 		if err := tx.QueryRowContext(ctx, count.query).Scan(count.dest); err != nil {
 			return PurgeReport{}, fmt.Errorf("count purge %s: %w", count.label, err)
+		}
+	}
+	if compactMessageEvents {
+		if err := tx.QueryRowContext(ctx, `select count(*) from `+purgeMessageEventIDsTable).Scan(&report.CompactedMessageEvents); err != nil {
+			return PurgeReport{}, fmt.Errorf("count compacted message events: %w", err)
 		}
 	}
 
@@ -377,6 +442,13 @@ where exists (
   join messages m on m.workspace_id = p.workspace_id and m.channel_id = message_events.channel_id and m.ts = message_events.ts
   where p.channel_id = message_events.channel_id and p.ts = message_events.ts
 )`},
+		{"message event heads", `
+delete from message_event_heads
+where exists (
+  select 1 from ` + purgeMessageKeysTable + ` p
+  join messages m on m.workspace_id = p.workspace_id and m.channel_id = message_event_heads.channel_id and m.ts = message_event_heads.ts
+  where p.channel_id = message_event_heads.channel_id and p.ts = message_event_heads.ts
+)`},
 		{"message files", `
 delete from message_files
 where exists (
@@ -414,6 +486,19 @@ where exists (
 		if _, err := tx.ExecContext(ctx, deletion.query); err != nil {
 			return fmt.Errorf("delete purge %s: %w", deletion.label, err)
 		}
+	}
+	return nil
+}
+
+func deleteMessageEventCompactionSelection(ctx context.Context, tx *sql.Tx, selected bool) error {
+	if !selected {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+delete from message_events
+where id in (select id from `+purgeMessageEventIDsTable+`)
+`); err != nil {
+		return fmt.Errorf("compact retained message events: %w", err)
 	}
 	return nil
 }

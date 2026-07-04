@@ -193,7 +193,7 @@ Choose the path that matches your setup:
 - `update` pulls and imports the latest git snapshot, or restores a historical tag/ref without moving the share checkout
 - `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
 - `import` imports a Slack export ZIP or extracted export directory
-- `purge` previews or deletes messages and message-owned records older than a cutoff
+- `purge` previews or deletes messages and message-owned records older than a cutoff, with optional retained-event compaction
 - `tail` listens for live events through Socket Mode, including one tail per configured workspace
 - `watch` refreshes desktop-local state on a schedule, optionally scoped with `--workspace <id>`
 - `search` runs safe local text search with FTS and substring fallback, optionally filtered by workspace

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,6 +51,7 @@ values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
 	require.Equal(t, preview, executed)
 	requireTableCount(t, st, "messages", 2)
 	requireTableCount(t, st, "message_events", 2)
+	requireTableCount(t, st, "message_event_heads", 2)
 	requireTableCount(t, st, "message_files", 2)
 	requireTableCount(t, st, "message_mentions", 2)
 	requireTableCount(t, st, "embedding_jobs", 1)
@@ -66,6 +68,73 @@ values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
 	require.NoError(t, err)
 	require.Zero(t, empty.Messages)
 	require.Empty(t, empty.Media)
+}
+
+func TestPurgeMessagesCompactsRetainedEventHistoryBySourceAndType(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	oldTime := time.Date(2025, 12, 1, 12, 0, 0, 0, time.UTC)
+	newTime := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	upsertPurgeTestMessage(t, st, "T1", "C-old", oldTime, "old", "F-old", "", 0)
+	upsertPurgeTestMessage(t, st, "T1", "C-keep", newTime, "keep", "F-keep", "", 0)
+	upsertPurgeTestMessage(t, st, "T2", "C-other", newTime, "other", "F-other", "", 0)
+
+	retainedTS := slackTSFromTime(newTime)
+	for i := 1; i <= 4; i++ {
+		_, err := st.DB().ExecContext(ctx, `
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
+values (?, ?, 'message', 'api-bot', ?, ?)
+`, "C-keep", retainedTS, fmt.Sprintf(`{"api":%d}`, i), formatDBTime(newTime.Add(time.Duration(i)*time.Second)))
+		require.NoError(t, err)
+	}
+	for i := 1; i <= 3; i++ {
+		_, err := st.DB().ExecContext(ctx, `
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
+values (?, ?, 'message_changed', 'desktop-indexeddb', ?, ?)
+`, "C-keep", retainedTS, fmt.Sprintf(`{"desktop":%d}`, i), formatDBTime(newTime.Add(time.Duration(i)*time.Second)))
+		require.NoError(t, err)
+	}
+	for i := 1; i <= 2; i++ {
+		_, err := st.DB().ExecContext(ctx, `
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
+values (?, ?, 'message', 'api-bot', ?, ?)
+`, "C-other", retainedTS, fmt.Sprintf(`{"other":%d}`, i), formatDBTime(newTime.Add(time.Duration(i)*time.Second)))
+		require.NoError(t, err)
+	}
+
+	opts := PurgeOptions{Before: cutoff, WorkspaceID: "T1", KeepMessageEvents: 2}
+	preview, err := st.PurgeMessages(ctx, opts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), preview.Messages)
+	require.Equal(t, int64(1), preview.MessageEvents)
+	require.Equal(t, int64(4), preview.CompactedMessageEvents)
+	requireTableCount(t, st, "message_events", 12)
+
+	opts.Delete = true
+	executed, err := st.PurgeMessages(ctx, opts)
+	require.NoError(t, err)
+	require.Equal(t, preview, executed)
+	requireTableCount(t, st, "message_events", 7)
+
+	rows, err := st.QueryReadOnly(ctx, `
+select channel_id, event_type, source_name, payload_json
+from message_events
+order by channel_id, event_type, source_name, id
+`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"channel_id": "C-keep", "event_type": "message", "source_name": "api-bot", "payload_json": `{"api":3}`},
+		{"channel_id": "C-keep", "event_type": "message", "source_name": "api-bot", "payload_json": `{"api":4}`},
+		{"channel_id": "C-keep", "event_type": "message_changed", "source_name": "desktop-indexeddb", "payload_json": `{"desktop":2}`},
+		{"channel_id": "C-keep", "event_type": "message_changed", "source_name": "desktop-indexeddb", "payload_json": `{"desktop":3}`},
+		{"channel_id": "C-other", "event_type": "message", "source_name": "api-bot", "payload_json": `{}`},
+		{"channel_id": "C-other", "event_type": "message", "source_name": "api-bot", "payload_json": `{"other":1}`},
+		{"channel_id": "C-other", "event_type": "message", "source_name": "api-bot", "payload_json": `{"other":2}`},
+	}, rows)
 }
 
 func TestPurgeMessagesWorkspaceScopeKeepsOtherWorkspaceRows(t *testing.T) {

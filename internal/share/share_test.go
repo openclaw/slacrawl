@@ -33,8 +33,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	require.NotEmpty(t, manifest.Tables)
 	require.FileExists(t, filepath.Join(opts.RepoPath, ManifestName))
 
-	reader, err := store.Open(filepath.Join(dir, "reader.db"))
-	require.NoError(t, err)
+	reader := seedStore(t, filepath.Join(dir, "reader.db"))
 	defer func() { require.NoError(t, reader.Close()) }()
 
 	imported, err := Import(ctx, reader, opts)
@@ -45,6 +44,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "git backed archive works", rows[0].Text)
+	heads, err := reader.QueryReadOnly(ctx, `select count(*) as count from message_event_heads`)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), heads[0]["count"])
 }
 
 func TestImportRejectsIncompleteManifestBeforeClearing(t *testing.T) {
