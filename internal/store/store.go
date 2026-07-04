@@ -25,6 +25,35 @@ pragma journal_mode = wal;
 pragma busy_timeout = 5000;
 `
 
+const messageEventHeadsSchema = `
+create table if not exists message_event_heads (
+  channel_id text not null,
+  ts text not null,
+  event_type text not null,
+  source_name text not null,
+  payload_json text not null,
+  primary key (channel_id, ts, event_type, source_name)
+) without rowid;
+
+create trigger if not exists seed_message_event_head_before_update
+before update on messages
+begin
+  insert into message_event_heads (
+    channel_id, ts, event_type, source_name, payload_json
+  ) values (
+    old.channel_id,
+    old.ts,
+    case
+      when trim(coalesce(old.deleted_ts, '')) <> '' then 'message_deleted'
+      when trim(coalesce(old.edited_ts, '')) <> '' then 'message_changed'
+      else 'message'
+    end,
+    old.source_name,
+    old.raw_json
+  ) on conflict (channel_id, ts, event_type, source_name) do nothing;
+end;
+`
+
 const schema = `
 pragma foreign_keys = on;
 pragma journal_mode = wal;
@@ -137,16 +166,7 @@ create table if not exists message_events (
   payload_json text not null,
   created_at text not null
 );
-
-create table if not exists message_event_heads (
-  channel_id text not null,
-  ts text not null,
-  event_type text not null,
-  source_name text not null,
-  payload_json text not null,
-  primary key (channel_id, ts, event_type, source_name)
-);
-
+` + messageEventHeadsSchema + `
 create table if not exists sync_state (
   source_name text not null,
   entity_type text not null,
@@ -223,33 +243,7 @@ create index if not exists idx_message_files_file_id on message_files(file_id);
 create index if not exists idx_message_files_name on message_files(name);
 `
 
-const schemaV4Migration = `
-create table if not exists message_event_heads (
-  channel_id text not null,
-  ts text not null,
-  event_type text not null,
-  source_name text not null,
-  payload_json text not null,
-  primary key (channel_id, ts, event_type, source_name)
-);
-
--- Seed canonical snapshots without scanning potentially multi-gigabyte event
--- history during database open. Non-canonical source/type partitions seed
--- lazily on their next event, bounding upgrade overhead to one row per active
--- partition instead of an unbounded migration.
-insert or ignore into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
-select
-  channel_id,
-  ts,
-  case
-    when trim(coalesce(deleted_ts, '')) <> '' then 'message_deleted'
-    when trim(coalesce(edited_ts, '')) <> '' then 'message_changed'
-    else 'message'
-  end,
-  source_name,
-  raw_json
-from messages;
-`
+const schemaV4Migration = messageEventHeadsSchema
 
 type Store struct {
 	db *sql.DB
@@ -375,6 +369,18 @@ type MessageRow struct {
 	Subtype        string `json:"subtype"`
 	SourceName     string `json:"source_name,omitempty"`
 }
+
+// Keep this projection in the same order as scanMessageRows.
+const messageRowSelect = `m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''),
+       m.ts, coalesce(m.user_id, ''),
+       coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
+       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
+       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name`
+
+const messageRowJoins = `
+left join workspaces w on w.id = m.workspace_id
+left join channels c on c.id = m.channel_id
+left join users u on u.id = m.user_id`
 
 type SearchMode string
 
@@ -1372,58 +1378,30 @@ func (s *Store) searchAuto(ctx context.Context, workspaceID string, query string
 
 func (s *Store) searchFTS(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
 	sqlQuery := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
-       coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
-       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
+select ` + messageRowSelect + `
 from message_fts f
 join messages m on f.message_key = m.channel_id || '|' || m.ts
-left join workspaces w on w.id = m.workspace_id
-left join channels c on c.id = m.channel_id
-left join users u on u.id = m.user_id
+` + messageRowJoins + `
 where message_fts match ?
   and (? = '' or m.workspace_id = ?)
 order by m.ts desc
 limit ?
 `
-	rows, err := s.db.QueryContext(ctx, sqlQuery, query, workspaceID, workspaceID, RequireLimit(limit))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out, err := scanMessageRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	return out, s.resolveMessageRowMentions(ctx, out)
+	return s.queryMessageRows(ctx, sqlQuery, query, workspaceID, workspaceID, RequireLimit(limit))
 }
 
 func (s *Store) searchLike(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
 	pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(query))) + "%"
 	sqlQuery := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
-       coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
-       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
+select ` + messageRowSelect + `
 from messages m
-left join workspaces w on w.id = m.workspace_id
-left join channels c on c.id = m.channel_id
-left join users u on u.id = m.user_id
+` + messageRowJoins + `
 where (? = '' or m.workspace_id = ?)
   and (lower(m.text) like ? escape '\' or lower(m.normalized_text) like ? escape '\')
 order by m.ts desc
 limit ?
 `
-	rows, err := s.db.QueryContext(ctx, sqlQuery, workspaceID, workspaceID, pattern, pattern, RequireLimit(limit))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out, err := scanMessageRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	return out, s.resolveMessageRowMentions(ctx, out)
+	return s.queryMessageRows(ctx, sqlQuery, workspaceID, workspaceID, pattern, pattern, RequireLimit(limit))
 }
 
 func termsFTS5Query(query string) string {
@@ -1473,14 +1451,9 @@ func escapeLike(value string) string {
 
 func (s *Store) Messages(ctx context.Context, workspaceID string, channelID string, userID string, limit int) ([]MessageRow, error) {
 	query := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
-       coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
-       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
+select ` + messageRowSelect + `
 from messages m
-left join workspaces w on w.id = m.workspace_id
-left join channels c on c.id = m.channel_id
-left join users u on u.id = m.user_id
+` + messageRowJoins + `
 where 1=1`
 	args := []any{}
 	if workspaceID != "" {
@@ -1497,16 +1470,7 @@ where 1=1`
 	}
 	query += ` order by m.ts desc limit ?`
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out, err := scanMessageRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	return out, s.resolveMessageRowMentions(ctx, out)
+	return s.queryMessageRows(ctx, query, args...)
 }
 
 func (s *Store) MessagesWithThreadContext(ctx context.Context, workspaceID string, channelID string, userID string, limit int) ([]MessageRow, error) {
@@ -1560,28 +1524,15 @@ func (s *Store) hydrateThreadContext(ctx context.Context, rows []MessageRow, lim
 		contextLimit = 2000
 	}
 	query := `
-select m.workspace_id, coalesce(w.name, ''), m.channel_id, coalesce(c.name, ''), m.ts, coalesce(m.user_id, ''),
-       coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), ''),
-       m.text, m.normalized_text, coalesce(m.thread_ts, ''), m.reply_count,
-       coalesce(m.latest_reply, ''), coalesce(m.subtype, ''), m.source_name
+select ` + messageRowSelect + `
 from messages m
-left join workspaces w on w.id = m.workspace_id
-left join channels c on c.id = m.channel_id
-left join users u on u.id = m.user_id
+` + messageRowJoins + `
 where ` + strings.Join(clauses, " or ") + `
 order by m.ts desc
 limit ?`
 	args = append(args, contextLimit)
-	contextRows, err := s.db.QueryContext(ctx, query, args...)
+	extra, err := s.queryMessageRows(ctx, query, args...)
 	if err != nil {
-		return nil, err
-	}
-	defer contextRows.Close()
-	extra, err := scanMessageRows(contextRows)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.resolveMessageRowMentions(ctx, extra); err != nil {
 		return nil, err
 	}
 	return mergeMessageRows(rows, extra), nil
@@ -1669,6 +1620,10 @@ where mm.mention_type = 'user'
 			}
 			key := messageKey(channelID, ts)
 			byKey[key] = append(byKey[key], messageMentionDisplay{target: target, display: display})
+		}
+		if err := mentionRows.Err(); err != nil {
+			_ = mentionRows.Close()
+			return err
 		}
 		if err := mentionRows.Close(); err != nil {
 			return err
@@ -2290,6 +2245,19 @@ func scanMessageRows(rows *sql.Rows) ([]MessageRow, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) queryMessageRows(ctx context.Context, query string, args ...any) ([]MessageRow, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.resolveMessageRowMentions(ctx, out)
+}
+
 func boolInt(value bool) int64 {
 	if value {
 		return 1
@@ -2344,17 +2312,18 @@ func appendMessageEvent(ctx context.Context, qtx *storedb.Queries, message Messa
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("read message event head: %w", err)
 	}
-	if errors.Is(err, sql.ErrNoRows) || head != message.RawJSON {
-		if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
-			ChannelID:   message.ChannelID,
-			Ts:          message.TS,
-			EventType:   typeName,
-			SourceName:  message.SourceName,
-			PayloadJson: message.RawJSON,
-			CreatedAt:   createdAt,
-		}); err != nil {
-			return err
-		}
+	if err == nil && head == message.RawJSON {
+		return nil
+	}
+	if err := qtx.InsertMessageEvent(ctx, storedb.InsertMessageEventParams{
+		ChannelID:   message.ChannelID,
+		Ts:          message.TS,
+		EventType:   typeName,
+		SourceName:  message.SourceName,
+		PayloadJson: message.RawJSON,
+		CreatedAt:   createdAt,
+	}); err != nil {
+		return err
 	}
 	if err := qtx.UpsertMessageEventHead(ctx, storedb.UpsertMessageEventHeadParams{
 		ChannelID:   message.ChannelID,

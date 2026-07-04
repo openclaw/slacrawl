@@ -11,6 +11,10 @@
 - Normalized relative runtime paths to absolute paths so commands can open databases created with `init --db <relative-path>`.
 - Treated nullable optional message metadata as empty when reading historical archives.
 
+### Performance
+
+- Made event-history upgrades constant-time by lazily seeding compact message heads on update instead of scanning the entire archive.
+
 ### Maintenance
 
 - Hardened release workflows, MCP stdio environment forwarding, command completion, and canonical Homebrew tap targeting.

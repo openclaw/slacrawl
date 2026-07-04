@@ -96,6 +96,16 @@ where channel_id = 'C1' and ts = '123.45'
 	assertEmptyOptionals(t, rows, err)
 	rows, err = s.Messages(ctx, "T1", "C1", "", 10)
 	assertEmptyOptionals(t, rows, err)
+
+	rows, err = s.hydrateThreadContext(ctx, []MessageRow{{
+		WorkspaceID: "T1",
+		ChannelID:   "C1",
+		TS:          "999.99",
+		ThreadTS:    "123.45",
+	}}, 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assertEmptyOptionals(t, rows[1:], nil)
 }
 
 func TestSearchMessagesAutoEscapesAndFallsBack(t *testing.T) {
@@ -669,7 +679,7 @@ func TestOpenMigratesVersion2Schema(t *testing.T) {
 	requireTableCount(t, s, "message_event_heads", 1)
 }
 
-func TestOpenMigratesVersion3AndSeedsCanonicalEventHeads(t *testing.T) {
+func TestOpenMigratesVersion3AndLazilySeedsCanonicalEventHeads(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
 	require.NoError(t, err)
@@ -685,17 +695,77 @@ func TestOpenMigratesVersion3AndSeedsCanonicalEventHeads(t *testing.T) {
 
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`drop table message_event_heads; pragma user_version = 3;`)
+	_, err = db.Exec(`
+drop trigger seed_message_event_head_before_update;
+drop table message_event_heads;
+pragma user_version = 3;
+`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
 	s, err = Open(dbPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, s.Close()) }()
-	requireTableCount(t, s, "message_event_heads", 1)
+	requireTableCount(t, s, "message_event_heads", 0)
+	var withoutRowID int
+	require.NoError(t, s.DB().QueryRow(`
+select instr(lower(sql), 'without rowid') > 0
+from sqlite_master
+where type = 'table' and name = 'message_event_heads'
+`).Scan(&withoutRowID))
+	require.Equal(t, 1, withoutRowID)
+
+	lowerPriority := message
+	lowerPriority.SourceRank = message.SourceRank + 1
+	lowerPriority.RawJSON = `{"text":"ignored"}`
+	updated, err := s.UpsertMessageByPriority(ctx, lowerPriority, nil)
+	require.NoError(t, err)
+	require.False(t, updated)
+	requireTableCount(t, s, "message_event_heads", 0)
+	requireTableCount(t, s, "message_events", 1)
+
 	message.UpdatedAt = now.Add(time.Second)
 	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_event_heads", 1)
 	requireTableCount(t, s, "message_events", 1)
+
+	message.RawJSON = `{"text":"changed"}`
+	message.UpdatedAt = now.Add(2 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_event_heads", 1)
+	requireTableCount(t, s, "message_events", 2)
+
+	message.SourceName = "api-bot"
+	message.RawJSON = `{"text":"new source"}`
+	message.UpdatedAt = now.Add(3 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_event_heads", 2)
+	requireTableCount(t, s, "message_events", 3)
+
+	message.EditedTS = "124.00"
+	message.RawJSON = `{"text":"edited"}`
+	message.UpdatedAt = now.Add(4 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_event_heads", 3)
+	requireTableCount(t, s, "message_events", 4)
+
+	_, err = s.DB().Exec(`
+create table message_event_head_updates (count integer not null);
+insert into message_event_head_updates values (0);
+create trigger count_message_event_head_updates
+after update on message_event_heads
+begin
+  update message_event_head_updates set count = count + 1;
+end;
+`)
+	require.NoError(t, err)
+	message.UpdatedAt = now.Add(5 * time.Second)
+	require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	requireTableCount(t, s, "message_event_heads", 3)
+	requireTableCount(t, s, "message_events", 4)
+	var headUpdates int
+	require.NoError(t, s.DB().QueryRow(`select count from message_event_head_updates`).Scan(&headUpdates))
+	require.Zero(t, headUpdates)
 }
 
 func TestOpenDoesNotStampInvalidOldSchema(t *testing.T) {
