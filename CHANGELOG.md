@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.7.7 - Unreleased
+
 ## 0.7.6 - 2026-07-06
 
 ### Maintenance
