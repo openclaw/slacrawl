@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.7.6 - Unreleased
+## 0.7.6 - 2026-07-06
+
+### Maintenance
+
+- Updated CrawlKit to 0.13.2.
+- Updated TruffleHog secret scanning to 3.95.8.
 
 ## 0.7.5 - 2026-07-04
 

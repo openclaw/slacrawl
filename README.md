@@ -87,12 +87,12 @@ brew install slacrawl
 <summary>Linux packages from GitHub Releases</summary>
 
 Download the package that matches your platform from the [latest release](https://github.com/openclaw/slacrawl/releases/latest).
-Set `version` to the release you want to install (shown for `0.7.5`).
+Set `version` to the release you want to install (shown for `0.7.6`).
 
 Debian/Ubuntu:
 
 ```bash
-version=0.7.5
+version=0.7.6
 curl -LO "https://github.com/openclaw/slacrawl/releases/download/v${version}/slacrawl_${version}_amd64.deb"
 sudo dpkg -i "slacrawl_${version}_amd64.deb"
 ```
@@ -100,7 +100,7 @@ sudo dpkg -i "slacrawl_${version}_amd64.deb"
 RHEL/Fedora:
 
 ```bash
-version=0.7.5
+version=0.7.6
 curl -LO "https://github.com/openclaw/slacrawl/releases/download/v${version}/slacrawl-${version}-1.x86_64.rpm"
 sudo rpm -i "slacrawl-${version}-1.x86_64.rpm"
 ```
