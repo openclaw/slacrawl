@@ -53,7 +53,7 @@ Out of scope for V1:
 An agent should assume:
 
 - shell: `zsh`
-- Go `1.25+` is installed
+- Go `1.26.5+` is installed
 - desktop-local Slack data may exist under:
   - `~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack`
   - `${XDG_CONFIG_HOME}/Slack`

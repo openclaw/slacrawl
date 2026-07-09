@@ -2,6 +2,12 @@
 
 ## 0.7.7 - Unreleased
 
+### Maintenance
+
+- Added fail-closed OpenClaw Developer ID signing and native verification for official macOS release assets while preserving credential-free local and cross-platform builds.
+- Updated CrawlKit to 0.13.4.
+- Updated the minimum Go toolchain to 1.26.5 to resolve GO-2026-5856 in `crypto/tls`.
+
 ## 0.7.6 - 2026-07-06
 
 ### Maintenance

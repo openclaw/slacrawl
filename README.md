@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/vincentkoc/slacrawl" alt="License"></a>
-  <img src="https://img.shields.io/badge/go-1.26.4%2B-00ADD8" alt="Go 1.26.4+">
+  <img src="https://img.shields.io/badge/go-1.26.5%2B-00ADD8" alt="Go 1.26.5+">
   <img src="https://img.shields.io/badge/storage-SQLite-003B57" alt="SQLite">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform">
 </p>
@@ -63,7 +63,7 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 
 ## Requirements
 
-- Go `1.26.4+`
+- Go `1.26.5+`
 - `node` if you want richer desktop-local IndexedDB blob decoding
 - a Slack bot token for standard API sync
 - a configured Slack MCP connector if you want MCP-backed sync

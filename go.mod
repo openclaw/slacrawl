@@ -1,11 +1,11 @@
 module github.com/openclaw/slacrawl
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/golang/snappy v1.0.0
-	github.com/openclaw/crawlkit v0.13.2
+	github.com/openclaw/crawlkit v0.13.4
 	github.com/slack-go/slack v0.27.0
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0
@@ -37,7 +37,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

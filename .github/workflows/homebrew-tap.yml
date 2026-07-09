@@ -1,21 +1,9 @@
 name: Update Homebrew Tap
 
 on:
-  workflow_call:
-    inputs:
-      tag_name:
-        description: "Release tag to sync (for example: v0.1.0)"
-        required: true
-        type: string
-  release:
+  repository_dispatch:
     types:
-      - published
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Release tag to sync (for example: v0.1.0)"
-        required: true
-        type: string
+      - release-published
 
 permissions:
   contents: read
@@ -25,14 +13,68 @@ env:
   FORMULA: slacrawl
 
 jobs:
-  update-tap:
-    runs-on: ubuntu-latest
-    if: startsWith(github.event.release.tag_name || inputs.tag_name, 'v')
+  verify-macos-assets:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: macos-15
+            archive-arch: arm64
+          - runs-on: macos-15-intel
+            archive-arch: amd64
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Resolve release tag
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.client_payload.tag_name }}
         run: |
           set -euo pipefail
-          echo "RELEASE_TAG=${{ github.event.release.tag_name || inputs.tag_name }}" >> "$GITHUB_ENV"
+          [[ "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG_INPUT" >&2
+            exit 1
+          }
+          printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG_INPUT" >> "$GITHUB_ENV"
+
+      - name: Checkout trusted verifier
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify signed macOS release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.draft')
+          [[ "$draft" == "false" ]] || {
+            echo "release is not published: $RELEASE_TAG" >&2
+            exit 1
+          }
+          mkdir -p artifacts
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts \
+            --pattern "sha256sums.txt" \
+            --pattern "slacrawl_${version}_darwin_${{ matrix.archive-arch }}.tar.gz"
+          scripts/verify-macos-release.sh "$RELEASE_TAG" \
+            artifacts/sha256sums.txt \
+            "artifacts/slacrawl_${version}_darwin_${{ matrix.archive-arch }}.tar.gz"
+
+  update-tap:
+    needs: verify-macos-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.client_payload.tag_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG_INPUT" >&2
+            exit 1
+          }
+          printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG_INPUT" >> "$GITHUB_ENV"
 
       - name: Dispatch tap formula update
         env:

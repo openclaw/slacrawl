@@ -1,4 +1,4 @@
-name: Release
+name: Release Validation
 
 on:
   push:
@@ -7,23 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to publish or validate (for example: v0.1.0)"
+        description: "Release tag to validate (for example: v0.1.0)"
         required: true
         type: string
-      skip_publish:
-        description: "Build and validate the release without publishing assets, packages, or tap updates"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  release-validation:
     runs-on: ubuntu-latest
-    env:
-      RELEASE_SKIP_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_publish && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -40,132 +33,9 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Guard manual release rerun
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_publish }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag_name }}
-        run: |
-          set -euo pipefail
-          release_json_file="$(mktemp)"
-          asset_count="0"
-          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "${release_json_file}" 2>&1; then
-            release_json="$(cat "${release_json_file}")"
-            asset_count="$(printf '%s' "${release_json}" | jq -r '(.assets // []) | length')"
-          elif ! grep -q "HTTP 404" "${release_json_file}"; then
-            cat "${release_json_file}" >&2
-            echo "::error::Could not inspect existing release ${RELEASE_TAG}; refusing to republish blindly."
-            exit 1
-          fi
-          if [ "${asset_count}" != "0" ]; then
-            echo "::error::Release ${RELEASE_TAG} already has ${asset_count} assets. Delete existing assets before republishing, or rerun with skip_publish=true to validate only."
-            exit 1
-          fi
-
-      - name: Configure GoReleaser
-        run: |
-          set -euo pipefail
-          args="release --clean"
-          if [ "${RELEASE_SKIP_PUBLISH}" = "1" ]; then
-            args="${args} --skip=publish"
-          fi
-          echo "GORELEASER_ARGS=${args}" >> "$GITHUB_ENV"
-
-      - name: Run GoReleaser
+      - name: Validate unsigned cross-platform packages
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: ${{ env.GORELEASER_ARGS }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Evaluate Cloudsmith configuration
-        env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-          CLOUDSMITH_REPO_CONFIG: ${{ vars.CLOUDSMITH_REPO }}
-        run: |
-          set -euo pipefail
-          REPO="${CLOUDSMITH_REPO_CONFIG:-}"
-          if [ -z "${CLOUDSMITH_API_KEY}" ]; then
-            echo "CLOUDSMITH_ENABLED=0" >> "$GITHUB_ENV"
-            echo "Cloudsmith publish disabled (missing CLOUDSMITH_API_KEY)."
-          elif [ -z "${REPO}" ]; then
-            echo "CLOUDSMITH_ENABLED=0" >> "$GITHUB_ENV"
-            echo "Cloudsmith publish disabled (missing CLOUDSMITH_REPO variable)."
-          else
-            echo "CLOUDSMITH_ENABLED=1" >> "$GITHUB_ENV"
-            echo "CLOUDSMITH_REPO_EFFECTIVE=${REPO}" >> "$GITHUB_ENV"
-          fi
-
-      - name: Install Cloudsmith CLI
-        if: ${{ env.CLOUDSMITH_ENABLED == '1' && env.RELEASE_SKIP_PUBLISH != '1' }}
-        run: |
-          set -euo pipefail
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cloudsmith-cli==1.11.1
-
-      - name: Publish APT packages to Cloudsmith
-        if: ${{ env.CLOUDSMITH_ENABLED == '1' && env.RELEASE_SKIP_PUBLISH != '1' }}
-        env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-          CLOUDSMITH_REPO: ${{ env.CLOUDSMITH_REPO_EFFECTIVE }}
-          CLOUDSMITH_APT_TARGETS: ${{ vars.CLOUDSMITH_APT_TARGETS }}
-          CLOUDSMITH_DISTRIBUTION: ${{ vars.CLOUDSMITH_DISTRIBUTION }}
-          CLOUDSMITH_RELEASE: ${{ vars.CLOUDSMITH_RELEASE }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          APT_TARGETS="${CLOUDSMITH_APT_TARGETS:-}"
-          packages=(dist/*.deb)
-          if [ "${#packages[@]}" -eq 0 ]; then
-            echo "::warning::No .deb packages found; skipping Cloudsmith APT publish."
-            exit 0
-          fi
-
-          if [ -z "${APT_TARGETS}" ]; then
-            if [ -n "${CLOUDSMITH_DISTRIBUTION:-}" ] && [ -n "${CLOUDSMITH_RELEASE:-}" ]; then
-              APT_TARGETS="${CLOUDSMITH_DISTRIBUTION}/${CLOUDSMITH_RELEASE}"
-            else
-              APT_TARGETS="ubuntu/jammy,debian/trixie"
-            fi
-          fi
-
-          for target_path in $(printf '%s' "${APT_TARGETS}" | tr ',' ' '); do
-            [ -z "${target_path}" ] && continue
-            TARGET="${CLOUDSMITH_REPO}/${target_path}"
-            for pkg in "${packages[@]}"; do
-              cloudsmith push deb "${TARGET}" "${pkg}" --no-wait-for-sync
-            done
-          done
-
-      - name: Publish RPM packages to Cloudsmith
-        if: ${{ env.CLOUDSMITH_ENABLED == '1' && env.RELEASE_SKIP_PUBLISH != '1' }}
-        env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-          CLOUDSMITH_REPO: ${{ env.CLOUDSMITH_REPO_EFFECTIVE }}
-          CLOUDSMITH_RPM_DISTRIBUTION: ${{ vars.CLOUDSMITH_RPM_DISTRIBUTION }}
-          CLOUDSMITH_RPM_RELEASE: ${{ vars.CLOUDSMITH_RPM_RELEASE }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          packages=(dist/*.rpm)
-          if [ "${#packages[@]}" -eq 0 ]; then
-            echo "::warning::No .rpm packages found; skipping Cloudsmith RPM publish."
-            exit 0
-          fi
-          DISTRO="${CLOUDSMITH_RPM_DISTRIBUTION:-el}"
-          RELEASE="${CLOUDSMITH_RPM_RELEASE:-9}"
-          TARGET="${CLOUDSMITH_REPO}/${DISTRO}/${RELEASE}"
-
-          for pkg in "${packages[@]}"; do
-            cloudsmith push rpm "${TARGET}" "${pkg}" --no-wait-for-sync
-          done
-
-  update-homebrew-tap:
-    needs: release
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_publish }}
-    uses: ./.github/workflows/homebrew-tap.yml
-    with:
-      tag_name: ${{ inputs.tag_name || github.ref_name }}
-    secrets: inherit
+          args: release --clean --skip=publish

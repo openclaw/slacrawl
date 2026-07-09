@@ -12,7 +12,7 @@ Thanks for contributing. This project is still early, so the main goal is to kee
 
 Requirements:
 
-- Go `1.25+`
+- Go `1.26.5+`
 - SQLite with FTS5 support
 
 Build and test:
@@ -44,6 +44,42 @@ go run ./cmd/slacrawl --help
 - Explain the user-visible behavior change and any important tradeoffs.
 - Add or update tests for behavior changes and regressions.
 - Keep PRs reviewable. Smaller is better.
+
+## Releases
+
+GoReleaser snapshot builds stay credential-free and cross-platform:
+
+```bash
+make release-snapshot
+```
+
+Official releases must run from a clean, exact signed tag already pushed to
+`origin` on Apple Silicon macOS through the managed release keychain and an
+authenticated local GitHub CLI:
+
+```bash
+make release
+```
+
+The macOS binaries are signed as `org.openclaw.slacrawl` by OpenClaw
+Foundation Team ID `FWJYW4S8P8`. Missing or mismatched signing credentials fail
+the official release before GoReleaser creates assets. GoReleaser uploads a
+draft release; verify its assets before publishing it. After publishing, send a
+`release-published` repository dispatch from the same authorized local GitHub
+session so the canonical default-branch workflow verifies both native signatures
+before updating the Homebrew tap:
+
+```bash
+tag=v0.7.7
+gh api --method POST repos/openclaw/slacrawl/dispatches \
+  -f event_type=release-published \
+  -f "client_payload[tag_name]=$tag"
+```
+
+Cloudsmith APT and RPM publication remain separate manual workflows.
+
+Private keychain and 1Password routing belongs only in the ignored local
+`.mac-release.env`; never commit it.
 
 ## Coding Guidelines
 

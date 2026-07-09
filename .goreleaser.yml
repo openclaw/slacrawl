@@ -18,6 +18,10 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X github.com/openclaw/slacrawl/internal/cli.version={{ .Version }}
+    hooks:
+      post:
+        - cmd: ./scripts/codesign-goreleaser-binary.sh "{{ .Path }}" "{{ .Target }}" "{{ .Version }}"
+          output: true
 
 archives:
   - id: bundles
@@ -33,6 +37,9 @@ archives:
 checksum:
   name_template: "sha256sums.txt"
   algorithm: sha256
+
+release:
+  draft: true
 
 changelog:
   sort: asc

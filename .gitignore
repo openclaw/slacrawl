@@ -6,3 +6,4 @@ slacrawl
 *.test
 *.out
 .DS_Store
+.mac-release.env
