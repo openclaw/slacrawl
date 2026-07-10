@@ -19,13 +19,14 @@
 
 Slack search is convenient until you need your own workflow, your own retention, or your own queries. `slacrawl` is a Go-based CLI that pulls Slack workspace metadata and message history into SQLite so you can inspect it without depending on the Slack UI.
 
-Data stays on your machine. You can run it in API mode, MCP connector mode, desktop mode, or a hybrid workflow. That covers one-shot syncs, live tailing over Socket Mode, connector-backed fetching, and local desktop recovery or "wiretap" style inspection from Slack Desktop artifacts already on your machine.
+Data stays on your machine. You can run it in API mode, MCP connector mode, desktop mode, external-provider mode, or a hybrid workflow. That covers one-shot syncs, live tailing over Socket Mode, connector-backed fetching, local archive imports, and local desktop recovery or "wiretap" style inspection from Slack Desktop artifacts already on your machine.
 
 ## Included
 
 - local SQLite storage with full-text search backed by SQLite FTS5
 - workspace, channel, user, and message sync
 - MCP connector sync through Codex's HTTP Slack connector or the reference Slack MCP server
+- generic external archive providers over a local JSONL subprocess protocol
 - thread reply backfill when a user token is available
 - DM and MPIM sync when a user token is available
 - incremental API history sync by default, with `--full` reserved for deliberate backfills
@@ -171,8 +172,9 @@ Treat one `slacrawl` config/database as one Slack visibility boundary. The archi
 
 - `--source bot` is an alias for `--source api`; it crawls Slack through configured bot/user tokens
 - `--source mcp` fetches through Codex's HTTP Slack connector or the reference Slack MCP server over stdio and requires a workspace ID for archive ownership
+- `--source provider:<name>` imports a configured external archive through a local subprocess and requires a workspace ID for archive ownership
 - `--source wiretap` is an alias for `--source desktop`; it reads the local Slack Desktop cache
-- `--source all` runs API first, then desktop enrichment
+- `--source all` runs API first, then desktop enrichment; external providers remain explicit
 - `[share]` is a backup/restore target for the current DB, not a second Slack source
 
 For separate company and personal archives, use separate configs with separate `db_path` and `[share].remote` values.
@@ -183,6 +185,7 @@ Choose the path that matches your setup:
 - use `sync --source bot --full` only when you want a deliberate full backfill
 - use `sync --source bot --latest-only` when you only want fresh deltas on channels that already have local history
 - use `sync --source mcp --workspace T01234567` when a configured HTTP or stdio MCP connector can read the workspace
+- use `sync --source provider:archive --workspace T01234567` when a configured local provider should import another archive
 - use `sync --source wiretap` when you want local desktop recovery only
 - use `watch` when you want desktop-local state to refresh into SQLite continuously
 
@@ -194,7 +197,7 @@ Choose the path that matches your setup:
 - `publish` exports the local SQLite archive into a git repo as compressed JSONL shards plus a manifest
 - `subscribe` configures a git-backed reader that can run without Slack credentials
 - `update` safely merges the latest git snapshot; `update --restore` performs explicit exact replacement, including historical tag/ref restores
-- `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
+- `sync` performs a one-shot crawl from bot/API, MCP connector, an external provider, wiretap/desktop, or the combined API-plus-desktop mode
 - `import` imports a Slack export ZIP or extracted export directory
 - `purge` previews or deletes messages and message-owned records older than a cutoff, with optional retained-event compaction
 - `tail` listens for live events through Socket Mode, including one tail per configured workspace
@@ -361,6 +364,65 @@ go run ./cmd/slacrawl files --filename runbook
 go run ./cmd/slacrawl files fetch --missing --max-bytes 104857600
 go run ./cmd/slacrawl sync --source bot --latest-only --with-media
 ```
+
+## External Archive Providers
+
+An external provider is a trusted local executable that streams workspace,
+channel, user, and message records into the normal SQLite archive. Configure it
+with a unique name, then select it explicitly with `provider:<name>`:
+
+```toml
+[[providers]]
+name = "archive"
+command = "/usr/local/bin/archive-provider"
+args = ["provide", "--format", "jsonl"]
+env_allowlist = ["ARCHIVE_DB_PATH"]
+source_rank = 5
+batch_size = 1000
+```
+
+```bash
+slacrawl sync --source provider:archive --workspace T01234567
+slacrawl sync --source provider:archive --workspace T01234567 --latest-only
+slacrawl sync --source provider:archive --workspace T01234567 --full
+slacrawl sync --source provider:archive --workspace T01234567 --limit 100
+```
+
+`command` must be an absolute path; `~` and `~/...` are expanded before
+validation. The
+configured `args` are passed directly without a shell. Only a minimal runtime
+environment and variables named by `env_allowlist` reach the process, so put
+secret values in the environment rather than in TOML. `source_rank` must be
+greater than `2`; lower numeric ranks win, keeping higher-priority native data
+authoritative. Equal ranks may replace, so use a larger number for a
+lower-priority provider.
+
+`batch_size` defaults to `1000`, must be between `1` and `100000`, and is sent to
+the provider as a preferred upstream batch size.
+
+`slacrawl` writes one JSON request line to provider stdin. The request identifies
+protocol `slacrawl-provider-v1` and forwards the workspace, `since`, `full`,
+`latest_only`, channel filters, opaque saved checkpoint, batch size, and optional
+validation limit. Provider stdout must be JSONL: one `hello` record, zero or more
+`workspace`, `channel`, `user`, `message`, or `checkpoint` records, then one
+`done` record. A successful run must emit `done` and exit zero. `slacrawl`
+validates workspace ownership and the message limit, builds normalized search
+text, updates FTS and mentions, and does not replace a higher-priority canonical
+message.
+
+Checkpoints are isolated by invocation scope. A normal incremental run reuses
+the workspace checkpoint; filters, `--since`, `--full`, `--latest-only`, and
+`--limit` use separate checkpoints so bounded or partial runs cannot advance the
+normal cursor. A completed unbounded full run promotes its last checkpoint to
+the matching incremental scope. Providers should emit a checkpoint only after
+the records it covers and must honor the forwarded filters; `slacrawl` cannot
+infer provider-specific filtering.
+
+Treat provider executables as part of the archive's trust boundary. They can
+read allowlisted environment values, run with the caller's OS permissions, and
+emit private Slack data. See
+[Configuration](./docs/configuration.md#external-archive-providers) for the
+complete request and response contract.
 
 ## Git Archive Sharing
 

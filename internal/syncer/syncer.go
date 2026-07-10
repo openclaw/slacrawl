@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openclaw/slacrawl/internal/config"
+	"github.com/openclaw/slacrawl/internal/provider"
 	"github.com/openclaw/slacrawl/internal/slackapi"
 	"github.com/openclaw/slacrawl/internal/slackdesktop"
 	"github.com/openclaw/slacrawl/internal/slackmcp"
@@ -25,7 +26,8 @@ const (
 )
 
 func ParseSource(value string) (Source, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
 	case "", string(SourceAPI), "bot":
 		return SourceAPI, nil
 	case string(SourceDesktop), "wiretap":
@@ -34,9 +36,16 @@ func ParseSource(value string) (Source, error) {
 		return SourceMCP, nil
 	case string(SourceAll), "hybrid":
 		return SourceAll, nil
-	default:
-		return "", fmt.Errorf("unsupported source %q: use api, bot, desktop, wiretap, mcp, connector, or all", value)
 	}
+	if name, ok := strings.CutPrefix(normalized, "provider:"); ok && name != "" && !strings.ContainsAny(name, ":/\\\t\r\n ") {
+		return Source("provider:" + name), nil
+	}
+	return "", fmt.Errorf("unsupported source %q: use api, bot, desktop, wiretap, mcp, connector, all, or provider:<name>", value)
+}
+
+func ProviderName(source Source) (string, bool) {
+	name, ok := strings.CutPrefix(string(source), "provider:")
+	return name, ok && name != ""
 }
 
 type Options struct {
@@ -48,6 +57,7 @@ type Options struct {
 	Since           string
 	Full            bool
 	LatestOnly      bool
+	Limit           int
 	Concurrency     int
 	AutoJoin        *bool
 	APIURL          string
@@ -56,8 +66,9 @@ type Options struct {
 }
 
 type Summary struct {
-	Desktop slackdesktop.Source `json:"desktop"`
-	MCP     *slackmcp.Summary   `json:"mcp,omitempty"`
+	Desktop  slackdesktop.Source `json:"desktop"`
+	MCP      *slackmcp.Summary   `json:"mcp,omitempty"`
+	Provider *provider.Summary   `json:"provider,omitempty"`
 }
 
 func Run(ctx context.Context, cfg config.Config, st *store.Store, opts Options) (Summary, error) {
@@ -114,7 +125,22 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		}
 		return syncDesktop(ctx, cfg, st, desktopOptionsForSourceAll(opts))
 	default:
-		return summary, errors.New("unsupported source")
+		name, ok := ProviderName(opts.Source)
+		if !ok {
+			return summary, errors.New("unsupported source")
+		}
+		providerConfig, ok := cfg.Provider(name)
+		if !ok {
+			return summary, fmt.Errorf("provider %q is not configured", name)
+		}
+		providerSummary, err := provider.Sync(ctx, st, providerConfig, provider.Options{
+			WorkspaceID: opts.WorkspaceID, Channels: opts.Channels,
+			ExcludeChannels: opts.ExcludeChannels, Since: opts.Since,
+			Full: opts.Full, LatestOnly: opts.LatestOnly, Limit: opts.Limit,
+			Logger: opts.Logger,
+		})
+		summary.Provider = &providerSummary
+		return summary, err
 	}
 }
 

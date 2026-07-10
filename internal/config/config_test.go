@@ -103,6 +103,10 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Slack.MCP.Enabled = true
 	cfg.Slack.MCP.BaseURL = "https://mcp.example.test"
 	cfg.Slack.MCP.AuthPath = filepath.Join(dir, "auth.json")
+	cfg.Providers = []Provider{{
+		Name: " Archive ", Command: filepath.Join(dir, "archive-provider"), Args: []string{"provide"},
+		EnvAllowlist: []string{"ARCHIVE_CACHE_PATH", "ARCHIVE_CACHE_PATH"}, SourceRank: 5,
+	}}
 	require.NoError(t, cfg.Save(path))
 
 	loaded, err := Load(path)
@@ -116,6 +120,34 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	require.True(t, filepath.IsAbs(loaded.DBPath))
 	require.True(t, filepath.IsAbs(loaded.Share.RepoPath))
 	require.Equal(t, "https://example.com/private/slacrawl.git", loaded.Share.Remote)
+	require.Len(t, loaded.Providers, 1)
+	require.Equal(t, "archive", loaded.Providers[0].Name)
+	require.Equal(t, 1_000, loaded.Providers[0].BatchSize)
+	require.Equal(t, []string{"ARCHIVE_CACHE_PATH"}, loaded.Providers[0].EnvAllowlist)
+	provider, ok := loaded.Provider("ARCHIVE")
+	require.True(t, ok)
+	require.Equal(t, filepath.Join(dir, "archive-provider"), provider.Command)
+}
+
+func TestNormalizeRejectsUnsafeProviderConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider Provider
+		message  string
+	}{
+		{name: "relative command", provider: Provider{Name: "p", Command: "archive-provider", SourceRank: 5}, message: "absolute path"},
+		{name: "priority one", provider: Provider{Name: "p", Command: "/bin/true", SourceRank: 1}, message: "greater than 2"},
+		{name: "priority tie", provider: Provider{Name: "p", Command: "/bin/true", SourceRank: 2}, message: "greater than 2"},
+		{name: "name", provider: Provider{Name: "bad:name", Command: "/bin/true", SourceRank: 5}, message: "must not contain"},
+		{name: "batch", provider: Provider{Name: "p", Command: "/bin/true", SourceRank: 5, BatchSize: 100_001}, message: "between 1 and 100000"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Providers = []Provider{test.provider}
+			require.ErrorContains(t, cfg.Normalize(), test.message)
+		})
+	}
 }
 
 func TestExpandPathMakesRelativePathsAbsolute(t *testing.T) {

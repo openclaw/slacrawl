@@ -26,6 +26,7 @@ V1 scope:
 - FTS5 search
 - raw SQL access
 - desktop-local Slack discovery on macOS and Linux
+- external archive ingestion through a local JSONL provider protocol
 
 Out of scope for V1:
 
@@ -43,7 +44,7 @@ Out of scope for V1:
 - language: Go
 - schema: single-workspace default, multi-workspace-ready
 - search: FTS5 first, embeddings later
-- source precedence: user-token API, then bot-token API and slack-export imports, then desktop-local cache
+- source precedence: user-token API, then bot-token API and slack-export imports, then desktop-local cache; external providers must use a numeric rank greater than `2`, and equal ranks may replace
 - files: metadata only in DB for V1
 - future file-blob backup must store Git-share media as gzip-compressed files, import those files back into raw local cache layout, and keep legacy raw-media import compatibility
 - desktop-local source: supported Slack Desktop cache paths on macOS and Linux
@@ -155,13 +156,14 @@ Purpose:
 
 Expected flags:
 
-- `--source api|desktop|all`
+- `--source api|bot|desktop|wiretap|mcp|connector|all|provider:<name>`
 - `--workspace <id>`
 - `--channels <csv>`
 - `--exclude-channels <csv>`
 - `--since <timestamp>`
 - `--full`
 - `--latest-only`
+- `--limit <messages>` for bounded external-provider validation imports
 - `--concurrency <n>`
 - `--auto-join=<bool>`
 
@@ -310,6 +312,15 @@ Credential model:
 - `[sync].auto_join` defaults to `true` and controls whether API sync attempts to join public channels before retrying history
 - `[sync].exclude_channels` is an optional case-insensitive list of channel names to skip during API sync and merges with `--exclude-channels`
 
+External provider config:
+
+- each `[[providers]]` entry has a unique lowercase `name` without whitespace, slashes, or colons
+- `command` is required, expands `~` or a leading `~/`, and must resolve to an absolute path
+- `args` are passed directly to the command without a shell
+- `env_allowlist` names additional environment variables forwarded alongside the minimal runtime environment
+- `source_rank` is required and must be greater than `2`; lower numeric ranks win during message reconciliation, while equal ranks may replace
+- `batch_size` defaults to `1000`, must be between `1` and `100000`, and is forwarded as an upstream batching hint
+
 Share config:
 
 - `[share].remote` points at the git remote that stores compressed archive snapshots
@@ -352,6 +363,44 @@ Share config:
 14. update FTS rows and mentions
 15. write checkpoints, channel skips, and join attempts
 
+### External provider sync
+
+1. resolve `provider:<name>` against `[[providers]]` and require a workspace ID
+2. choose a checkpoint key from the provider name, workspace, and normalized invocation scope
+   - the unfiltered incremental run uses the workspace checkpoint
+   - `--since`, `--full`, `--latest-only`, channel filters, exclusions, and `--limit` use isolated scope checkpoints
+3. start the absolute command directly with configured args and a minimal environment plus `env_allowlist`
+4. send one `slacrawl-provider-v1` JSON request on stdin containing `workspace_id`, `since`, `full`, `latest_only`, channel filters, saved opaque `checkpoint`, `batch_size`, and optional positive `limit`
+5. consume JSONL from stdout
+   - the first record must be `hello` with the matching protocol
+   - data records may be `workspace`, `channel`, `user`, or `message`
+   - `checkpoint` records must identify the requested workspace and contain a nonempty opaque value
+   - the terminal `done.records` count must equal the number of data records consumed; checkpoints are not counted
+6. reject cross-workspace records, missing required identities or message channels, records after `done`, and more messages than `limit`
+7. build normalized message search text, extract mentions, update FTS, and preserve existing messages with a lower numeric source rank
+8. when a checkpoint is present, atomically commit it with the pending record batch; committed batches and checkpoints remain resumable if the process later fails
+9. require `done` plus a zero exit status for overall success
+10. after a successful unbounded `--full`, promote the final full checkpoint to the matching incremental scope
+
+Provider v1 response records:
+
+- `hello`: `type`, `protocol`, optional provider implementation name
+- `workspace`: `type`, requested workspace `id`, optional metadata and `raw_json`
+- `channel`: `type`, `workspace_id`, `id`, optional metadata and `raw_json`
+- `user`: `type`, `workspace_id`, `id`, optional profile data and `raw_json`
+- `message`: `type`, `workspace_id`, `channel_id`, Slack `ts`, optional `user_id`, `thread_ts`, `text`, and `raw_json`
+- `checkpoint`: `type`, `entity_type = "workspace"`, requested workspace `entity_id`, and opaque nonempty `value`
+- `done`: `type`, data-record count in `records`, plus optional provider quality counters
+
+The provider owns the interpretation of `since`, `full`, `latest_only`,
+`channels`, and `exclude_channels`; the consumer enforces workspace ownership
+and the positive message limit. A message channel must already exist locally or
+be emitted earlier in the stream. Unknown nonempty message user IDs are reserved
+as sparse workspace-bound profiles that a later real user record can enrich.
+Incremental imports enforce stored retention floors; `--full` or an explicit
+`--since` older than the floor is a deliberate restore that may reintroduce
+purged history.
+
 ### Git share sync
 
 1. clone or open the configured share repo
@@ -384,6 +433,7 @@ Share config:
 cmd/slacrawl/
 internal/cli/
 internal/config/
+internal/provider/
 internal/share/
 internal/slackapi/
 internal/slackdesktop/

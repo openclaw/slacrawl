@@ -521,18 +521,22 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
-	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all")
+	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all|provider:<name>")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channels := fs.String("channels", "", "comma separated channel ids")
 	excludeChannels := fs.String("exclude-channels", "", "comma separated channel names to skip during sync")
 	since := fs.String("since", "", "oldest slack ts or RFC3339 timestamp")
 	full := fs.Bool("full", false, "full sync")
 	latestOnly := fs.Bool("latest-only", false, "skip first-time historical backfills")
+	limit := fs.Int("limit", 0, "maximum provider messages (validation imports only)")
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
 	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during sync")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *limit < 0 {
+		return errors.New("limit cannot be negative")
 	}
 
 	resolvedSource, err := syncer.ParseSource(*source)
@@ -553,6 +557,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 		Since:       *since,
 		Full:        *full,
 		LatestOnly:  *latestOnly,
+		Limit:       *limit,
 		Concurrency: *concurrency,
 		AutoJoin:    boolPtr(*autoJoin),
 		APIURL:      a.apiURL,

@@ -55,6 +55,16 @@ max_pages = 250
 # command = "npx"
 # args = ["-y", "@modelcontextprotocol/server-slack"]
 
+# Generic local archive provider (selected with --source provider:archive).
+# Keep this block commented until the executable is installed.
+# [[providers]]
+# name = "archive"
+# command = "/usr/local/bin/archive-provider"
+# args = ["provide", "--format", "jsonl"]
+# env_allowlist = ["ARCHIVE_DB_PATH"]
+# source_rank = 5 # must be greater than 2; lower ranks win; equal ranks may replace
+# batch_size = 1000 # default 1000; valid range 1..100000
+
 [sync]
 concurrency = 4
 repair_every = "30m"

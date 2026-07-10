@@ -20,6 +20,7 @@ import (
 )
 
 const schemaVersion = 6
+const PlaceholderUserRawJSON = `{"slacrawl_provider_placeholder":true}`
 
 const schemaPragmas = `
 pragma foreign_keys = on;
@@ -344,6 +345,36 @@ type Message struct {
 	RawJSON        string
 	UpdatedAt      time.Time
 	Files          []MessageFile
+}
+
+type MessageWrite struct {
+	Message                Message
+	Mentions               []Mention
+	PreserveHigherPriority bool
+	EnforceRetention       bool
+	// SkipUnchangedProviderRow avoids derived-index rewrites for provider rows
+	// whose scalar state, mentions, and event head already match. It is not a
+	// general repair path and deliberately refuses messages with file payloads.
+	SkipUnchangedProviderRow bool
+}
+
+type SyncStateWrite struct {
+	SourceName string
+	EntityType string
+	EntityID   string
+	Value      string
+}
+
+type WriteBatch struct {
+	Workspaces []Workspace
+	Channels   []Channel
+	Users      []User
+	Messages   []MessageWrite
+	SyncStates []SyncStateWrite
+}
+
+type WriteBatchResult struct {
+	MessagesWritten int
 }
 
 type Mention struct {
@@ -680,7 +711,11 @@ func (s *Store) UpsertWorkspace(ctx context.Context, workspace Workspace) error 
 // EnsureWorkspace inserts sparse provider metadata without replacing richer data
 // already collected by another source.
 func (s *Store) EnsureWorkspace(ctx context.Context, workspace Workspace) error {
-	_, err := s.db.ExecContext(ctx, `
+	return ensureWorkspace(ctx, s.db, workspace)
+}
+
+func ensureWorkspace(ctx context.Context, dbtx storedb.DBTX, workspace Workspace) error {
+	_, err := dbtx.ExecContext(ctx, `
 insert into workspaces (id, name, domain, enterprise_id, raw_json, updated_at)
 values (?, ?, ?, ?, ?, ?)
 on conflict(id) do nothing
@@ -737,7 +772,11 @@ func (s *Store) UpsertChannel(ctx context.Context, channel Channel) error {
 // EnsureChannel inserts lower-fidelity provider metadata without replacing an
 // existing channel collected by a richer source.
 func (s *Store) EnsureChannel(ctx context.Context, channel Channel) error {
-	result, err := s.db.ExecContext(ctx, `
+	return ensureChannel(ctx, s.db, channel)
+}
+
+func ensureChannel(ctx context.Context, dbtx storedb.DBTX, channel Channel) error {
+	result, err := dbtx.ExecContext(ctx, `
 insert into channels (id, workspace_id, name, kind, topic, purpose, is_private, is_archived, is_shared, is_general, raw_json, updated_at)
 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 on conflict(id) do nothing
@@ -749,7 +788,7 @@ on conflict(id) do nothing
 	if err != nil || rows > 0 {
 		return err
 	}
-	existing, err := s.getChannelWorkspaceKind(ctx, channel.ID)
+	existing, err := getChannelWorkspaceKind(ctx, dbtx, channel.ID)
 	if err != nil {
 		return err
 	}
@@ -765,9 +804,17 @@ type channelWorkspaceKind struct {
 }
 
 func (s *Store) getChannelWorkspaceKind(ctx context.Context, channelID string) (channelWorkspaceKind, error) {
+	return getChannelWorkspaceKind(ctx, s.db, channelID)
+}
+
+func getChannelWorkspaceKind(ctx context.Context, q queryRower, channelID string) (channelWorkspaceKind, error) {
 	var row channelWorkspaceKind
-	err := s.db.QueryRowContext(ctx, `select workspace_id, kind from channels where id = ?`, channelID).Scan(&row.WorkspaceID, &row.Kind)
+	err := q.QueryRowContext(ctx, `select workspace_id, kind from channels where id = ?`, channelID).Scan(&row.WorkspaceID, &row.Kind)
 	return row, err
+}
+
+func (s *Store) ChannelWorkspaceID(ctx context.Context, channelID string) (string, error) {
+	return s.q.GetChannelWorkspace(ctx, channelID)
 }
 
 func (s *Store) replaceChannel(ctx context.Context, channel Channel) error {
@@ -813,13 +860,32 @@ func (s *Store) UpsertUser(ctx context.Context, user User) error {
 	return nil
 }
 
+func (s *Store) UserWorkspaceID(ctx context.Context, userID string) (string, error) {
+	return s.q.GetUserWorkspace(ctx, userID)
+}
+
 // EnsureUser inserts lower-fidelity provider metadata without replacing an
 // existing user collected by a richer source.
 func (s *Store) EnsureUser(ctx context.Context, user User) error {
-	result, err := s.db.ExecContext(ctx, `
+	return ensureUser(ctx, s.db, user)
+}
+
+func ensureUser(ctx context.Context, dbtx storedb.DBTX, user User) error {
+	result, err := dbtx.ExecContext(ctx, `
 insert into users (id, workspace_id, name, real_name, display_name, title, is_bot, is_deleted, raw_json, updated_at)
 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-on conflict(id) do nothing
+on conflict(id) do update set
+  workspace_id = excluded.workspace_id,
+  name = excluded.name,
+  real_name = excluded.real_name,
+  display_name = excluded.display_name,
+  title = excluded.title,
+  is_bot = excluded.is_bot,
+  is_deleted = excluded.is_deleted,
+  raw_json = excluded.raw_json,
+  updated_at = excluded.updated_at
+where users.workspace_id = excluded.workspace_id
+  and users.raw_json = '`+PlaceholderUserRawJSON+`'
 `, user.ID, user.WorkspaceID, user.Name, dbText(user.RealName), dbText(user.DisplayName), dbText(user.Title), boolInt(user.IsBot), boolInt(user.IsDeleted), user.RawJSON, formatDBTime(user.UpdatedAt))
 	if err != nil {
 		return err
@@ -828,7 +894,7 @@ on conflict(id) do nothing
 	if err != nil || rows > 0 {
 		return err
 	}
-	existingWorkspaceID, err := s.q.GetUserWorkspace(ctx, user.ID)
+	existingWorkspaceID, err := storedb.New(dbtx).GetUserWorkspace(ctx, user.ID)
 	if err != nil {
 		return err
 	}
@@ -836,6 +902,134 @@ on conflict(id) do nothing
 		return &WorkspaceCollisionError{Entity: "user", ID: user.ID, ExistingWorkspaceID: existingWorkspaceID, WorkspaceID: user.WorkspaceID}
 	}
 	return nil
+}
+
+// ApplyWriteBatch commits normalized archive records and their sync cursor as
+// one unit. Message writes share the single-message priority, retention, FTS,
+// file, mention, and event path.
+func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBatchResult, error) {
+	// The batch insert fast path checks message existence before deciding whether
+	// to scan FTS for a replacement. BEGIN IMMEDIATE keeps that check and write
+	// in one serialized writer snapshot.
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
+	if err != nil {
+		return WriteBatchResult{}, err
+	}
+	defer rollback()
+	qtx := storedb.New(dbtx)
+	for _, workspace := range batch.Workspaces {
+		if err := ensureWorkspace(ctx, dbtx, workspace); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	for _, channel := range batch.Channels {
+		if err := ensureChannel(ctx, dbtx, channel); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	for _, user := range batch.Users {
+		if err := ensureUser(ctx, dbtx, user); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	result := WriteBatchResult{}
+	for _, write := range batch.Messages {
+		if write.SkipUnchangedProviderRow {
+			unchanged, err := unchangedProviderMessage(ctx, dbtx, write.Message, write.Mentions)
+			if err != nil {
+				return WriteBatchResult{}, err
+			}
+			if unchanged {
+				continue
+			}
+		}
+		written, err := upsertMessageInTransaction(ctx, dbtx, qtx, write.Message, write.Mentions, write.PreserveHigherPriority, write.EnforceRetention, true)
+		if err != nil {
+			return WriteBatchResult{}, err
+		}
+		if written {
+			result.MessagesWritten++
+		}
+	}
+	for _, state := range batch.SyncStates {
+		if err := qtx.SetSyncState(ctx, storedb.SetSyncStateParams{
+			SourceName: state.SourceName, EntityType: state.EntityType, EntityID: state.EntityID,
+			Value: state.Value, UpdatedAt: formatDBTime(time.Now().UTC()),
+		}); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	if err := commit(); err != nil {
+		return WriteBatchResult{}, err
+	}
+	return result, nil
+}
+
+func unchangedProviderMessage(ctx context.Context, dbtx storedb.DBTX, message Message, mentions []Mention) (bool, error) {
+	if message.Files != nil {
+		return false, nil
+	}
+	var matches int
+	err := dbtx.QueryRowContext(ctx, `
+select exists (
+  select 1 from messages
+  where channel_id = ? and ts = ? and workspace_id = ?
+    and coalesce(user_id, '') = ? and coalesce(subtype, '') = ?
+    and coalesce(client_msg_id, '') = ? and coalesce(thread_ts, '') = ?
+    and coalesce(parent_user_id, '') = ? and text = ? and normalized_text = ?
+    and reply_count = ? and coalesce(latest_reply, '') = ?
+    and coalesce(edited_ts, '') = ? and coalesce(deleted_ts, '') = ?
+    and source_rank = ? and source_name = ? and raw_json = ?
+)
+`, message.ChannelID, message.TS, message.WorkspaceID, message.UserID, message.Subtype,
+		message.ClientMsgID, message.ThreadTS, message.ParentUserID, message.Text,
+		message.NormalizedText, message.ReplyCount, message.LatestReply, message.EditedTS,
+		message.DeletedTS, message.SourceRank, message.SourceName, message.RawJSON).Scan(&matches)
+	if err != nil || matches == 0 {
+		return false, err
+	}
+
+	expectedMentions := make(map[string]string, len(mentions))
+	for _, mention := range mentions {
+		expectedMentions[mention.Type+"\x00"+mention.TargetID] = mention.DisplayText
+	}
+	rows, err := dbtx.QueryContext(ctx, `
+select mention_type, target_id, coalesce(display_text, '')
+from message_mentions where channel_id = ? and ts = ?
+`, message.ChannelID, message.TS)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var mentionType, targetID, displayText string
+		if err := rows.Scan(&mentionType, &targetID, &displayText); err != nil {
+			return false, err
+		}
+		key := mentionType + "\x00" + targetID
+		if expected, ok := expectedMentions[key]; !ok || expected != displayText {
+			return false, nil
+		}
+		delete(expectedMentions, key)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if len(expectedMentions) != 0 {
+		return false, nil
+	}
+
+	err = dbtx.QueryRowContext(ctx, `
+select exists (
+  select 1 from message_event_heads
+  where channel_id = ? and ts = ? and event_type = ?
+    and source_name = ? and payload_json = ?
+)
+`, message.ChannelID, message.TS, eventType(message), message.SourceName, message.RawJSON).Scan(&matches)
+	return matches != 0, err
 }
 
 func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []Mention) error {
@@ -857,12 +1051,26 @@ func (s *Store) UpsertMessageByPriorityWithRetention(ctx context.Context, messag
 }
 
 func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []Mention, preserveHigherPriority, enforceRetention bool) (bool, error) {
-	key := messageKey(message.ChannelID, message.TS)
 	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, enforceRetention)
 	if err != nil {
 		return false, err
 	}
 	defer rollback()
+	written, err := upsertMessageInTransaction(ctx, dbtx, storedb.New(dbtx), message, mentions, preserveHigherPriority, enforceRetention, false)
+	if err != nil {
+		return false, err
+	}
+	if !written {
+		return false, nil
+	}
+	if err := commit(); err != nil {
+		return false, err
+	}
+	return written, nil
+}
+
+func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *storedb.Queries, message Message, mentions []Mention, preserveHigherPriority, enforceRetention, ftsInsertFastPath bool) (bool, error) {
+	key := messageKey(message.ChannelID, message.TS)
 	if enforceRetention {
 		allowed, err := messageAllowedByRetention(ctx, dbtx, message)
 		if err != nil {
@@ -872,8 +1080,15 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 			return false, nil
 		}
 	}
-	qtx := storedb.New(dbtx)
-
+	replaceFTS := true
+	var err error
+	if ftsInsertFastPath {
+		_, err = qtx.GetMessageWorkspace(ctx, storedb.GetMessageWorkspaceParams{ChannelID: message.ChannelID, Ts: message.TS})
+		replaceFTS = err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+	}
 	var rows int64
 	if preserveHigherPriority {
 		rows, err = qtx.UpsertMessageByPriority(ctx, storedb.UpsertMessageByPriorityParams{
@@ -957,12 +1172,9 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		}
 	}
 
-	if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-		return false, err
-	}
 	searchMessage := message
 	searchMessage.Files = filesForSearch
-	if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
+	if err := writeMessageFTS(ctx, qtx, key, messageSearchContent(searchMessage), replaceFTS); err != nil {
 		return false, err
 	}
 
@@ -970,10 +1182,21 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		return false, err
 	}
 
-	if err := commit(); err != nil {
-		return false, err
-	}
 	return true, nil
+}
+
+type messageFTSWriter interface {
+	DeleteMessageFTS(context.Context, string) error
+	InsertMessageFTS(context.Context, storedb.InsertMessageFTSParams) error
+}
+
+func writeMessageFTS(ctx context.Context, writer messageFTSWriter, key, content string, replace bool) error {
+	if replace {
+		if err := writer.DeleteMessageFTS(ctx, key); err != nil {
+			return err
+		}
+	}
+	return writer.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: content})
 }
 
 func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mentions []Mention) error {
