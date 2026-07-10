@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -381,7 +382,9 @@ join messages m on m.workspace_id = p.workspace_id and m.channel_id = e.channel_
 		{"FTS entries", `
 select count(*)
 from message_fts f
-join ` + purgeMessageKeysTable + ` p on f.message_key = p.channel_id || '|' || p.ts
+join messages m on m.rowid = f.rowid
+join ` + purgeMessageKeysTable + ` p
+  on p.workspace_id = m.workspace_id and p.channel_id = m.channel_id and p.ts = m.ts
 `, &report.FTSEntries},
 	}
 	for _, count := range counts {
@@ -471,9 +474,11 @@ where exists (
 )`},
 		{"FTS entries", `
 delete from message_fts
-where exists (
-  select 1 from ` + purgeMessageKeysTable + ` p
-  where message_fts.message_key = p.channel_id || '|' || p.ts
+where rowid in (
+  select m.rowid
+  from messages m
+  join ` + purgeMessageKeysTable + ` p
+    on p.workspace_id = m.workspace_id and p.channel_id = m.channel_id and p.ts = m.ts
 )`},
 		{"messages", `
 delete from messages
@@ -504,8 +509,126 @@ where id in (select id from `+purgeMessageEventIDsTable+`)
 }
 
 func (s *Store) Vacuum(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "vacuum")
-	return err
+	return s.vacuum(ctx, nil)
+}
+
+func (s *Store) vacuum(ctx context.Context, afterPrepare func()) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	var databaseSequence int
+	var databaseName, databasePath string
+	if err := conn.QueryRowContext(ctx, `pragma database_list`).Scan(&databaseSequence, &databaseName, &databasePath); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("inspect vacuum database: %w", err)
+	}
+	if databaseName != "main" || strings.TrimSpace(databasePath) == "" {
+		_ = conn.Close()
+		return errors.New("vacuum is not supported for in-memory databases")
+	}
+	poisonStore := false
+	defer releaseExclusiveSQLiteConnection(conn)
+	defer func() {
+		if poisonStore {
+			_ = s.db.Close()
+			return
+		}
+		s.searchIndexUnavailable.Store(false)
+	}()
+
+	var lockingMode string
+	if err := conn.QueryRowContext(ctx, `pragma locking_mode = exclusive`).Scan(&lockingMode); err != nil {
+		return fmt.Errorf("enable exclusive vacuum locking: %w", err)
+	}
+	if !strings.EqualFold(lockingMode, "exclusive") {
+		return fmt.Errorf("enable exclusive vacuum locking: sqlite returned %q", lockingMode)
+	}
+	s.searchIndexUnavailable.Store(true)
+	if _, err := conn.ExecContext(ctx, `begin exclusive`); err != nil {
+		return fmt.Errorf("lock database for vacuum: %w", err)
+	}
+	if err := markSearchIndexRebuildPending(ctx, conn); err != nil {
+		return fmt.Errorf("mark search index for post-vacuum rebuild: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `delete from message_fts`); err != nil {
+		return fmt.Errorf("clear search index before vacuum: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `commit`); err != nil {
+		recoveryErr := recoverSearchIndexOnExclusiveConnection(conn)
+		if recoveryErr != nil {
+			poisonStore = true
+		}
+		return errors.Join(
+			fmt.Errorf("prepare search index for vacuum: %w", err),
+			wrapSearchIndexRecoveryError(recoveryErr),
+		)
+	}
+	if afterPrepare != nil {
+		afterPrepare()
+	}
+
+	_, vacuumErr := conn.ExecContext(ctx, "vacuum")
+	if rebuildErr := rebuildSearchIndexesOnExclusiveConnection(ctx, conn); rebuildErr != nil {
+		recoveryErr := recoverSearchIndexOnExclusiveConnection(conn)
+		if recoveryErr != nil {
+			poisonStore = true
+		}
+		return errors.Join(
+			vacuumErr,
+			fmt.Errorf("rebuild search index after vacuum: %w", rebuildErr),
+			wrapSearchIndexRecoveryError(recoveryErr),
+		)
+	}
+	return vacuumErr
+}
+
+func recoverSearchIndexOnExclusiveConnection(conn *sql.Conn) error {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	_, _ = conn.ExecContext(recoveryCtx, `rollback`)
+	return rebuildSearchIndexesOnExclusiveConnection(recoveryCtx, conn)
+}
+
+func wrapSearchIndexRecoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("recover search index after vacuum failure: %w", err)
+}
+
+func rebuildSearchIndexesOnExclusiveConnection(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `begin exclusive`); err != nil {
+		return err
+	}
+	if err := rebuildSearchIndexesInTransaction(ctx, conn); err != nil {
+		_, _ = conn.ExecContext(context.Background(), `rollback`)
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `commit`); err != nil {
+		_, _ = conn.ExecContext(context.Background(), `rollback`)
+		return err
+	}
+	return nil
+}
+
+func releaseExclusiveSQLiteConnection(conn *sql.Conn) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = conn.ExecContext(cleanupCtx, `rollback`)
+	var lockingMode string
+	err := conn.QueryRowContext(cleanupCtx, `pragma locking_mode = normal`).Scan(&lockingMode)
+	if err == nil && !strings.EqualFold(lockingMode, "normal") {
+		err = fmt.Errorf("sqlite returned locking mode %q", lockingMode)
+	}
+	if err == nil {
+		var schemaVersion int
+		err = conn.QueryRowContext(cleanupCtx, `pragma user_version`).Scan(&schemaVersion)
+	}
+	if err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	_ = conn.Close()
 }
 
 func (s *Store) UnreferencedPurgeMediaAfter(ctx context.Context, items, removed []PurgeMedia) ([]PurgeMedia, int64, error) {

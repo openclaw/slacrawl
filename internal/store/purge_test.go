@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,7 @@ func TestPurgeMessagesPreviewsAndDeletesMessageOwnedRows(t *testing.T) {
 	upsertPurgeTestMessage(t, st, "T1", "C1", oldTime.Add(time.Second), "old shared", "F2", sharedMedia, 20)
 	upsertPurgeTestMessage(t, st, "T1", "C1", newTime, "new shared", "F3", sharedMedia, 20)
 	upsertPurgeTestMessage(t, st, "T2", "C2", oldTime, "other workspace", "F4", "files/cc/other.txt", 30)
+	requireMessageFTSParity(t, st)
 
 	_, err = st.DB().ExecContext(ctx, `
 insert into embedding_jobs (channel_id, ts, state, created_at)
@@ -56,6 +58,7 @@ values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
 	requireTableCount(t, st, "message_mentions", 2)
 	requireTableCount(t, st, "embedding_jobs", 1)
 	requireTableCount(t, st, "message_fts", 2)
+	requireMessageFTSParity(t, st)
 
 	rows, err := st.QueryReadOnly(ctx, `select text from messages order by text`)
 	require.NoError(t, err)
@@ -68,6 +71,215 @@ values (?, ?, 'pending', ?), (?, ?, 'pending', ?)
 	require.NoError(t, err)
 	require.Zero(t, empty.Messages)
 	require.Empty(t, empty.Media)
+}
+
+func TestVacuumRebuildsMessageFTSRowIDs(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	upsertPurgeTestMessage(t, st, "T1", "C1", now, "first vacuum message", "F1", "", 0)
+	upsertPurgeTestMessage(t, st, "T1", "C1", now.Add(time.Second), "second vacuum message", "F2", "", 0)
+
+	_, err = st.DB().ExecContext(ctx, `
+delete from message_fts;
+insert into message_fts (rowid, message_key, content) values
+  (1001, 'C1|wrong-one', 'wrong one'),
+  (1002, 'C1|wrong-two', 'wrong two');
+`)
+	require.NoError(t, err)
+	require.NoError(t, st.Vacuum(ctx))
+	requireMessageFTSParity(t, st)
+	matches, err := st.Search(ctx, "T1", "vacuum", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+	assertBatchCount(t, st, `select count(*) from sync_state where source_name = 'store' and entity_type = 'search_index'`, 0)
+}
+
+func TestVacuumHoldsExclusiveLockAcrossRebuild(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "slacrawl.db")
+	st, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	ctx := context.Background()
+	upsertPurgeTestMessage(t, st, "T1", "C1", time.Now().UTC(), "exclusive vacuum", "F1", "", 0)
+
+	prepared := make(chan struct{})
+	release := make(chan struct{})
+	vacuumDone := make(chan error, 1)
+	go func() {
+		vacuumDone <- st.vacuum(ctx, func() {
+			close(prepared)
+			<-release
+		})
+	}()
+	select {
+	case <-prepared:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("vacuum did not reach prepared state")
+	}
+
+	type openResult struct {
+		store *Store
+		err   error
+	}
+	openStarted := make(chan struct{})
+	openDone := make(chan openResult, 1)
+	go func() {
+		close(openStarted)
+		opened, err := Open(dbPath)
+		openDone <- openResult{store: opened, err: err}
+	}()
+	<-openStarted
+	select {
+	case opened := <-openDone:
+		close(release)
+		if opened.store != nil {
+			_ = opened.store.Close()
+		}
+		t.Fatalf("concurrent open completed while vacuum held its exclusive lock: %v", opened.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-vacuumDone:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("vacuum did not finish after release")
+	}
+	select {
+	case opened := <-openDone:
+		require.NoError(t, opened.err)
+		require.NoError(t, opened.store.Close())
+	case <-time.After(10 * time.Second):
+		t.Fatal("concurrent open did not finish after vacuum released its lock")
+	}
+	requireMessageFTSParity(t, st)
+}
+
+func TestVacuumRejectsInMemoryDatabaseWithoutDamagingIndex(t *testing.T) {
+	st, err := Open(":memory:")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	ctx := context.Background()
+	message := Message{
+		ChannelID: "C1", TS: "1.000001", WorkspaceID: "T1",
+		Text: "in-memory vacuum guard", NormalizedText: "in-memory vacuum guard",
+		SourceRank: 2, SourceName: "test", RawJSON: "{}", UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.UpsertMessage(ctx, message, nil))
+	require.ErrorContains(t, st.Vacuum(ctx), "not supported for in-memory databases")
+	requireMessageFTSParity(t, st)
+	matches, err := st.Search(ctx, "", "vacuum guard", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
+func TestVacuumCancellationRecoversIndexForSameStore(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	message := Message{
+		ChannelID: "C1", TS: "1.000001", WorkspaceID: "T1",
+		Text: "vacuum cancellation recovery", NormalizedText: "vacuum cancellation recovery",
+		SourceRank: 2, SourceName: "test", RawJSON: "{}", UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.UpsertMessage(context.Background(), message, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	err = st.vacuum(ctx, cancel)
+	require.ErrorIs(t, err, context.Canceled)
+	requireMessageFTSParity(t, st)
+	matches, err := st.Search(context.Background(), "", "cancellation recovery", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assertBatchCount(t, st, `select count(*) from sync_state where source_name = 'store' and entity_type = 'search_index'`, 0)
+}
+
+func TestVacuumUnrecoverableRebuildClosesStore(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "slacrawl.db")
+	st, err := Open(dbPath)
+	require.NoError(t, err)
+	message := Message{
+		ChannelID: "C1", TS: "1.000001", WorkspaceID: "T1",
+		Text: "vacuum poison recovery", NormalizedText: "vacuum poison recovery",
+		SourceRank: 2, SourceName: "test", RawJSON: "{}", UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.UpsertMessage(context.Background(), message, nil))
+	_, err = st.DB().Exec(`
+create trigger reject_vacuum_marker_clear
+before delete on sync_state
+when old.source_name = 'store'
+  and old.entity_type = 'search_index'
+  and old.entity_id = 'rowid_rebuild_pending'
+begin
+  select raise(abort, 'forced vacuum rebuild failure');
+end;
+`)
+	require.NoError(t, err)
+
+	type searchResult struct {
+		rows []MessageRow
+		err  error
+	}
+	waiterStarted := make(chan struct{})
+	waiterDone := make(chan searchResult, 1)
+	err = st.vacuum(context.Background(), func() {
+		go func() {
+			close(waiterStarted)
+			rows, err := st.Search(context.Background(), "", "poison", 10)
+			waiterDone <- searchResult{rows: rows, err: err}
+		}()
+		<-waiterStarted
+	})
+	require.ErrorContains(t, err, "forced vacuum rebuild failure")
+	waiter := <-waiterDone
+	require.Error(t, waiter.err)
+	require.Empty(t, waiter.rows)
+	_, err = st.Search(context.Background(), "", "poison", 10)
+	require.ErrorContains(t, err, "search index is temporarily unavailable")
+	require.ErrorContains(t, st.DB().Ping(), "closed")
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`drop trigger reject_vacuum_marker_clear`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	repaired, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, repaired.Close()) }()
+	requireMessageFTSParity(t, repaired)
+	matches, err := repaired.Search(context.Background(), "", "poison recovery", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
+func TestOpenRepairsInterruptedVacuumSearchIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "slacrawl.db")
+	st, err := Open(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	upsertPurgeTestMessage(t, st, "T1", "C1", now, "repair after interruption", "F1", "", 0)
+	require.NoError(t, st.SetSyncState(ctx, searchIndexMaintenanceSource, searchIndexMaintenanceEntityType, searchIndexMaintenanceEntityID, "1"))
+	_, err = st.DB().ExecContext(ctx, `delete from message_fts`)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	readOnly, err := OpenReadOnly(dbPath)
+	require.ErrorContains(t, err, "search index rebuild is pending")
+	require.Nil(t, readOnly)
+
+	st, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	requireMessageFTSParity(t, st)
+	matches, err := st.Search(ctx, "T1", "interruption", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assertBatchCount(t, st, `select count(*) from sync_state where source_name = 'store' and entity_type = 'search_index'`, 0)
 }
 
 func TestPurgeMessagesCompactsRetainedEventHistoryBySourceAndType(t *testing.T) {

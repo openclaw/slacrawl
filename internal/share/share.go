@@ -317,6 +317,11 @@ func importLocked(ctx context.Context, s *store.Store, opts Options, restore boo
 			return Manifest{}, err
 		}
 	}
+	// Keep base rows and their derived search index in one visibility boundary:
+	// readers see either the previous complete snapshot or the imported one.
+	if err := store.RebuildSearchIndexesInTransaction(ctx, tx); err != nil {
+		return Manifest{}, fmt.Errorf("rebuild imported search index: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return Manifest{}, err
 	}

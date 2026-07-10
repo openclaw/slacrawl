@@ -1035,6 +1035,92 @@ pragma user_version = 5;
 	require.Contains(t, defaultValue, "randomblob")
 }
 
+func TestOpenMigratesVersion5FTSRowIDs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seedBatchCatalog(t, s, "T1", "C1", "U1", now)
+	require.NoError(t, s.UpsertMessage(ctx, Message{
+		ChannelID: "C1", TS: "1.000001", WorkspaceID: "T1", UserID: "U1",
+		Text: "first", NormalizedText: "first", SourceRank: 2, SourceName: "api-bot",
+		RawJSON: "{}", UpdatedAt: now,
+		Files: []MessageFile{{FileID: "F1", Name: "notes.txt", PlainText: "migrated appendix", RawJSON: "{}"}},
+	}, nil))
+	require.NoError(t, s.UpsertMessage(ctx, batchMessage("C1", "2.000002", "T1", "second", now), nil))
+	require.NoError(t, s.Close())
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+delete from message_fts;
+insert into message_fts (rowid, message_key, content) values
+  (1001, 'C1|1.000001', 'legacy poison one'),
+  (1002, 'C1|2.000002', 'legacy poison two'),
+  (1003, 'C1|orphan', 'legacy poison orphan');
+pragma user_version = 5;
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	var version int
+	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+	require.Equal(t, schemaVersion, version)
+	requireMessageFTSParity(t, s)
+	matches, err := s.Search(ctx, "T1", "appendix", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assertBatchCount(t, s, `select count(*) from message_fts where content like '%poison%'`, 0)
+}
+
+func TestMessageFTSRowIDParityAcrossMutationAndRebuild(t *testing.T) {
+	s := openBatchTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seedBatchCatalog(t, s, "T1", "C1", "U1", now)
+	first := batchMessage("C1", "1.000001", "T1", "first", now)
+	second := batchMessage("C1", "2.000002", "T1", "second", now)
+	third := batchMessage("C1", "3.000003", "T1", "third", now)
+	third.Files = []MessageFile{{FileID: "F3", Name: "third.txt", PlainText: "rebuild appendix", RawJSON: "{}"}}
+	for _, message := range []Message{first, second, third} {
+		require.NoError(t, s.UpsertMessage(ctx, message, nil))
+	}
+	requireMessageFTSParity(t, s)
+
+	deleted := first
+	deleted.DeletedTS = "4.000004"
+	deleted.UpdatedAt = now.Add(time.Second)
+	require.NoError(t, s.MarkMessageDeleted(ctx, deleted, nil))
+	requireMessageFTSParity(t, s)
+
+	removed, err := s.DeleteMessageBySource(ctx, "T1", "C1", second.TS, second.SourceName)
+	require.NoError(t, err)
+	require.True(t, removed)
+	removed, err = s.DeleteMessageBySource(ctx, "T1", "C1", second.TS, second.SourceName)
+	require.NoError(t, err)
+	require.False(t, removed)
+	requireMessageFTSParity(t, s)
+
+	_, err = s.DB().ExecContext(ctx, `
+delete from message_fts;
+insert into message_fts (rowid, message_key, content) values
+  (1001, 'C1|1.000001', 'wrong first'),
+  (1003, 'C1|3.000003', 'wrong third'),
+  (1004, 'C1|orphan', 'wrong orphan');
+`)
+	require.NoError(t, err)
+	require.NoError(t, s.RebuildSearchIndexes(ctx))
+	requireMessageFTSParity(t, s)
+	matches, err := s.Search(ctx, "T1", "appendix", 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, third.TS, matches[0].TS)
+}
+
 func TestOpenDoesNotStampInvalidOldSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := sql.Open("sqlite", dbPath)

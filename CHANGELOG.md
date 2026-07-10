@@ -48,6 +48,10 @@
 
 - Added generic external archive providers with an explicit `provider:<name>` sync source, a local JSONL subprocess protocol, scoped resumable checkpoints, bounded validation imports, and source-priority safeguards.
 
+### Performance
+
+- Batched unchanged-message checks and aligned search-index row IDs during external archive replays to avoid per-message database round trips and full-index replacement scans.
+
 ## 0.7.7 - 2026-07-09
 
 ### Maintenance

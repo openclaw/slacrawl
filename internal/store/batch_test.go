@@ -2,11 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/openclaw/slacrawl/internal/store/storedb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,8 +93,8 @@ func TestApplyWriteBatchPreservesSequentialMessageSemantics(t *testing.T) {
 	require.Equal(t, "U2", rows[0]["user_id"])
 	require.Equal(t, `{"version":2}`, rows[0]["raw_json"])
 	assertBatchCount(t, st, `select count(*) from message_events where channel_id = 'C1' and ts = '1.000001' and source_name = 'provider:test'`, 2)
-	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '1.000001' and target_id = 'U1'`, 0)
-	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '1.000001' and target_id = 'U2'`, 1)
+	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '1.000001' and target_id = 'U1' and deleted_at is null`, 0)
+	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '1.000001' and target_id = 'U2' and deleted_at is null`, 1)
 	assertBatchCount(t, st, `select count(*) from message_files where channel_id = 'C1' and ts = '1.000001' and file_id = 'F1'`, 1)
 	searchRows, err := st.QueryReadOnly(ctx, `select content from message_fts where message_key = 'C1|1.000001'`)
 	require.NoError(t, err)
@@ -166,20 +167,15 @@ func TestApplyWriteBatchHonorsPerMessageRetention(t *testing.T) {
 	assertBatchCount(t, st, `select count(*) from messages where channel_id = 'C1' and ts in ('50.000001', '70.000001', '150.000001')`, 3)
 }
 
-func TestWriteMessageFTSGatesDeleteOnExistingMessage(t *testing.T) {
+func TestWriteMessageFTSRequiresCanonicalMessageRow(t *testing.T) {
 	ctx := context.Background()
-	t.Run("insert", func(t *testing.T) {
-		writer := &recordingFTSWriter{}
-		require.NoError(t, writeMessageFTS(ctx, writer, "C1|1.000001", "new", false))
-		require.Zero(t, writer.deletes)
-		require.Equal(t, []storedb.InsertMessageFTSParams{{MessageKey: "C1|1.000001", Content: "new"}}, writer.inserts)
-	})
-	t.Run("update", func(t *testing.T) {
-		writer := &recordingFTSWriter{}
-		require.NoError(t, writeMessageFTS(ctx, writer, "C1|1.000001", "updated", true))
-		require.Equal(t, []string{"C1|1.000001"}, writer.deletes)
-		require.Equal(t, []storedb.InsertMessageFTSParams{{MessageKey: "C1|1.000001", Content: "updated"}}, writer.inserts)
-	})
+	writer := &recordingFTSWriter{rows: 1}
+	require.NoError(t, writeMessageFTS(ctx, writer, "C1", "1.000001", "new"))
+	require.Equal(t, []string{upsertMessageFTSRowSQL}, writer.queries)
+	require.Equal(t, [][]any{{"new", "C1", "1.000001"}}, writer.args)
+
+	writer.rows = 0
+	require.ErrorContains(t, writeMessageFTS(ctx, writer, "C2", "2.000002", "missing"), "affected 0 rows")
 }
 
 func TestApplyWriteBatchFTSInsertAndUpdateParity(t *testing.T) {
@@ -245,20 +241,98 @@ func TestApplyWriteBatchProviderFastPathChecksRowsAndMentions(t *testing.T) {
 	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '1.000001' and target_id = 'U2'`, 1)
 }
 
+func TestApplyWriteBatchProviderFastPathBatchesLargeReplays(t *testing.T) {
+	st := openBatchTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+	require.NoError(t, st.UpsertUser(ctx, User{ID: "U2", WorkspaceID: "T1", Name: "two", RawJSON: "{}", UpdatedAt: now}))
+
+	const unchangedCandidates = 1001
+	seedWrites := make([]MessageWrite, 0, unchangedCandidates+1)
+	for i := range unchangedCandidates {
+		message := batchMessage("C1", fmt.Sprintf("%d.000001", i+1), "T1", fmt.Sprintf("message-%d", i), now)
+		var mentions []Mention
+		if i == 1 {
+			mentions = []Mention{{Type: "user", TargetID: "U1", DisplayText: "one"}}
+		}
+		seedWrites = append(seedWrites, MessageWrite{Message: message, Mentions: mentions, PreserveHigherPriority: true})
+	}
+	duplicate := batchMessage("C1", "2000.000001", "T1", "duplicate-original", now)
+	seedWrites = append(seedWrites, MessageWrite{Message: duplicate, PreserveHigherPriority: true})
+	seedResult, err := st.ApplyWriteBatch(ctx, WriteBatch{Messages: seedWrites})
+	require.NoError(t, err)
+	require.Equal(t, unchangedCandidates+1, seedResult.MessagesWritten)
+	requireMessageFTSParity(t, st)
+
+	_, err = st.DB().ExecContext(ctx, `
+update message_event_heads set payload_json = '{"stale":true}'
+where channel_id = 'C1' and ts = '3.000001';
+create table batch_message_updates (count integer not null);
+insert into batch_message_updates values (0);
+create trigger count_batch_message_updates after update on messages
+begin
+  update batch_message_updates set count = count + 1;
+end;
+`)
+	require.NoError(t, err)
+
+	replayWrites := make([]MessageWrite, 0, unchangedCandidates+2)
+	for i := range unchangedCandidates {
+		message := batchMessage("C1", fmt.Sprintf("%d.000001", i+1), "T1", fmt.Sprintf("message-%d", i), now.Add(time.Second))
+		var mentions []Mention
+		switch i {
+		case 0:
+			message.Text = "changed-message"
+			message.NormalizedText = "changed-message"
+			message.RawJSON = `{"text":"changed-message"}`
+		case 1:
+			mentions = []Mention{{Type: "user", TargetID: "U2", DisplayText: "two"}}
+		}
+		replayWrites = append(replayWrites, MessageWrite{
+			Message: message, Mentions: mentions, PreserveHigherPriority: true, SkipUnchangedProviderRow: true,
+		})
+	}
+	duplicateFirst := duplicate
+	duplicateFirst.Text = "duplicate-first"
+	duplicateFirst.NormalizedText = "duplicate-first"
+	duplicateFirst.RawJSON = `{"text":"duplicate-first"}`
+	duplicateSecond := duplicateFirst
+	duplicateSecond.Text = "duplicate-second"
+	duplicateSecond.NormalizedText = "duplicate-second"
+	duplicateSecond.RawJSON = `{"text":"duplicate-second"}`
+	replayWrites = append(replayWrites,
+		MessageWrite{Message: duplicateFirst, PreserveHigherPriority: true, SkipUnchangedProviderRow: true},
+		MessageWrite{Message: duplicateSecond, PreserveHigherPriority: true, SkipUnchangedProviderRow: true},
+	)
+
+	result, err := st.ApplyWriteBatch(ctx, WriteBatch{Messages: replayWrites})
+	require.NoError(t, err)
+	require.Equal(t, 5, result.MessagesWritten)
+	assertBatchCount(t, st, `select count(*) from batch_message_updates where count = 5`, 1)
+	assertBatchFTSContent(t, st, "C1|1.000001", "changed-message")
+	assertBatchCount(t, st, `select count(*) from message_mentions where channel_id = 'C1' and ts = '2.000001' and target_id = 'U2' and display_text = 'two'`, 1)
+	assertBatchCount(t, st, `select count(*) from message_event_heads where channel_id = 'C1' and ts = '3.000001' and payload_json = '{"text":"message-2"}'`, 1)
+	assertBatchFTSContent(t, st, "C1|2000.000001", "duplicate-second")
+	requireMessageFTSParity(t, st)
+}
+
 type recordingFTSWriter struct {
-	deletes []string
-	inserts []storedb.InsertMessageFTSParams
+	rows    int64
+	queries []string
+	args    [][]any
 }
 
-func (w *recordingFTSWriter) DeleteMessageFTS(_ context.Context, key string) error {
-	w.deletes = append(w.deletes, key)
-	return nil
+func (w *recordingFTSWriter) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	w.queries = append(w.queries, query)
+	w.args = append(w.args, args)
+	return recordingSQLResult(w.rows), nil
 }
 
-func (w *recordingFTSWriter) InsertMessageFTS(_ context.Context, params storedb.InsertMessageFTSParams) error {
-	w.inserts = append(w.inserts, params)
-	return nil
-}
+type recordingSQLResult int64
+
+func (r recordingSQLResult) LastInsertId() (int64, error) { return 0, nil }
+func (r recordingSQLResult) RowsAffected() (int64, error) { return int64(r), nil }
 
 func openBatchTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -297,4 +371,19 @@ func assertBatchFTSContent(t *testing.T, st *Store, key, expected string) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, expected, rows[0]["content"])
+}
+
+func requireMessageFTSParity(t *testing.T, st *Store) {
+	t.Helper()
+	var messages, ftsRows, matched int64
+	require.NoError(t, st.DB().QueryRow(`select count(*) from messages`).Scan(&messages))
+	require.NoError(t, st.DB().QueryRow(`select count(*) from message_fts`).Scan(&ftsRows))
+	require.NoError(t, st.DB().QueryRow(`
+select count(*)
+from messages m
+join message_fts f
+  on f.rowid = m.rowid and f.message_key = m.channel_id || '|' || m.ts
+`).Scan(&matched))
+	require.Equal(t, messages, ftsRows)
+	require.Equal(t, messages, matched)
 }

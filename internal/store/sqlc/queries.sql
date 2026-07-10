@@ -186,12 +186,6 @@ set fetched_at = ?,
     updated_at = ?
 where channel_id = ? and ts = ? and file_id = ?;
 
--- name: DeleteMessageFTS :exec
-delete from message_fts where message_key = ?;
-
--- name: InsertMessageFTS :exec
-insert into message_fts (message_key, content) values (?, ?);
-
 -- name: InsertMessageEvent :exec
 insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
 values (?, ?, ?, ?, ?, ?);

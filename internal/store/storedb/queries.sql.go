@@ -135,15 +135,6 @@ func (q *Queries) CountWorkspaces(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const deleteMessageFTS = `-- name: DeleteMessageFTS :exec
-delete from message_fts where message_key = ?
-`
-
-func (q *Queries) DeleteMessageFTS(ctx context.Context, messageKey string) error {
-	_, err := q.db.ExecContext(ctx, deleteMessageFTS, messageKey)
-	return err
-}
-
 const deleteMessageFiles = `-- name: DeleteMessageFiles :exec
 delete from message_files where channel_id = ? and ts = ?
 `
@@ -329,20 +320,6 @@ func (q *Queries) InsertMessageEvent(ctx context.Context, arg InsertMessageEvent
 		arg.PayloadJson,
 		arg.CreatedAt,
 	)
-	return err
-}
-
-const insertMessageFTS = `-- name: InsertMessageFTS :exec
-insert into message_fts (message_key, content) values (?, ?)
-`
-
-type InsertMessageFTSParams struct {
-	MessageKey string `json:"message_key"`
-	Content    string `json:"content"`
-}
-
-func (q *Queries) InsertMessageFTS(ctx context.Context, arg InsertMessageFTSParams) error {
-	_, err := q.db.ExecContext(ctx, insertMessageFTS, arg.MessageKey, arg.Content)
 	return err
 }
 

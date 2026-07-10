@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -21,6 +22,12 @@ import (
 
 const schemaVersion = 6
 const PlaceholderUserRawJSON = `{"slacrawl_provider_placeholder":true}`
+
+const (
+	searchIndexMaintenanceSource     = "store"
+	searchIndexMaintenanceEntityType = "search_index"
+	searchIndexMaintenanceEntityID   = "rowid_rebuild_pending"
+)
 
 const schemaPragmas = `
 pragma foreign_keys = on;
@@ -262,7 +269,7 @@ create index if not exists idx_message_files_name on message_files(name);
 
 const schemaV4Migration = messageEventHeadsSchema
 const schemaV5Migration = messageEventHeadTriggerSchema
-const schemaV6Migration = `
+const schemaV6EventMigration = `
 drop index if exists idx_message_events_identity;
 create table message_events_v6 (
   id integer primary key autoincrement,
@@ -283,9 +290,35 @@ create unique index if not exists idx_message_events_identity
 on message_events(event_key);
 `
 
+const rebuildMessageFTSRowsSQL = `
+insert into message_fts (rowid, message_key, content)
+select m.rowid,
+       m.channel_id || '|' || m.ts,
+       trim(m.normalized_text || ' ' || coalesce((
+         select group_concat(trim(f.name || ' ' || f.title || ' ' || f.plain_text || ' ' || f.preview_plain_text), ' ')
+         from message_files f
+         where f.channel_id = m.channel_id and f.ts = m.ts and f.deleted_at is null
+       ), ''))
+from messages m
+`
+
+const upsertMessageFTSRowSQL = `
+insert or replace into message_fts (rowid, message_key, content)
+select rowid, channel_id || '|' || ts, ?
+from messages
+where channel_id = ? and ts = ?
+`
+
+const deleteMessageFTSRowSQL = `
+delete from message_fts
+where rowid = (select rowid from messages where channel_id = ? and ts = ?)
+`
+
 type Store struct {
-	db *sql.DB
-	q  *storedb.Queries
+	db                     *sql.DB
+	q                      *storedb.Queries
+	ftsRowIDAligned        bool
+	searchIndexUnavailable atomic.Bool
 }
 
 type Workspace struct {
@@ -662,7 +695,22 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	return &Store{db: db, q: storedb.New(db)}, nil
+	if err := repairPendingSearchIndex(context.Background(), db); err != nil {
+		_ = base.Close()
+		return nil, err
+	}
+	aligned, err := searchIndexRowsAligned(context.Background(), db)
+	if err != nil {
+		_ = base.Close()
+		return nil, err
+	}
+	if !aligned {
+		if err := rebuildSearchIndexes(context.Background(), db); err != nil {
+			_ = base.Close()
+			return nil, fmt.Errorf("align search index rows: %w", err)
+		}
+	}
+	return &Store{db: db, q: storedb.New(db), ftsRowIDAligned: true}, nil
 }
 
 func OpenReadOnly(path string) (*Store, error) {
@@ -680,7 +728,24 @@ func OpenReadOnly(path string) (*Store, error) {
 		_ = base.Close()
 		return nil, fmt.Errorf("database schema version %d is newer than this slacrawl build supports (%d)", currentVersion, schemaVersion)
 	}
-	return &Store{db: db, q: storedb.New(db)}, nil
+	aligned := false
+	if currentVersion >= 6 {
+		pending, err := searchIndexRepairPending(context.Background(), db)
+		if err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+		if pending {
+			_ = base.Close()
+			return nil, errors.New("database search index rebuild is pending; open it writable to repair")
+		}
+		aligned, err = searchIndexRowsAligned(context.Background(), db)
+		if err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+	}
+	return &Store{db: db, q: storedb.New(db), ftsRowIDAligned: aligned}, nil
 }
 
 func (s *Store) DB() *sql.DB {
@@ -908,9 +973,8 @@ where users.workspace_id = excluded.workspace_id
 // one unit. Message writes share the single-message priority, retention, FTS,
 // file, mention, and event path.
 func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBatchResult, error) {
-	// The batch insert fast path checks message existence before deciding whether
-	// to scan FTS for a replacement. BEGIN IMMEDIATE keeps that check and write
-	// in one serialized writer snapshot.
+	// BEGIN IMMEDIATE keeps the batched exact-state preflight and subsequent
+	// sequential writes in one serialized writer snapshot.
 	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
 	if err != nil {
 		return WriteBatchResult{}, err
@@ -932,18 +996,16 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			return WriteBatchResult{}, err
 		}
 	}
+	unchangedMessages, err := unchangedProviderMessages(ctx, dbtx, batch.Messages)
+	if err != nil {
+		return WriteBatchResult{}, err
+	}
 	result := WriteBatchResult{}
 	for _, write := range batch.Messages {
-		if write.SkipUnchangedProviderRow {
-			unchanged, err := unchangedProviderMessage(ctx, dbtx, write.Message, write.Mentions)
-			if err != nil {
-				return WriteBatchResult{}, err
-			}
-			if unchanged {
-				continue
-			}
+		if _, unchanged := unchangedMessages[providerMessageKey(write.Message)]; unchanged {
+			continue
 		}
-		written, err := upsertMessageInTransaction(ctx, dbtx, qtx, write.Message, write.Mentions, write.PreserveHigherPriority, write.EnforceRetention, true)
+		written, err := upsertMessageInTransaction(ctx, dbtx, qtx, write.Message, write.Mentions, write.PreserveHigherPriority, write.EnforceRetention)
 		if err != nil {
 			return WriteBatchResult{}, err
 		}
@@ -965,71 +1027,249 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 	return result, nil
 }
 
-func unchangedProviderMessage(ctx context.Context, dbtx storedb.DBTX, message Message, mentions []Mention) (bool, error) {
-	if message.Files != nil {
-		return false, nil
-	}
-	var matches int
-	err := dbtx.QueryRowContext(ctx, `
-select exists (
-  select 1 from messages
-  where channel_id = ? and ts = ? and workspace_id = ?
-    and coalesce(user_id, '') = ? and coalesce(subtype, '') = ?
-    and coalesce(client_msg_id, '') = ? and coalesce(thread_ts, '') = ?
-    and coalesce(parent_user_id, '') = ? and text = ? and normalized_text = ?
-    and reply_count = ? and coalesce(latest_reply, '') = ?
-    and coalesce(edited_ts, '') = ? and coalesce(deleted_ts, '') = ?
-    and source_rank = ? and source_name = ? and raw_json = ?
-)
-`, message.ChannelID, message.TS, message.WorkspaceID, message.UserID, message.Subtype,
-		message.ClientMsgID, message.ThreadTS, message.ParentUserID, message.Text,
-		message.NormalizedText, message.ReplyCount, message.LatestReply, message.EditedTS,
-		message.DeletedTS, message.SourceRank, message.SourceName, message.RawJSON).Scan(&matches)
-	if err != nil || matches == 0 {
-		return false, err
+const providerPreflightChunkSize = 499
+
+type providerMessageIdentity struct {
+	channelID string
+	ts        string
+}
+
+type providerMessageState struct {
+	workspaceID    string
+	userID         string
+	subtype        string
+	clientMsgID    string
+	threadTS       string
+	parentUserID   string
+	text           string
+	normalizedText string
+	replyCount     int64
+	latestReply    string
+	editedTS       string
+	deletedTS      string
+	sourceRank     int64
+	sourceName     string
+	rawJSON        string
+}
+
+type providerMentionIdentity struct {
+	mentionType string
+	targetID    string
+}
+
+type providerEventHead struct {
+	eventType   string
+	sourceName  string
+	payloadJSON string
+}
+
+type providerMessageCandidate struct {
+	key      providerMessageIdentity
+	message  Message
+	mentions []Mention
+}
+
+// unchangedProviderMessages batches provider replay checks. Duplicate message
+// keys deliberately stay on the sequential write path because an earlier
+// write in the same batch may change the state seen by a later write.
+func unchangedProviderMessages(ctx context.Context, dbtx storedb.DBTX, writes []MessageWrite) (map[providerMessageIdentity]struct{}, error) {
+	keyCounts := make(map[providerMessageIdentity]int, len(writes))
+	for _, write := range writes {
+		keyCounts[providerMessageKey(write.Message)]++
 	}
 
-	expectedMentions := make(map[string]string, len(mentions))
-	for _, mention := range mentions {
-		expectedMentions[mention.Type+"\x00"+mention.TargetID] = mention.DisplayText
+	candidates := make([]providerMessageCandidate, 0, len(writes))
+	for _, write := range writes {
+		key := providerMessageKey(write.Message)
+		if write.SkipUnchangedProviderRow && write.Message.Files == nil && keyCounts[key] == 1 {
+			candidates = append(candidates, providerMessageCandidate{key: key, message: write.Message, mentions: write.Mentions})
+		}
 	}
+
+	unchanged := make(map[providerMessageIdentity]struct{}, len(candidates))
+	for start := 0; start < len(candidates); start += providerPreflightChunkSize {
+		end := min(start+providerPreflightChunkSize, len(candidates))
+		chunk := candidates[start:end]
+		keys := make([]providerMessageIdentity, len(chunk))
+		for i := range chunk {
+			keys[i] = chunk[i].key
+		}
+
+		states, err := loadProviderMessageStates(ctx, dbtx, keys)
+		if err != nil {
+			return nil, err
+		}
+		mentions, err := loadProviderMessageMentions(ctx, dbtx, keys)
+		if err != nil {
+			return nil, err
+		}
+		heads, err := loadProviderMessageEventHeads(ctx, dbtx, keys)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, candidate := range chunk {
+			state, exists := states[candidate.key]
+			if !exists || state != providerMessageStateFromMessage(candidate.message) {
+				continue
+			}
+			if !providerMentionsEqual(mentions[candidate.key], candidate.mentions) {
+				continue
+			}
+			expectedHead := providerEventHead{
+				eventType:   eventType(candidate.message),
+				sourceName:  candidate.message.SourceName,
+				payloadJSON: candidate.message.RawJSON,
+			}
+			if _, ok := heads[candidate.key][expectedHead]; !ok {
+				continue
+			}
+			unchanged[candidate.key] = struct{}{}
+		}
+	}
+	return unchanged, nil
+}
+
+func providerMessageKey(message Message) providerMessageIdentity {
+	return providerMessageIdentity{channelID: message.ChannelID, ts: message.TS}
+}
+
+func providerMessageStateFromMessage(message Message) providerMessageState {
+	return providerMessageState{
+		workspaceID: message.WorkspaceID, userID: message.UserID, subtype: message.Subtype,
+		clientMsgID: message.ClientMsgID, threadTS: message.ThreadTS, parentUserID: message.ParentUserID,
+		text: message.Text, normalizedText: message.NormalizedText, replyCount: int64(message.ReplyCount),
+		latestReply: message.LatestReply, editedTS: message.EditedTS, deletedTS: message.DeletedTS,
+		sourceRank: int64(message.SourceRank), sourceName: message.SourceName, rawJSON: message.RawJSON,
+	}
+}
+
+func loadProviderMessageStates(ctx context.Context, dbtx storedb.DBTX, keys []providerMessageIdentity) (map[providerMessageIdentity]providerMessageState, error) {
+	predicate, args := providerMessageKeyPredicate(keys)
 	rows, err := dbtx.QueryContext(ctx, `
-select mention_type, target_id, coalesce(display_text, '')
-from message_mentions where channel_id = ? and ts = ?
-`, message.ChannelID, message.TS)
+select channel_id, ts, workspace_id, coalesce(user_id, ''), coalesce(subtype, ''),
+  coalesce(client_msg_id, ''), coalesce(thread_ts, ''), coalesce(parent_user_id, ''),
+  text, normalized_text, reply_count, coalesce(latest_reply, ''), coalesce(edited_ts, ''),
+  coalesce(deleted_ts, ''), source_rank, source_name, raw_json
+from messages where `+predicate, args...)
 	if err != nil {
-		return false, err
+		return nil, fmt.Errorf("read provider message states: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	states := make(map[providerMessageIdentity]providerMessageState, len(keys))
 	for rows.Next() {
-		var mentionType, targetID, displayText string
-		if err := rows.Scan(&mentionType, &targetID, &displayText); err != nil {
-			return false, err
+		var key providerMessageIdentity
+		var state providerMessageState
+		if err := rows.Scan(
+			&key.channelID, &key.ts, &state.workspaceID, &state.userID, &state.subtype,
+			&state.clientMsgID, &state.threadTS, &state.parentUserID, &state.text,
+			&state.normalizedText, &state.replyCount, &state.latestReply, &state.editedTS,
+			&state.deletedTS, &state.sourceRank, &state.sourceName, &state.rawJSON,
+		); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan provider message state: %w", err)
 		}
-		key := mentionType + "\x00" + targetID
-		if expected, ok := expectedMentions[key]; !ok || expected != displayText {
-			return false, nil
-		}
-		delete(expectedMentions, key)
+		states[key] = state
 	}
 	if err := rows.Err(); err != nil {
-		return false, err
+		_ = rows.Close()
+		return nil, fmt.Errorf("read provider message states: %w", err)
 	}
 	if err := rows.Close(); err != nil {
-		return false, err
+		return nil, fmt.Errorf("close provider message states: %w", err)
 	}
-	if len(expectedMentions) != 0 {
-		return false, nil
-	}
+	return states, nil
+}
 
-	err = dbtx.QueryRowContext(ctx, `
-select exists (
-  select 1 from message_event_heads
-  where channel_id = ? and ts = ? and event_type = ?
-    and source_name = ? and payload_json = ?
-)
-`, message.ChannelID, message.TS, eventType(message), message.SourceName, message.RawJSON).Scan(&matches)
-	return matches != 0, err
+func loadProviderMessageMentions(ctx context.Context, dbtx storedb.DBTX, keys []providerMessageIdentity) (map[providerMessageIdentity]map[providerMentionIdentity]string, error) {
+	predicate, args := providerMessageKeyPredicate(keys)
+	rows, err := dbtx.QueryContext(ctx, `
+select channel_id, ts, mention_type, target_id, coalesce(display_text, '')
+from message_mentions where `+predicate, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read provider message mentions: %w", err)
+	}
+	mentions := make(map[providerMessageIdentity]map[providerMentionIdentity]string)
+	for rows.Next() {
+		var key providerMessageIdentity
+		var mention providerMentionIdentity
+		var displayText string
+		if err := rows.Scan(&key.channelID, &key.ts, &mention.mentionType, &mention.targetID, &displayText); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan provider message mention: %w", err)
+		}
+		if mentions[key] == nil {
+			mentions[key] = make(map[providerMentionIdentity]string)
+		}
+		mentions[key][mention] = displayText
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("read provider message mentions: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close provider message mentions: %w", err)
+	}
+	return mentions, nil
+}
+
+func loadProviderMessageEventHeads(ctx context.Context, dbtx storedb.DBTX, keys []providerMessageIdentity) (map[providerMessageIdentity]map[providerEventHead]struct{}, error) {
+	predicate, args := providerMessageKeyPredicate(keys)
+	rows, err := dbtx.QueryContext(ctx, `
+select channel_id, ts, event_type, source_name, payload_json
+from message_event_heads where `+predicate, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read provider message event heads: %w", err)
+	}
+	heads := make(map[providerMessageIdentity]map[providerEventHead]struct{})
+	for rows.Next() {
+		var key providerMessageIdentity
+		var head providerEventHead
+		if err := rows.Scan(&key.channelID, &key.ts, &head.eventType, &head.sourceName, &head.payloadJSON); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan provider message event head: %w", err)
+		}
+		if heads[key] == nil {
+			heads[key] = make(map[providerEventHead]struct{})
+		}
+		heads[key][head] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("read provider message event heads: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close provider message event heads: %w", err)
+	}
+	return heads, nil
+}
+
+func providerMentionsEqual(actual map[providerMentionIdentity]string, expected []Mention) bool {
+	expectedByID := make(map[providerMentionIdentity]string, len(expected))
+	for _, mention := range expected {
+		expectedByID[providerMentionIdentity{mentionType: mention.Type, targetID: mention.TargetID}] = mention.DisplayText
+	}
+	if len(actual) != len(expectedByID) {
+		return false
+	}
+	for key, displayText := range expectedByID {
+		if actualDisplayText, ok := actual[key]; !ok || actualDisplayText != displayText {
+			return false
+		}
+	}
+	return true
+}
+
+func providerMessageKeyPredicate(keys []providerMessageIdentity) (string, []any) {
+	var predicate strings.Builder
+	args := make([]any, 0, len(keys)*2)
+	for i, key := range keys {
+		if i > 0 {
+			predicate.WriteString(" or ")
+		}
+		predicate.WriteString("(channel_id = ? and ts = ?)")
+		args = append(args, key.channelID, key.ts)
+	}
+	return predicate.String(), args
 }
 
 func (s *Store) UpsertMessage(ctx context.Context, message Message, mentions []Mention) error {
@@ -1056,7 +1296,7 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 		return false, err
 	}
 	defer rollback()
-	written, err := upsertMessageInTransaction(ctx, dbtx, storedb.New(dbtx), message, mentions, preserveHigherPriority, enforceRetention, false)
+	written, err := upsertMessageInTransaction(ctx, dbtx, storedb.New(dbtx), message, mentions, preserveHigherPriority, enforceRetention)
 	if err != nil {
 		return false, err
 	}
@@ -1069,7 +1309,7 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 	return written, nil
 }
 
-func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *storedb.Queries, message Message, mentions []Mention, preserveHigherPriority, enforceRetention, ftsInsertFastPath bool) (bool, error) {
+func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *storedb.Queries, message Message, mentions []Mention, preserveHigherPriority, enforceRetention bool) (bool, error) {
 	key := messageKey(message.ChannelID, message.TS)
 	if enforceRetention {
 		allowed, err := messageAllowedByRetention(ctx, dbtx, message)
@@ -1080,15 +1320,7 @@ func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *sto
 			return false, nil
 		}
 	}
-	replaceFTS := true
 	var err error
-	if ftsInsertFastPath {
-		_, err = qtx.GetMessageWorkspace(ctx, storedb.GetMessageWorkspaceParams{ChannelID: message.ChannelID, Ts: message.TS})
-		replaceFTS = err == nil
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return false, err
-		}
-	}
 	var rows int64
 	if preserveHigherPriority {
 		rows, err = qtx.UpsertMessageByPriority(ctx, storedb.UpsertMessageByPriorityParams{
@@ -1174,7 +1406,7 @@ func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *sto
 
 	searchMessage := message
 	searchMessage.Files = filesForSearch
-	if err := writeMessageFTS(ctx, qtx, key, messageSearchContent(searchMessage), replaceFTS); err != nil {
+	if err := writeMessageFTS(ctx, dbtx, message.ChannelID, message.TS, messageSearchContent(searchMessage)); err != nil {
 		return false, err
 	}
 
@@ -1186,17 +1418,22 @@ func upsertMessageInTransaction(ctx context.Context, dbtx storedb.DBTX, qtx *sto
 }
 
 type messageFTSWriter interface {
-	DeleteMessageFTS(context.Context, string) error
-	InsertMessageFTS(context.Context, storedb.InsertMessageFTSParams) error
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func writeMessageFTS(ctx context.Context, writer messageFTSWriter, key, content string, replace bool) error {
-	if replace {
-		if err := writer.DeleteMessageFTS(ctx, key); err != nil {
-			return err
-		}
+func writeMessageFTS(ctx context.Context, writer messageFTSWriter, channelID, ts, content string) error {
+	result, err := writer.ExecContext(ctx, upsertMessageFTSRowSQL, content, channelID, ts)
+	if err != nil {
+		return err
 	}
-	return writer.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: content})
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("message %q search index upsert affected %d rows", messageKey(channelID, ts), rows)
+	}
+	return nil
 }
 
 func (s *Store) MarkMessageDeleted(ctx context.Context, message Message, mentions []Mention) error {
@@ -1242,7 +1479,7 @@ select exists (
 			return false, err
 		}
 	}
-	if _, err := dbtx.ExecContext(ctx, `delete from message_fts where message_key = ?`, messageKey(channelID, ts)); err != nil {
+	if _, err := dbtx.ExecContext(ctx, deleteMessageFTSRowSQL, channelID, ts); err != nil {
 		return false, err
 	}
 	if _, err := dbtx.ExecContext(ctx, `
@@ -1324,12 +1561,9 @@ func (s *Store) markMessageDeleted(ctx context.Context, message Message, mention
 			}
 			return false, fmt.Errorf("message %q upsert affected no rows", key)
 		}
-		if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-			return false, err
-		}
 		searchMessage := message
 		searchMessage.Files = nil
-		if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
+		if err := writeMessageFTS(ctx, dbtx, message.ChannelID, message.TS, messageSearchContent(searchMessage)); err != nil {
 			return false, err
 		}
 		if err := replaceMessageMentions(ctx, qtx, message, mentions); err != nil {
@@ -1343,10 +1577,7 @@ func (s *Store) markMessageDeleted(ctx context.Context, message Message, mention
 		searchMessage := message
 		searchMessage.NormalizedText = normalizedText
 		searchMessage.Files = nil
-		if err := qtx.DeleteMessageFTS(ctx, key); err != nil {
-			return false, err
-		}
-		if err := qtx.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{MessageKey: key, Content: messageSearchContent(searchMessage)}); err != nil {
+		if err := writeMessageFTS(ctx, dbtx, message.ChannelID, message.TS, messageSearchContent(searchMessage)); err != nil {
 			return false, err
 		}
 	}
@@ -1743,17 +1974,31 @@ func (s *Store) searchAuto(ctx context.Context, workspaceID string, query string
 }
 
 func (s *Store) searchFTS(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
+	if s.searchIndexUnavailable.Load() {
+		return nil, errors.New("search index is temporarily unavailable; retry or reopen the database")
+	}
+	messageJoin := "join messages m on f.message_key = m.channel_id || '|' || m.ts"
+	if s.ftsRowIDAligned {
+		messageJoin = "join messages m on f.rowid = m.rowid"
+	}
 	sqlQuery := `
 select ` + messageRowSelect + `
 from message_fts f
-join messages m on f.message_key = m.channel_id || '|' || m.ts
+` + messageJoin + `
 ` + messageRowJoins + `
 where message_fts match ?
   and (? = '' or m.workspace_id = ?)
 order by m.ts desc
 limit ?
 `
-	return s.queryMessageRows(ctx, sqlQuery, query, workspaceID, workspaceID, RequireLimit(limit))
+	rows, err := s.queryMessageRows(ctx, sqlQuery, query, workspaceID, workspaceID, RequireLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	if s.searchIndexUnavailable.Load() {
+		return nil, errors.New("search index is temporarily unavailable; retry or reopen the database")
+	}
+	return rows, nil
 }
 
 func (s *Store) searchLike(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {
@@ -1940,12 +2185,12 @@ func (s *Store) resolveMessageRowMentions(ctx context.Context, rows []MessageRow
 	if len(rows) == 0 {
 		return nil
 	}
-	byKey := map[string][]messageMentionDisplay{}
-	keys := make([]string, 0, len(rows))
-	seen := map[string]struct{}{}
+	byKey := map[providerMessageIdentity][]messageMentionDisplay{}
+	keys := make([]providerMessageIdentity, 0, len(rows))
+	seen := map[providerMessageIdentity]struct{}{}
 	for _, row := range rows {
-		key := messageKey(row.ChannelID, row.TS)
-		if strings.TrimSpace(key) == "|" {
+		key := providerMessageIdentity{channelID: row.ChannelID, ts: row.TS}
+		if strings.TrimSpace(key.channelID) == "" && strings.TrimSpace(key.ts) == "" {
 			continue
 		}
 		if _, ok := seen[key]; ok {
@@ -1956,7 +2201,7 @@ func (s *Store) resolveMessageRowMentions(ctx context.Context, rows []MessageRow
 	}
 	for start := 0; start < len(keys); start += 400 {
 		end := min(start+400, len(keys))
-		placeholders := strings.TrimRight(strings.Repeat("?,", end-start), ",")
+		predicate, args := providerMessageKeyPredicate(keys[start:end])
 		query := `
 select mm.channel_id, mm.ts, mm.target_id,
        coalesce(nullif(u.display_name, ''), nullif(u.real_name, ''), nullif(u.name, ''), nullif(mm.display_text, ''), '')
@@ -1964,12 +2209,8 @@ from message_mentions mm
 left join users u on u.id = mm.target_id
 where mm.mention_type = 'user'
   and mm.deleted_at is null
-  and (mm.channel_id || '|' || mm.ts) in (` + placeholders + `)
+  and (` + predicate + `)
 `
-		args := make([]any, 0, end-start)
-		for _, key := range keys[start:end] {
-			args = append(args, key)
-		}
 		mentionRows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
@@ -1985,7 +2226,7 @@ where mm.mention_type = 'user'
 			if target == "" || display == "" || strings.EqualFold(display, target) {
 				continue
 			}
-			key := messageKey(channelID, ts)
+			key := providerMessageIdentity{channelID: channelID, ts: ts}
 			byKey[key] = append(byKey[key], messageMentionDisplay{target: target, display: display})
 		}
 		if err := mentionRows.Err(); err != nil {
@@ -1997,7 +2238,7 @@ where mm.mention_type = 'user'
 		}
 	}
 	for index := range rows {
-		key := messageKey(rows[index].ChannelID, rows[index].TS)
+		key := providerMessageIdentity{channelID: rows[index].ChannelID, ts: rows[index].TS}
 		mentions := byKey[key]
 		if len(mentions) == 0 {
 			continue
@@ -2573,6 +2814,99 @@ func (s *Store) ListSyncState(ctx context.Context, source, entityType string, li
 	return out, nil
 }
 
+func (s *Store) RebuildSearchIndexes(ctx context.Context) error {
+	return rebuildSearchIndexes(ctx, s.db)
+}
+
+// RebuildSearchIndexesInTransaction atomically aligns FTS rows with messages
+// while preserving the caller's surrounding database transaction.
+func RebuildSearchIndexesInTransaction(ctx context.Context, tx *sql.Tx) error {
+	if tx == nil {
+		return errors.New("search-index rebuild transaction is required")
+	}
+	return rebuildSearchIndexesInTransaction(ctx, tx)
+}
+
+func markSearchIndexRebuildPending(ctx context.Context, dbtx storedb.DBTX) error {
+	return storedb.New(dbtx).SetSyncState(ctx, storedb.SetSyncStateParams{
+		SourceName: searchIndexMaintenanceSource, EntityType: searchIndexMaintenanceEntityType,
+		EntityID: searchIndexMaintenanceEntityID, Value: "1", UpdatedAt: formatDBTime(time.Now().UTC()),
+	})
+}
+
+func repairPendingSearchIndex(ctx context.Context, db *sql.DB) error {
+	pending, err := searchIndexRepairPending(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		return nil
+	}
+	if err := rebuildSearchIndexes(ctx, db); err != nil {
+		return fmt.Errorf("repair pending search index: %w", err)
+	}
+	return nil
+}
+
+func searchIndexRepairPending(ctx context.Context, db *sql.DB) (bool, error) {
+	var pending bool
+	if err := db.QueryRowContext(ctx, `
+select exists (
+  select 1 from sync_state
+  where source_name = ? and entity_type = ? and entity_id = ?
+)
+`, searchIndexMaintenanceSource, searchIndexMaintenanceEntityType, searchIndexMaintenanceEntityID).Scan(&pending); err != nil {
+		return false, fmt.Errorf("inspect search-index maintenance state: %w", err)
+	}
+	return pending, nil
+}
+
+func searchIndexRowsAligned(ctx context.Context, db *sql.DB) (bool, error) {
+	var aligned bool
+	if err := db.QueryRowContext(ctx, `
+select
+  (select count(*) from message_fts) = (select count(*) from messages)
+  and not exists (
+    select 1
+    from message_fts f
+    left join messages m
+      on m.rowid = f.rowid
+     and f.message_key = m.channel_id || '|' || m.ts
+    where m.rowid is null
+  )
+`).Scan(&aligned); err != nil {
+		return false, fmt.Errorf("inspect search-index row alignment: %w", err)
+	}
+	return aligned, nil
+}
+
+func rebuildSearchIndexes(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := rebuildSearchIndexesInTransaction(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func rebuildSearchIndexesInTransaction(ctx context.Context, dbtx storedb.DBTX) error {
+	if _, err := dbtx.ExecContext(ctx, `delete from message_fts`); err != nil {
+		return err
+	}
+	if _, err := dbtx.ExecContext(ctx, rebuildMessageFTSRowsSQL); err != nil {
+		return err
+	}
+	if _, err := dbtx.ExecContext(ctx, `
+delete from sync_state
+where source_name = ? and entity_type = ? and entity_id = ?
+`, searchIndexMaintenanceSource, searchIndexMaintenanceEntityType, searchIndexMaintenanceEntityID); err != nil {
+		return err
+	}
+	return nil
+}
 func MarshalRaw(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -2927,19 +3261,18 @@ where exists (
     and trim(coalesce(m.deleted_ts, '')) <> ''
 );
 
-delete from message_fts;
-insert into message_fts (message_key, content)
-select m.channel_id || '|' || m.ts,
-       trim(m.normalized_text || ' ' || coalesce((
-         select group_concat(trim(f.name || ' ' || f.title || ' ' || f.plain_text || ' ' || f.preview_plain_text), ' ')
-         from message_files f
-         where f.channel_id = m.channel_id and f.ts = m.ts and f.deleted_at is null
-       ), ''))
-from messages m;
 `); err != nil {
 		return err
 	}
-	_, err = tx.Exec(schemaV6Migration)
+	if _, err := tx.Exec(`delete from message_fts;` + rebuildMessageFTSRowsSQL + `;
+delete from sync_state
+where source_name = '` + searchIndexMaintenanceSource + `'
+  and entity_type = '` + searchIndexMaintenanceEntityType + `'
+  and entity_id = '` + searchIndexMaintenanceEntityID + `';
+`); err != nil {
+		return err
+	}
+	_, err = tx.Exec(schemaV6EventMigration)
 	return err
 }
 

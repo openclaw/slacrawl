@@ -50,6 +50,93 @@ func TestExportImportRoundTrip(t *testing.T) {
 	heads, err := reader.QueryReadOnly(ctx, `select count(*) as count from message_event_heads`)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), heads[0]["count"])
+	parity, err := reader.QueryReadOnly(ctx, `
+select count(*) as count
+from messages m
+join message_fts f
+  on f.rowid = m.rowid and f.message_key = m.channel_id || '|' || m.ts
+`)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), parity[0]["count"])
+}
+
+func TestImportRollsBackWhenAtomicSearchIndexRebuildFails(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	source := seedStore(t, filepath.Join(dir, "source.db"))
+	defer func() { require.NoError(t, source.Close()) }()
+	// Make the snapshot newer than the local reader state so merge import has
+	// a visible replacement to commit after the forced rollback is removed.
+	require.NoError(t, source.UpsertMessage(ctx, store.Message{
+		ChannelID: "C1", TS: "123.456", WorkspaceID: "T1", UserID: "U1",
+		Text: "git backed archive works", NormalizedText: "git backed archive works",
+		SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: time.Now().UTC().Add(time.Hour),
+	}, []store.Mention{{Type: "user", TargetID: "U1", DisplayText: "alice"}}))
+	// Include a pending marker in the snapshot so the rebuild's final marker
+	// deletion can be failed deterministically by the reader-side trigger.
+	require.NoError(t, source.SetSyncState(ctx, "store", "search_index", "rowid_rebuild_pending", "1"))
+	opts := Options{RepoPath: filepath.Join(dir, "share"), Branch: "main"}
+	_, err := Export(ctx, source, opts)
+	require.NoError(t, err)
+
+	readerPath := filepath.Join(dir, "reader.db")
+	reader := seedStore(t, readerPath)
+	now := time.Now().UTC()
+	require.NoError(t, reader.UpsertMessage(ctx, store.Message{
+		ChannelID: "C1", TS: "123.456", WorkspaceID: "T1", UserID: "U1",
+		Text: "reader state before import", NormalizedText: "reader state before import",
+		SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: now,
+	}, nil))
+	_, err = reader.DB().ExecContext(ctx, `
+create trigger reject_search_index_marker_clear
+before delete on sync_state
+when old.source_name = 'store'
+  and old.entity_type = 'search_index'
+  and old.entity_id = 'rowid_rebuild_pending'
+begin
+  select raise(abort, 'forced post-commit rebuild failure');
+end;
+`)
+	require.NoError(t, err)
+
+	_, err = Import(ctx, reader, opts)
+	require.ErrorContains(t, err, "forced post-commit rebuild failure")
+	var messages, ftsRows, pending int64
+	require.NoError(t, reader.DB().QueryRow(`select count(*) from messages`).Scan(&messages))
+	require.NoError(t, reader.DB().QueryRow(`select count(*) from message_fts`).Scan(&ftsRows))
+	require.NoError(t, reader.DB().QueryRow(`
+select count(*) from sync_state
+where source_name = 'store'
+  and entity_type = 'search_index'
+  and entity_id = 'rowid_rebuild_pending'
+`).Scan(&pending))
+	require.Equal(t, int64(1), messages)
+	require.Equal(t, int64(1), ftsRows)
+	require.Zero(t, pending)
+	rows, err := reader.Search(ctx, "", "reader state", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	_, err = reader.DB().ExecContext(ctx, `drop trigger reject_search_index_marker_clear`)
+	require.NoError(t, err)
+
+	_, err = Import(ctx, reader, opts)
+	require.NoError(t, err)
+	rows, err = reader.Search(ctx, "", "archive", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	rows, err = reader.Search(ctx, "", "reader state", 10)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.NoError(t, reader.DB().QueryRow(`select count(*) from message_fts`).Scan(&ftsRows))
+	require.NoError(t, reader.DB().QueryRow(`
+select count(*) from sync_state
+where source_name = 'store'
+  and entity_type = 'search_index'
+  and entity_id = 'rowid_rebuild_pending'
+`).Scan(&pending))
+	require.Equal(t, int64(1), ftsRows)
+	require.Zero(t, pending)
+	require.NoError(t, reader.Close())
 }
 
 func TestImportMergesWithoutRemovingLocalRowsOrNewerTombstones(t *testing.T) {
