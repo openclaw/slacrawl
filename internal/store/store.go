@@ -2350,31 +2350,6 @@ func (s *Store) ListSyncState(ctx context.Context, source, entityType string, li
 	return out, nil
 }
 
-func (s *Store) RebuildSearchIndexes(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `delete from message_fts`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-insert into message_fts (message_key, content)
-select m.channel_id || '|' || m.ts,
-       trim(m.normalized_text || ' ' || coalesce((
-         select group_concat(trim(f.name || ' ' || f.title || ' ' || f.plain_text || ' ' || f.preview_plain_text), ' ')
-         from message_files f
-         where f.channel_id = m.channel_id and f.ts = m.ts and f.deleted_at is null
-       ), ''))
-from messages m
-`); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func MarshalRaw(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {
