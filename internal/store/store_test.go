@@ -168,6 +168,101 @@ func TestUpsertMessageDeduplicatesMentions(t *testing.T) {
 	require.Equal(t, int64(1), rows[0]["n"])
 }
 
+func TestMessageSubordinatesUseTombstonesAndCanBeResurrected(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	message := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1", UserID: "U1",
+		Text: "hello", NormalizedText: "hello", SourceRank: 2, SourceName: "api-bot",
+		RawJSON: `{}`, UpdatedAt: now,
+		Files: []MessageFile{{FileID: "F1", Name: "one.txt", RawJSON: `{}`}, {
+			FileID: "F2", Name: "two.txt", MediaPath: "files/aa/two.txt", ContentSHA256: "hash-two",
+			ContentSize: 42, FetchStatus: "fetched", RawJSON: `{}`,
+		}},
+	}
+	mentions := []Mention{{Type: "user", TargetID: "U1"}, {Type: "user", TargetID: "U2"}}
+	require.NoError(t, s.UpsertMessage(ctx, message, mentions))
+
+	message.UpdatedAt = now.Add(time.Second)
+	message.Files = message.Files[:1]
+	require.NoError(t, s.UpsertMessage(ctx, message, mentions[:1]))
+	rows, err := s.QueryReadOnly(ctx, `select file_id, coalesce(deletion_source, '') as source, coalesce(deletion_reason, '') as reason, updated_at from message_files where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"file_id": "F2", "source": "api-bot", "reason": "absent_from_authoritative_message_payload", "updated_at": formatDBTime(now.Add(time.Second))}}, rows)
+	rows, err = s.QueryReadOnly(ctx, `select target_id, coalesce(deletion_source, '') as source, coalesce(deletion_reason, '') as reason, updated_at from message_mentions where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"target_id": "U2", "source": "api-bot", "reason": "absent_from_authoritative_message_payload", "updated_at": formatDBTime(now.Add(time.Second))}}, rows)
+	files, err := s.Files(ctx, FileListOptions{})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	message.UpdatedAt = now.Add(2 * time.Second)
+	message.Files = append(message.Files, MessageFile{FileID: "F2", Name: "two.txt", RawJSON: `{}`})
+	require.NoError(t, s.UpsertMessage(ctx, message, mentions))
+	rows, err = s.QueryReadOnly(ctx, `select count(*) as count from message_files where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), rows[0]["count"])
+	rows, err = s.QueryReadOnly(ctx, `select media_path, content_sha256, content_size, fetch_status from message_files where file_id = 'F2'`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"media_path": "files/aa/two.txt", "content_sha256": "hash-two", "content_size": int64(42), "fetch_status": "fetched"}}, rows)
+	rows, err = s.QueryReadOnly(ctx, `select count(*) as count from message_mentions where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), rows[0]["count"])
+
+	message.UpdatedAt = now.Add(3 * time.Second)
+	message.DeletedTS = "124.00"
+	require.NoError(t, s.MarkMessageDeleted(ctx, message, mentions))
+	rows, err = s.QueryReadOnly(ctx, `select count(*) as count from message_files where deletion_reason = 'parent_message_deleted'`)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), rows[0]["count"])
+	rows, err = s.QueryReadOnly(ctx, `select count(*) as count from message_mentions where deletion_reason = 'parent_message_deleted'`)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), rows[0]["count"])
+}
+
+func TestRejectedMessageDeletePreservesActiveSubordinates(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	active := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1", UserID: "U1",
+		Text: "active", NormalizedText: "active", SourceRank: 1, SourceName: "api-user",
+		RawJSON: `{"active":true}`, UpdatedAt: now.Add(2 * time.Second),
+		Files: []MessageFile{{FileID: "F1", Name: "active-file.txt", RawJSON: `{}`}},
+	}
+	require.NoError(t, s.UpsertMessage(ctx, active, []Mention{{Type: "user", TargetID: "U1"}}))
+	staleDelete := active
+	staleDelete.DeletedTS = "124.00"
+	staleDelete.SourceRank = 2
+	staleDelete.SourceName = "api-bot"
+	staleDelete.UpdatedAt = now.Add(time.Second)
+	applied, err := s.MarkMessageDeletedWithRetention(ctx, staleDelete, nil)
+	require.NoError(t, err)
+	require.False(t, applied)
+	staleDelete.UpdatedAt = active.UpdatedAt
+	staleDelete.SourceRank = 4
+	applied, err = s.MarkMessageDeletedWithRetention(ctx, staleDelete, nil)
+	require.NoError(t, err)
+	require.False(t, applied)
+	rows, err := s.QueryReadOnly(ctx, `
+select coalesce(deleted_ts, '') as deleted_ts,
+       (select count(*) from message_files where file_id = 'F1' and deleted_at is null) as files,
+       (select count(*) from message_mentions where target_id = 'U1' and deleted_at is null) as mentions
+from messages where channel_id = 'C1' and ts = '123.45'
+`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"deleted_ts": "", "files": int64(1), "mentions": int64(1)}}, rows)
+	rows, err = s.QueryReadOnly(ctx, `select count(*) as count from message_fts where message_key = 'C1|123.45' and instr(content, 'active-file.txt') > 0`)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows[0]["count"])
+}
+
 func TestUpsertMessageSuppressesConsecutiveDuplicateEventsAndPreservesReversions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
@@ -797,6 +892,147 @@ from sqlite_master
 where type = 'trigger' and name = 'seed_message_event_head_before_update'
 `).Scan(&triggerCount))
 	require.Equal(t, 1, triggerCount)
+}
+
+func TestOpenMigratesVersion5SubordinatesToTombstones(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	message := Message{
+		ChannelID: "C1", TS: "123.45", WorkspaceID: "T1", Text: "deleted",
+		NormalizedText: "deleted", DeletedTS: "124.00", SourceRank: 2,
+		SourceName: "api-bot", RawJSON: `{}`, UpdatedAt: now,
+		Files: []MessageFile{{FileID: "F1", Name: "legacy-secret.txt", RawJSON: `{}`}},
+	}
+	require.NoError(t, s.UpsertMessage(ctx, message, []Mention{{Type: "user", TargetID: "U1"}}))
+	require.NoError(t, s.Close())
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+alter table message_files rename to message_files_v6;
+drop index idx_message_files_workspace_ts;
+drop index idx_message_files_file_id;
+drop index idx_message_files_name;
+create table message_files (
+  workspace_id text not null, channel_id text not null, ts text not null, file_id text not null,
+  user_id text, name text not null default '', title text not null default '', mimetype text,
+  filetype text, pretty_type text, mode text, size integer not null default 0, url_private text,
+  url_private_download text, permalink text, is_public integer not null default 0,
+  plain_text text not null default '', preview_plain_text text not null default '', media_path text,
+  content_sha256 text, content_size integer not null default 0, fetched_at text,
+  fetch_status text not null default '', fetch_error text not null default '', raw_json text not null,
+  updated_at text not null, primary key (channel_id, ts, file_id)
+);
+insert into message_files
+select workspace_id, channel_id, ts, file_id, user_id, name, title, mimetype, filetype,
+       pretty_type, mode, size, url_private, url_private_download, permalink, is_public,
+       plain_text, preview_plain_text, media_path, content_sha256, content_size, fetched_at,
+       fetch_status, fetch_error, raw_json, updated_at
+from message_files_v6;
+drop table message_files_v6;
+create index idx_message_files_workspace_ts on message_files(workspace_id, ts desc);
+create index idx_message_files_file_id on message_files(file_id);
+create index idx_message_files_name on message_files(name);
+alter table message_mentions rename to message_mentions_v6;
+drop index idx_message_mentions_target_ts;
+create table message_mentions (
+  channel_id text not null, ts text not null, mention_type text not null, target_id text not null,
+  display_text text, primary key (channel_id, ts, mention_type, target_id)
+);
+insert into message_mentions select channel_id, ts, mention_type, target_id, display_text from message_mentions_v6;
+drop table message_mentions_v6;
+create index idx_message_mentions_target_ts on message_mentions(target_id, ts desc);
+delete from message_fts;
+insert into message_fts (message_key, content) values ('C1|123.45', 'deleted legacy-secret.txt');
+pragma user_version = 5;
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	rows, err := s.QueryReadOnly(ctx, `
+select (select count(*) from message_files where deletion_reason = 'parent_message_deleted') as files,
+       (select count(*) from message_mentions where deletion_reason = 'parent_message_deleted' and updated_at <> '') as mentions
+`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"files": int64(1), "mentions": int64(1)}}, rows)
+	matches, err := s.Search(ctx, "", "legacy", 10)
+	require.NoError(t, err)
+	require.Empty(t, matches)
+}
+
+func TestOpenMigratesVersion5WithoutCollapsingSameSecondEventReversions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+drop index idx_message_events_identity;
+drop table message_events;
+create table message_events (
+  id integer primary key autoincrement,
+  channel_id text not null,
+  ts text not null,
+  event_type text not null,
+  source_name text not null,
+  payload_json text not null,
+  created_at text not null
+);
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at) values
+  ('C1', '123.45', 'message', 'api-bot', '{"state":"A"}', '2026-07-17T12:00:00Z'),
+  ('C1', '123.45', 'message', 'api-bot', '{"state":"B"}', '2026-07-17T12:00:00Z'),
+  ('C1', '123.45', 'message', 'api-bot', '{"state":"A"}', '2026-07-17T12:00:00Z'),
+  ('C1', '123.45', 'message', 'api-bot', '{"state":"B"}', '2026-07-17T12:00:00Z');
+with recursive counter(n) as (
+  values(1)
+  union all
+  select n + 1 from counter where n < 501
+)
+insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
+select 'C-batch', printf('%d.00', n), 'message', 'api-bot', printf('{"n":%d}', n), '2026-07-17T12:00:00Z'
+from counter;
+pragma user_version = 5;
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	rows, err := s.QueryReadOnly(context.Background(), `select payload_json, event_key from message_events where channel_id = 'C1' order by id`)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	require.Equal(t, `{"state":"A"}`, rows[0]["payload_json"])
+	require.Equal(t, `{"state":"B"}`, rows[1]["payload_json"])
+	require.Equal(t, `{"state":"A"}`, rows[2]["payload_json"])
+	require.Equal(t, `{"state":"B"}`, rows[3]["payload_json"])
+	require.NotEqual(t, rows[0]["event_key"], rows[2]["event_key"])
+	require.NotEqual(t, rows[1]["event_key"], rows[3]["event_key"])
+	var migratedEvents int
+	require.NoError(t, s.DB().QueryRow(`select count(*) from message_events where event_key is not null and trim(event_key) <> ''`).Scan(&migratedEvents))
+	require.Equal(t, 505, migratedEvents)
+	require.NoError(t, s.UpsertMessage(context.Background(), Message{
+		ChannelID: "C1", TS: "900.00", WorkspaceID: "T1", Text: "post-upgrade",
+		NormalizedText: "post-upgrade", SourceRank: 2, SourceName: "api-bot",
+		RawJSON: `{}`, UpdatedAt: time.Now().UTC(),
+	}, nil))
+	rows, err = s.QueryReadOnly(context.Background(), `select event_key from message_events where ts = '900.00'`)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotEmpty(t, rows[0]["event_key"])
+	var notNull int
+	var defaultValue string
+	require.NoError(t, s.DB().QueryRow(`select "notnull", coalesce(dflt_value, '') from pragma_table_info('message_events') where name = 'event_key'`).Scan(&notNull, &defaultValue))
+	require.Equal(t, 1, notNull)
+	require.Contains(t, defaultValue, "randomblob")
 }
 
 func TestOpenDoesNotStampInvalidOldSchema(t *testing.T) {

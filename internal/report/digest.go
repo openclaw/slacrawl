@@ -203,6 +203,7 @@ join messages m on m.channel_id = mm.channel_id and m.ts = mm.ts
 left join users u on u.id = mm.target_id and u.workspace_id = m.workspace_id
 left join channels c on c.id = mm.target_id and c.workspace_id = m.workspace_id
 where m.ts not like 'draft:%'
+  and mm.deleted_at is null
   and instr(m.ts, '.') > 0
   and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
   and m.ts <= ?

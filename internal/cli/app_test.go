@@ -756,7 +756,8 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--keep-media")
 	require.Contains(t, out, "--keep-message-events[events retained per message, source, and type]")
 	require.Contains(t, out, "--tag[immutable snapshot tag]")
-	require.Contains(t, out, "--ref[historical Git ref to import]")
+	require.Contains(t, out, "--ref[historical Git ref to import; requires --restore]")
+	require.Contains(t, out, "--restore[exactly replace snapshot tables instead of merging]")
 	require.Contains(t, out, "--workspace[workspace id]")
 }
 
@@ -843,10 +844,12 @@ func TestPublishSubscribeAndSearchGitArchive(t *testing.T) {
 	require.Equal(t, "archive seed message", rows[0]["text"])
 
 	stdout.Reset()
-	require.NoError(t, app.Run(ctx, []string{"--config", readerCfgPath, "--json", "update", "--ref", "test-snapshot"}))
+	require.ErrorContains(t, app.Run(ctx, []string{"--config", readerCfgPath, "update", "--ref", "test-snapshot"}), "requires --restore")
+	require.NoError(t, app.Run(ctx, []string{"--config", readerCfgPath, "--json", "update", "--restore", "--ref", "test-snapshot"}))
 	var update map[string]any
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &update))
 	require.Equal(t, "test-snapshot", update["ref"])
+	require.Equal(t, true, update["restore"])
 }
 
 func TestSubscribePersistsNoMedia(t *testing.T) {

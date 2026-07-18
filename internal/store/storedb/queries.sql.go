@@ -158,20 +158,6 @@ func (q *Queries) DeleteMessageFiles(ctx context.Context, arg DeleteMessageFiles
 	return err
 }
 
-const deleteMessageMentions = `-- name: DeleteMessageMentions :exec
-delete from message_mentions where channel_id = ? and ts = ?
-`
-
-type DeleteMessageMentionsParams struct {
-	ChannelID string `json:"channel_id"`
-	Ts        string `json:"ts"`
-}
-
-func (q *Queries) DeleteMessageMentions(ctx context.Context, arg DeleteMessageMentionsParams) error {
-	_, err := q.db.ExecContext(ctx, deleteMessageMentions, arg.ChannelID, arg.Ts)
-	return err
-}
-
 const deleteSyncState = `-- name: DeleteSyncState :exec
 delete from sync_state
 where source_name = ? and entity_type = ? and entity_id = ?
@@ -389,6 +375,9 @@ on conflict(channel_id, ts, file_id) do update set
   fetched_at=excluded.fetched_at,
   fetch_status=excluded.fetch_status,
   fetch_error=excluded.fetch_error,
+  deleted_at=null,
+  deletion_source=null,
+  deletion_reason=null,
   raw_json=excluded.raw_json,
   updated_at=excluded.updated_at
 `
@@ -585,6 +574,7 @@ select m.workspace_id, mm.channel_id, mm.ts, mm.mention_type, mm.target_id, coal
 from message_mentions mm
 join messages m on m.channel_id = mm.channel_id and m.ts = mm.ts
 where (?1 = '' or m.workspace_id = ?1)
+  and mm.deleted_at is null
   and (?2 = '' or mm.target_id = ?2 or mm.display_text like ?3)
 order by mm.ts desc
 limit ?4
@@ -1315,6 +1305,31 @@ func (q *Queries) ThreadCoverageState(ctx context.Context) (string, error) {
 	return value, err
 }
 
+const tombstoneMessageMentions = `-- name: TombstoneMessageMentions :exec
+update message_mentions
+set deleted_at = ?, deletion_source = ?, deletion_reason = 'absent_from_authoritative_message_payload', updated_at = ?
+where channel_id = ? and ts = ?
+`
+
+type TombstoneMessageMentionsParams struct {
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionSource sql.NullString `json:"deletion_source"`
+	UpdatedAt      string         `json:"updated_at"`
+	ChannelID      string         `json:"channel_id"`
+	Ts             string         `json:"ts"`
+}
+
+func (q *Queries) TombstoneMessageMentions(ctx context.Context, arg TombstoneMessageMentionsParams) error {
+	_, err := q.db.ExecContext(ctx, tombstoneMessageMentions,
+		arg.DeletedAt,
+		arg.DeletionSource,
+		arg.UpdatedAt,
+		arg.ChannelID,
+		arg.Ts,
+	)
+	return err
+}
+
 const updateFileFetchStatus = `-- name: UpdateFileFetchStatus :exec
 update message_files
 set fetched_at = ?,
@@ -1626,10 +1641,14 @@ func (q *Queries) UpsertMessageEventHead(ctx context.Context, arg UpsertMessageE
 }
 
 const upsertMessageMention = `-- name: UpsertMessageMention :exec
-insert into message_mentions (channel_id, ts, mention_type, target_id, display_text)
-values (?, ?, ?, ?, ?)
+insert into message_mentions (channel_id, ts, mention_type, target_id, display_text, updated_at)
+values (?, ?, ?, ?, ?, ?)
 on conflict(channel_id, ts, mention_type, target_id) do update set
-  display_text=excluded.display_text
+  display_text=excluded.display_text,
+  deleted_at=null,
+  deletion_source=null,
+  deletion_reason=null,
+  updated_at=excluded.updated_at
 `
 
 type UpsertMessageMentionParams struct {
@@ -1638,6 +1657,7 @@ type UpsertMessageMentionParams struct {
 	MentionType string         `json:"mention_type"`
 	TargetID    string         `json:"target_id"`
 	DisplayText sql.NullString `json:"display_text"`
+	UpdatedAt   string         `json:"updated_at"`
 }
 
 func (q *Queries) UpsertMessageMention(ctx context.Context, arg UpsertMessageMentionParams) error {
@@ -1647,6 +1667,7 @@ func (q *Queries) UpsertMessageMention(ctx context.Context, arg UpsertMessageMen
 		arg.MentionType,
 		arg.TargetID,
 		arg.DisplayText,
+		arg.UpdatedAt,
 	)
 	return err
 }

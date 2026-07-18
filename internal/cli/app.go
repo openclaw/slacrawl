@@ -2037,12 +2037,16 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
 	ref := fs.String("ref", "", "historical git ref to import")
+	restore := fs.Bool("restore", false, "exactly replace snapshot tables instead of merging")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("update takes no positional arguments")
+	}
+	if strings.TrimSpace(*ref) != "" && !*restore {
+		return errors.New("update --ref requires --restore because historical snapshots replace local rows")
 	}
 	st, err := a.openStore(cfg)
 	if err != nil {
@@ -2059,12 +2063,17 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 		if err := share.Pull(ctx, opts); err != nil {
 			return err
 		}
-		manifest, imported, err = share.ImportIfChanged(ctx, st, opts)
+		if *restore {
+			manifest, err = share.Restore(ctx, st, opts)
+			imported = err == nil
+		} else {
+			manifest, imported, err = share.ImportIfChanged(ctx, st, opts)
+		}
 		if err != nil {
 			return err
 		}
 	} else {
-		manifest, err = share.ImportAt(ctx, st, opts, *ref)
+		manifest, err = share.RestoreAt(ctx, st, opts, *ref)
 		if err != nil {
 			return err
 		}
@@ -2078,6 +2087,7 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 		"media":        manifest.Media,
 		"imported":     imported,
 		"ref":          strings.TrimSpace(*ref),
+		"restore":      *restore,
 	}, format, true)
 }
 

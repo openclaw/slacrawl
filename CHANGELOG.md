@@ -2,6 +2,10 @@
 
 ## 0.7.8 - Unreleased
 
+### Fixes
+
+- Made routine Git-share imports merge-only so destination rows and newer message, user, and channel tombstones survive incomplete snapshots; exact replacement now requires `update --restore`, and removed file and mention rows retain source-attributed tombstones.
+
 ## 0.7.7 - 2026-07-09
 
 ### Maintenance

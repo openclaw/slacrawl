@@ -1354,14 +1354,16 @@ func TestHandleEventsAPIEventMarksOriginalMessageDeleted(t *testing.T) {
 	require.Equal(t, "gone [deleted]", rows[0]["normalized_text"])
 	files, err := st.Files(ctx, store.FileListOptions{FileID: "F123"})
 	require.NoError(t, err)
-	require.Len(t, files, 1)
-	require.Equal(t, "files/ab/hash-incident.txt", files[0].MediaPath)
+	require.Empty(t, files)
+	fileTombstones, err := st.QueryReadOnly(ctx, `select file_id, deletion_source, deletion_reason from message_files where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"file_id": "F123", "deletion_source": "api-bot", "deletion_reason": "parent_message_deleted"}}, fileTombstones)
 	matches, err := st.Search(ctx, "T123", "deleted", 10)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 	matches, err = st.Search(ctx, "T123", "archived", 10)
 	require.NoError(t, err)
-	require.Len(t, matches, 1)
+	require.Empty(t, matches)
 }
 
 func TestHandleEventsAPIEventIndexesMentionsForDeletedTombstone(t *testing.T) {
@@ -1390,9 +1392,13 @@ func TestHandleEventsAPIEventIndexesMentionsForDeletedTombstone(t *testing.T) {
 
 	mentions, err := st.Mentions(ctx, "T123", "U234", 10)
 	require.NoError(t, err)
-	require.Len(t, mentions, 1)
-	require.Equal(t, "1710000000.000100", mentions[0].TS)
-	require.Equal(t, "sam", mentions[0].DisplayText)
+	require.Empty(t, mentions)
+	tombstones, err := st.QueryReadOnly(ctx, `select ts, target_id, display_text, deletion_source, deletion_reason from message_mentions where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"ts": "1710000000.000100", "target_id": "U234", "display_text": "sam",
+		"deletion_source": "api-bot", "deletion_reason": "parent_message_deleted",
+	}}, tombstones)
 }
 
 func TestHandleEventsAPIEventIgnoresUnknown(t *testing.T) {

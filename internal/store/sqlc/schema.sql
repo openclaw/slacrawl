@@ -90,6 +90,9 @@ create table message_files (
   fetch_error text not null default '',
   raw_json text not null,
   updated_at text not null,
+  deleted_at text,
+  deletion_source text,
+  deletion_reason text,
   primary key (channel_id, ts, file_id)
 );
 
@@ -99,6 +102,7 @@ create index idx_message_files_name on message_files(name);
 
 create table message_events (
   id integer primary key autoincrement,
+  event_key text not null default (lower(hex(randomblob(16)))),
   channel_id text not null,
   ts text not null,
   event_type text not null,
@@ -106,6 +110,7 @@ create table message_events (
   payload_json text not null,
   created_at text not null
 );
+create unique index idx_message_events_identity on message_events(event_key);
 
 create table message_event_heads (
   channel_id text not null,
@@ -131,6 +136,10 @@ create table message_mentions (
   mention_type text not null,
   target_id text not null,
   display_text text,
+  deleted_at text,
+  deletion_source text,
+  deletion_reason text,
+  updated_at text not null default '',
   primary key (channel_id, ts, mention_type, target_id)
 );
 

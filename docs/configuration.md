@@ -113,7 +113,8 @@ One config/database should represent one Slack visibility boundary: the messages
 - `sync --source mcp` fetches from a Slack connector exposed by the configured HTTP JSON-RPC MCP gateway
 - `sync --source wiretap` is an alias for `sync --source desktop` and reads the local Slack Desktop cache
 - `sync --source all` runs token-backed sync first, then desktop enrichment
-- `[share]` backs up or restores the current DB; it is not a second Slack data source
+- `[share]` backs up the current DB and safely merges snapshots by default; it is not a second Slack data source
+- exact latest or historical replacement requires `update --restore`
 
 Keep company and personal Slack archives in separate configs, DBs, and git remotes:
 

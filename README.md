@@ -193,7 +193,7 @@ Choose the path that matches your setup:
 - `report` summarizes archive activity and git-share freshness without writing SQL
 - `publish` exports the local SQLite archive into a git repo as compressed JSONL shards plus a manifest
 - `subscribe` configures a git-backed reader that can run without Slack credentials
-- `update` pulls and imports the latest git snapshot, or restores a historical tag/ref without moving the share checkout
+- `update` safely merges the latest git snapshot; `update --restore` performs explicit exact replacement, including historical tag/ref restores
 - `sync` performs a one-shot crawl from bot/API, MCP connector, wiretap/desktop, or both
 - `import` imports a Slack export ZIP or extracted export directory
 - `purge` previews or deletes messages and message-owned records older than a cutoff, with optional retained-event compaction
@@ -387,8 +387,9 @@ Behavior:
 - cached non-DM/non-private file media is included by default; use `--no-media` to omit it
 - `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
 - pass `--db` to `subscribe` when you want the reader archive to land in a non-default SQLite path
-- `update` pulls and re-imports only when the manifest changes
-- `update --ref <tag-or-commit>` imports that historical snapshot without checking it out
+- `update` pulls and merges only when the manifest changes; rows absent from a snapshot remain local
+- `update --restore` explicitly replaces snapshot tables so the database exactly matches the latest snapshot
+- `update --restore --ref <tag-or-commit>` exactly restores that historical snapshot without checking it out
 - `status`, `search`, `messages`, `mentions`, `sql`, `users`, `channels`, and `report` auto-refresh stale git snapshots before reading when `auto_update = true`
 - `sync --source bot` and `sync --source all` warm from the git snapshot before hitting Slack when a share remote is configured
 - `status` and `doctor` surface the current git-share repo, last import time, and whether the local snapshot is stale
@@ -437,15 +438,16 @@ Relevant flags:
 
 ### `update`
 
-`update` is the explicit reader-side refresh. Use it when you want to pull and import on demand instead of waiting for automatic stale checks.
+`update` is the explicit reader-side refresh. Use it when you want to pull and safely merge on demand instead of waiting for automatic stale checks. Routine merges preserve destination-only rows, local sync state and embedding work, event history, and newer message, user, or channel tombstones. A row missing from a snapshot is not treated as deleted.
 
 ```bash
 go run ./cmd/slacrawl update
 go run ./cmd/slacrawl update --repo ~/.slacrawl/share --branch main
-go run ./cmd/slacrawl update --ref backup-2026-06-19
+go run ./cmd/slacrawl update --restore
+go run ./cmd/slacrawl update --restore --ref backup-2026-06-19
 ```
 
-`--ref` accepts a tag, branch, or commit. Historical imports read Git objects directly and leave the share repo's current branch and working tree unchanged.
+`--restore` is the explicit exact-replacement mode. `--ref` requires it and accepts a tag, branch, or commit. Historical restores read Git objects directly and leave the share repo's current branch and working tree unchanged.
 
 ### `report`
 

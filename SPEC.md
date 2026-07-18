@@ -317,7 +317,10 @@ Share config:
 - `[share].branch` defaults to `main`
 - `[share].auto_update` controls whether read commands import stale git snapshots before querying
 - `publish --tag <name>` creates an immutable tag for a committed snapshot
-- `update --ref <tag-or-commit>` restores a historical snapshot without changing the share checkout
+- routine `update` imports merge by stable row identity, preserve destination-only rows and newer tombstones, and never infer deletion from a row missing in the snapshot
+- `update --restore` is the explicit exact-replacement mode
+- `update --restore --ref <tag-or-commit>` restores a historical snapshot without changing the share checkout
+- file and mention rows retain `deleted_at`, `deletion_source`, and `deletion_reason` tombstones when an authoritative message payload or parent-delete event removes them
 - `[share].stale_after` defines how old the last successful import can be before auto-refresh runs
 - share sync state should record both the last successful import time and the last imported manifest generation time
 

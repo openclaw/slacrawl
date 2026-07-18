@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -209,19 +210,29 @@ func exportLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, 
 }
 
 func Import(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+	return importWithMode(ctx, s, opts, false)
+}
+
+// Restore replaces every snapshot table. Callers must expose this destructive
+// mode explicitly; routine imports merge and never remove destination rows.
+func Restore(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+	return importWithMode(ctx, s, opts, true)
+}
+
+func importWithMode(ctx context.Context, s *store.Store, opts Options, restore bool) (Manifest, error) {
 	if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
 		var manifest Manifest
 		err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
 			var err error
-			manifest, err = importLocked(ctx, s, opts)
+			manifest, err = importLocked(ctx, s, opts, restore)
 			return err
 		})
 		return manifest, err
 	}
-	return importLocked(ctx, s, opts)
+	return importLocked(ctx, s, opts, restore)
 }
 
-func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+func importLocked(ctx context.Context, s *store.Store, opts Options, restore bool) (Manifest, error) {
 	manifest, err := ReadManifest(opts.RepoPath)
 	if err != nil {
 		return Manifest{}, err
@@ -246,17 +257,29 @@ func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, 
 	if _, err := tx.ExecContext(ctx, `delete from message_fts`); err != nil {
 		return Manifest{}, fmt.Errorf("clear message_fts: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `delete from message_event_heads`); err != nil {
-		return Manifest{}, fmt.Errorf("clear message event heads: %w", err)
-	}
-	for i := len(SnapshotTables) - 1; i >= 0; i-- {
-		table := SnapshotTables[i]
-		if _, err := tx.ExecContext(ctx, "delete from "+quoteIdent(table)); err != nil { //nolint:gosec // Snapshot table names are quoted identifiers from the fixed schema list.
-			return Manifest{}, fmt.Errorf("clear %s: %w", table, err)
+	if restore {
+		if _, err := tx.ExecContext(ctx, `delete from message_event_heads`); err != nil {
+			return Manifest{}, fmt.Errorf("clear message event heads: %w", err)
+		}
+		for i := len(SnapshotTables) - 1; i >= 0; i-- {
+			table := SnapshotTables[i]
+			if _, err := tx.ExecContext(ctx, "delete from "+quoteIdent(table)); err != nil { //nolint:gosec // Snapshot table names are quoted identifiers from the fixed schema list.
+				return Manifest{}, fmt.Errorf("clear %s: %w", table, err)
+			}
 		}
 	}
+	mergeState := &mergeImportState{
+		rejectedMessages:          map[string]struct{}{},
+		retentionRejectedMessages: map[string]struct{}{},
+		importedFiles:             map[string]struct{}{},
+	}
+	manifestTables := make(map[string]TableManifest, len(manifest.Tables))
 	for _, table := range manifest.Tables {
-		rows, err := importTable(ctx, tx, opts.RepoPath, table)
+		manifestTables[table.Name] = table
+	}
+	for _, tableName := range SnapshotTables {
+		table := manifestTables[tableName]
+		rows, err := importTable(ctx, tx, opts.RepoPath, table, restore, opts.IncludeMedia, mergeState)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -264,12 +287,27 @@ func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, 
 			return Manifest{}, fmt.Errorf("manifest table %s row count mismatch: imported %d, expected %d", table.Name, rows, table.Rows)
 		}
 	}
+	if err := backfillDeletedMessageSubordinates(ctx, tx); err != nil {
+		return Manifest{}, err
+	}
+	if err := rebuildMessageFTS(ctx, tx); err != nil {
+		return Manifest{}, err
+	}
+	if err := rebuildMessageEventHeads(ctx, tx); err != nil {
+		return Manifest{}, err
+	}
 	var mediaManifest *MediaManifest
 	if opts.IncludeMedia {
 		mediaManifest = manifest.Media
 	}
-	if err := clearUnmanifestedFileMedia(ctx, tx, mediaManifest); err != nil {
-		return Manifest{}, err
+	if restore {
+		if err := clearUnmanifestedFileMedia(ctx, tx, mediaManifest); err != nil {
+			return Manifest{}, err
+		}
+	} else if opts.IncludeMedia {
+		if err := clearUnmanifestedImportedFileMedia(ctx, tx, mediaManifest, mergeState.importedFiles); err != nil {
+			return Manifest{}, err
+		}
 	}
 	if err := preserveImportedFileMedia(ctx, tx, existingMedia); err != nil {
 		return Manifest{}, err
@@ -283,13 +321,110 @@ func importLocked(ctx context.Context, s *store.Store, opts Options) (Manifest, 
 		return Manifest{}, err
 	}
 	committed = true
-	if err := s.RebuildSearchIndexes(ctx); err != nil {
-		return Manifest{}, err
-	}
 	if err := MarkImported(ctx, s, manifest); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
+}
+
+func rebuildMessageFTS(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `
+delete from message_fts;
+insert into message_fts (message_key, content)
+select m.channel_id || '|' || m.ts,
+       trim(m.normalized_text || ' ' || coalesce((
+         select group_concat(trim(f.name || ' ' || f.title || ' ' || f.plain_text || ' ' || f.preview_plain_text), ' ')
+         from message_files f
+         where f.channel_id = m.channel_id and f.ts = m.ts and f.deleted_at is null
+       ), ''))
+from messages m;
+`); err != nil {
+		return fmt.Errorf("rebuild message_fts: %w", err)
+	}
+	return nil
+}
+
+func backfillDeletedMessageSubordinates(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `
+update message_files
+set deleted_at = coalesce(nullif(deleted_at, ''), (
+      select m.updated_at from messages m
+      where m.channel_id = message_files.channel_id and m.ts = message_files.ts
+    )),
+    deletion_source = coalesce(nullif(deletion_source, ''), (
+      select m.source_name from messages m
+      where m.channel_id = message_files.channel_id and m.ts = message_files.ts
+    )),
+    deletion_reason = coalesce(nullif(deletion_reason, ''), 'parent_message_deleted'),
+    updated_at = coalesce((
+      select m.updated_at from messages m
+      where m.channel_id = message_files.channel_id and m.ts = message_files.ts
+    ), updated_at)
+where exists (
+  select 1 from messages m
+  where m.channel_id = message_files.channel_id and m.ts = message_files.ts
+    and trim(coalesce(m.deleted_ts, '')) <> ''
+);
+
+update message_mentions
+set deleted_at = coalesce(nullif(deleted_at, ''), (
+      select m.updated_at from messages m
+      where m.channel_id = message_mentions.channel_id and m.ts = message_mentions.ts
+    )),
+    deletion_source = coalesce(nullif(deletion_source, ''), (
+      select m.source_name from messages m
+      where m.channel_id = message_mentions.channel_id and m.ts = message_mentions.ts
+    )),
+    deletion_reason = coalesce(nullif(deletion_reason, ''), 'parent_message_deleted'),
+    updated_at = coalesce((
+      select m.updated_at from messages m
+      where m.channel_id = message_mentions.channel_id and m.ts = message_mentions.ts
+    ), updated_at)
+where exists (
+  select 1 from messages m
+  where m.channel_id = message_mentions.channel_id and m.ts = message_mentions.ts
+    and trim(coalesce(m.deleted_ts, '')) <> ''
+);
+`); err != nil {
+		return fmt.Errorf("backfill deleted message subordinates: %w", err)
+	}
+	return nil
+}
+
+func rebuildMessageEventHeads(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `
+insert into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
+select e.channel_id, e.ts, e.event_type, e.source_name, e.payload_json
+from message_events e
+join (
+  select channel_id, ts, event_type, source_name, max(id) as id
+  from message_events
+  group by channel_id, ts, event_type, source_name
+) latest on latest.id = e.id
+where not exists (
+  select 1 from message_event_heads h
+  where h.channel_id = e.channel_id
+    and h.ts = e.ts
+    and h.event_type = e.event_type
+    and h.source_name = e.source_name
+);
+
+insert into message_event_heads (channel_id, ts, event_type, source_name, payload_json)
+select channel_id, ts,
+       case
+         when trim(coalesce(deleted_ts, '')) <> '' then 'message_deleted'
+         when trim(coalesce(edited_ts, '')) <> '' then 'message_changed'
+         else 'message'
+       end,
+       source_name, raw_json
+from messages
+where true
+on conflict(channel_id, ts, event_type, source_name) do update set
+  payload_json = excluded.payload_json;
+`); err != nil {
+		return fmt.Errorf("rebuild message event heads: %w", err)
+	}
+	return nil
 }
 
 func validateManifest(ctx context.Context, db *sql.DB, repoPath string, manifest Manifest) error {
@@ -322,7 +457,7 @@ func validateManifest(ctx context.Context, db *sql.DB, repoPath string, manifest
 		if err != nil {
 			return err
 		}
-		if !sameStrings(table.Columns, columns) {
+		if !compatibleTableColumns(table.Name, table.Columns, columns) {
 			return fmt.Errorf("manifest table %s columns mismatch", table.Name)
 		}
 	}
@@ -366,7 +501,7 @@ func importCurrentManifestLocked(ctx context.Context, s *store.Store, opts Optio
 			return Manifest{}, err
 		}
 		if missing {
-			return importLocked(ctx, s, opts)
+			return importLocked(ctx, s, opts, false)
 		}
 		if _, err := importMedia(ctx, opts, manifest.Media); err != nil {
 			return Manifest{}, err
@@ -453,11 +588,11 @@ func parseManifest(data []byte) (Manifest, error) {
 	return manifest, nil
 }
 
-// ImportAt restores a snapshot from a Git ref without changing the share checkout.
-func ImportAt(ctx context.Context, s *store.Store, opts Options, ref string) (Manifest, error) {
+// RestoreAt exactly restores a snapshot from a Git ref without changing the share checkout.
+func RestoreAt(ctx context.Context, s *store.Store, opts Options, ref string) (Manifest, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return Import(ctx, s, opts)
+		return Restore(ctx, s, opts)
 	}
 	if err := mirror.Fetch(ctx, mirrorOptions(opts)); err != nil {
 		return Manifest{}, err
@@ -496,7 +631,7 @@ func ImportAt(ctx context.Context, s *store.Store, opts Options, ref string) (Ma
 	historicalOpts.RepoPath = tempDir
 	historicalOpts.Remote = ""
 	historicalOpts.Tag = ""
-	return Import(ctx, s, historicalOpts)
+	return Restore(ctx, s, historicalOpts)
 }
 
 func materializeRefFile(ctx context.Context, opts mirror.Options, ref, filePath, targetRoot string) error {
@@ -590,16 +725,48 @@ func tableManifestFiles(table TableManifest) []string {
 	return nil
 }
 
-func importTable(ctx context.Context, tx *sql.Tx, repoPath string, table TableManifest) (int, error) {
+type mergeImportState struct {
+	rejectedMessages          map[string]struct{}
+	retentionRejectedMessages map[string]struct{}
+	importedFiles             map[string]struct{}
+}
+
+func importTable(ctx context.Context, tx *sql.Tx, repoPath string, table TableManifest, restore, includeMedia bool, state *mergeImportState) (int, error) {
 	files := tableManifestFiles(table)
-	stmt, err := tx.PrepareContext(ctx, insertSQL(table.Name, table.Columns))
+	columns := append([]string{}, table.Columns...)
+	legacyColumns := map[string][]string{
+		"message_files":    {"deleted_at", "deletion_source", "deletion_reason"},
+		"message_events":   {"event_key"},
+		"message_mentions": {"deleted_at", "deletion_source", "deletion_reason", "updated_at"},
+	}[table.Name]
+	for _, column := range legacyColumns {
+		if !containsString(columns, column) {
+			columns = append(columns, column)
+		}
+	}
+	if !restore && table.Name == "message_events" {
+		columns = withoutString(columns, "id")
+	}
+	statement := insertSQL(table.Name, columns)
+	if table.Name == "message_events" {
+		statement += " on conflict(event_key) do nothing"
+	} else if !restore {
+		statement = mergeSQL(table.Name, columns)
+	}
+	var stmt *sql.Stmt
+	var err error
+	if statement != "" {
+		stmt, err = tx.PrepareContext(ctx, statement)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("prepare import %s: %w", table.Name, err)
 	}
-	defer func() { _ = stmt.Close() }()
+	if stmt != nil {
+		defer func() { _ = stmt.Close() }()
+	}
 	rows := 0
 	for _, rel := range files {
-		count, err := importTableFile(ctx, stmt, repoPath, table, rel)
+		count, err := importTableFile(ctx, tx, stmt, columns, repoPath, table, rel, restore, includeMedia, state)
 		if err != nil {
 			return 0, err
 		}
@@ -608,7 +775,7 @@ func importTable(ctx context.Context, tx *sql.Tx, repoPath string, table TableMa
 	return rows, nil
 }
 
-func importTableFile(ctx context.Context, stmt *sql.Stmt, repoPath string, table TableManifest, rel string) (int, error) {
+func importTableFile(ctx context.Context, tx *sql.Tx, stmt *sql.Stmt, columns []string, repoPath string, table TableManifest, rel string, restore, includeMedia bool, state *mergeImportState) (int, error) {
 	path, err := resolveManifestTableFile(repoPath, table.Name, rel)
 	if err != nil {
 		return 0, fmt.Errorf("manifest table %s file %q: %w", table.Name, rel, err)
@@ -635,16 +802,93 @@ func importTableFile(ctx context.Context, stmt *sql.Stmt, repoPath string, table
 		if err != nil {
 			return 0, fmt.Errorf("decode %s: %w", rel, err)
 		}
-		values := make([]any, len(table.Columns))
-		for i, column := range table.Columns {
+		if table.Name == "message_files" && !includeMedia {
+			row["media_path"] = nil
+			row["content_sha256"] = nil
+			row["content_size"] = json.Number("0")
+			row["fetched_at"] = nil
+			row["fetch_status"] = ""
+			row["fetch_error"] = ""
+		}
+		if (table.Name == "message_files" || table.Name == "message_mentions") && !containsString(table.Columns, "deleted_at") {
+			if err := synthesizeLegacySubordinateTombstone(ctx, tx, row); err != nil {
+				return 0, err
+			}
+		}
+		if table.Name == "message_mentions" && snapshotStringValue(row["updated_at"]) == "" {
+			var parentUpdated string
+			err := tx.QueryRowContext(ctx, `select updated_at from messages where channel_id = ? and ts = ?`, row["channel_id"], row["ts"]).Scan(&parentUpdated)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, fmt.Errorf("read legacy mention parent version: %w", err)
+			}
+			row["updated_at"] = parentUpdated
+		}
+		if table.Name == "message_events" && snapshotStringValue(row["event_key"]) == "" {
+			row["event_key"] = legacyMessageEventKey(row)
+		}
+		if !restore {
+			apply, err := shouldMergeSnapshotRow(ctx, tx, table.Name, row, state)
+			if err != nil {
+				return 0, err
+			}
+			if !apply {
+				rows++
+				continue
+			}
+		}
+		values := make([]any, len(columns))
+		for i, column := range columns {
 			values[i] = importValue(row[column])
 		}
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return 0, fmt.Errorf("insert %s: %w", table.Name, err)
+		if stmt != nil {
+			if _, err := stmt.ExecContext(ctx, values...); err != nil {
+				return 0, fmt.Errorf("insert %s: %w", table.Name, err)
+			}
+		}
+		if !restore && table.Name == "message_files" {
+			state.importedFiles[fileMediaKey(snapshotStringValue(row["channel_id"]), snapshotStringValue(row["ts"]), snapshotStringValue(row["file_id"]))] = struct{}{}
 		}
 		rows++
 	}
 	return rows, nil
+}
+
+func synthesizeLegacySubordinateTombstone(ctx context.Context, tx *sql.Tx, row map[string]any) error {
+	var parentUpdated, parentSource string
+	var parentDeleted bool
+	err := tx.QueryRowContext(ctx, `
+select updated_at, source_name, trim(coalesce(deleted_ts, '')) <> ''
+from messages
+where channel_id = ? and ts = ?
+`, importValue(row["channel_id"]), importValue(row["ts"])).Scan(&parentUpdated, &parentSource, &parentDeleted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read legacy subordinate parent tombstone: %w", err)
+	}
+	if !parentDeleted {
+		return nil
+	}
+	row["deleted_at"] = parentUpdated
+	row["deletion_source"] = parentSource
+	row["deletion_reason"] = "parent_message_deleted"
+	row["updated_at"] = parentUpdated
+	return nil
+}
+
+func legacyMessageEventKey(row map[string]any) string {
+	parts := []string{
+		snapshotStringValue(row["id"]),
+		snapshotStringValue(row["channel_id"]),
+		snapshotStringValue(row["ts"]),
+		snapshotStringValue(row["event_type"]),
+		snapshotStringValue(row["source_name"]),
+		snapshotStringValue(row["payload_json"]),
+		snapshotStringValue(row["created_at"]),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "legacy-" + hex.EncodeToString(sum[:])
 }
 
 func resolveManifestTableFile(repoPath string, tableName string, rel string) (string, error) {
@@ -720,6 +964,47 @@ func sameStrings(left, right []string) bool {
 	}
 	for i := range left {
 		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func compatibleTableColumns(table string, imported, current []string) bool {
+	if sameStrings(imported, current) {
+		return true
+	}
+	optional := map[string]map[string]struct{}{
+		"message_files": {
+			"deleted_at": {}, "deletion_source": {}, "deletion_reason": {},
+		},
+		"message_mentions": {
+			"deleted_at": {}, "deletion_source": {}, "deletion_reason": {}, "updated_at": {},
+		},
+		"message_events": {"event_key": {}},
+	}[table]
+	if len(optional) == 0 {
+		return false
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, column := range current {
+		currentSet[column] = struct{}{}
+	}
+	importedSet := make(map[string]struct{}, len(imported))
+	for _, column := range imported {
+		if _, ok := currentSet[column]; !ok {
+			return false
+		}
+		if _, duplicate := importedSet[column]; duplicate {
+			return false
+		}
+		importedSet[column] = struct{}{}
+	}
+	for _, column := range current {
+		if _, ok := importedSet[column]; ok {
+			continue
+		}
+		if _, ok := optional[column]; !ok {
 			return false
 		}
 	}
@@ -947,6 +1232,57 @@ where channel_id = ? and ts = ? and file_id = ?
 	defer func() { _ = stmt.Close() }()
 	for _, row := range clear {
 		if _, err := stmt.ExecContext(ctx, row.channelID, row.ts, row.fileID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clearUnmanifestedImportedFileMedia(ctx context.Context, tx *sql.Tx, manifest *MediaManifest, imported map[string]struct{}) error {
+	if len(imported) == 0 {
+		return nil
+	}
+	manifested := map[string]struct{}{}
+	if manifest != nil {
+		for _, item := range manifest.Items {
+			mediaPath, ok := strings.CutPrefix(filepath.ToSlash(item.Path), "media/")
+			if ok && strings.TrimSpace(mediaPath) != "" {
+				manifested[mediaPath] = struct{}{}
+			}
+		}
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+update message_files
+set media_path = null, content_sha256 = null, content_size = 0, fetched_at = null,
+    fetch_status = '', fetch_error = ''
+where channel_id = ? and ts = ? and file_id = ?
+  and coalesce(media_path, '') <> ''
+  and coalesce(media_path, '') = ?
+`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for key := range imported {
+		channelID, ts, fileID, ok := splitFileMediaKey(key)
+		if !ok {
+			continue
+		}
+		var mediaPath string
+		err := tx.QueryRowContext(ctx, `
+select coalesce(media_path, '') from message_files
+where channel_id = ? and ts = ? and file_id = ?
+`, channelID, ts, fileID).Scan(&mediaPath)
+		if errors.Is(err, sql.ErrNoRows) || mediaPath == "" {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, ok := manifested[mediaPath]; ok {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, channelID, ts, fileID, mediaPath); err != nil {
 			return err
 		}
 	}
@@ -1200,6 +1536,280 @@ func insertSQL(table string, columns []string) string {
 		placeholders[i] = "?"
 	}
 	return "insert into " + quoteIdent(table) + "(" + strings.Join(quoted, ",") + ") values(" + strings.Join(placeholders, ",") + ")"
+}
+
+func mergeSQL(table string, columns []string) string {
+	if table == "embedding_jobs" {
+		return ""
+	}
+	if table == "message_events" {
+		return insertSQL(table, columns) + " on conflict(event_key) do nothing"
+	}
+	if table == "sync_state" {
+		return insertSQL(table, columns) + " on conflict do nothing"
+	}
+	primaryKeys := map[string]map[string]struct{}{
+		"workspaces":       {"id": {}},
+		"channels":         {"id": {}},
+		"users":            {"id": {}},
+		"messages":         {"channel_id": {}, "ts": {}},
+		"message_files":    {"channel_id": {}, "ts": {}, "file_id": {}},
+		"message_mentions": {"channel_id": {}, "ts": {}, "mention_type": {}, "target_id": {}},
+	}
+	keys, ok := primaryKeys[table]
+	if !ok {
+		return insertSQL(table, columns) + " on conflict do nothing"
+	}
+	updates := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if _, key := keys[column]; key {
+			continue
+		}
+		quoted := quoteIdent(column)
+		updates = append(updates, quoted+"=excluded."+quoted)
+	}
+	if len(updates) == 0 {
+		return insertSQL(table, columns) + " on conflict do nothing"
+	}
+	sort.Strings(updates)
+	return insertSQL(table, columns) + " on conflict do update set " + strings.Join(updates, ",")
+}
+
+func shouldMergeSnapshotRow(ctx context.Context, tx *sql.Tx, table string, row map[string]any, state *mergeImportState) (bool, error) {
+	type mergeKey struct {
+		query     string
+		args      []any
+		tombstone string
+	}
+	var key mergeKey
+	messageKey := snapshotStringValue(row["channel_id"]) + "\x00" + snapshotStringValue(row["ts"])
+	if table == "message_events" {
+		if _, rejected := state.retentionRejectedMessages[messageKey]; rejected {
+			return false, nil
+		}
+	}
+	if table == "message_files" || table == "message_mentions" {
+		if _, rejected := state.rejectedMessages[messageKey]; rejected {
+			return false, nil
+		}
+		allowed, err := subordinateAllowedByParent(ctx, tx, row)
+		if err != nil || !allowed {
+			return allowed, err
+		}
+	}
+	if table == "channels" || table == "users" || table == "messages" {
+		if err := rejectWorkspaceIdentityCollision(ctx, tx, table, row); err != nil {
+			return false, err
+		}
+	}
+	switch table {
+	case "workspaces":
+		key = mergeKey{query: `select updated_at, 0 from workspaces where id = ?`, args: []any{importValue(row["id"])}}
+	case "channels":
+		key = mergeKey{query: `select updated_at, is_archived from channels where id = ?`, args: []any{importValue(row["id"])}, tombstone: "is_archived"}
+	case "users":
+		key = mergeKey{query: `select updated_at, is_deleted from users where id = ?`, args: []any{importValue(row["id"])}, tombstone: "is_deleted"}
+	case "messages":
+		allowed, err := store.MessageAllowedByRetention(ctx, tx, store.Message{
+			WorkspaceID: snapshotStringValue(row["workspace_id"]),
+			ChannelID:   snapshotStringValue(row["channel_id"]),
+			TS:          snapshotStringValue(row["ts"]),
+			ThreadTS:    snapshotStringValue(row["thread_ts"]),
+		})
+		if err != nil {
+			return false, fmt.Errorf("apply local retention to snapshot message: %w", err)
+		}
+		if !allowed {
+			state.rejectedMessages[messageKey] = struct{}{}
+			state.retentionRejectedMessages[messageKey] = struct{}{}
+			return false, nil
+		}
+		key = mergeKey{query: `select updated_at, trim(coalesce(deleted_ts, '')) <> '' from messages where channel_id = ? and ts = ?`, args: []any{importValue(row["channel_id"]), importValue(row["ts"])}, tombstone: "deleted_ts"}
+	case "message_files":
+		key = mergeKey{query: `select updated_at, deleted_at is not null from message_files where channel_id = ? and ts = ? and file_id = ?`, args: []any{importValue(row["channel_id"]), importValue(row["ts"]), importValue(row["file_id"])}, tombstone: "deleted_at"}
+	case "message_mentions":
+		key = mergeKey{query: `select updated_at, deleted_at is not null from message_mentions where channel_id = ? and ts = ? and mention_type = ? and target_id = ?`, args: []any{importValue(row["channel_id"]), importValue(row["ts"]), importValue(row["mention_type"]), importValue(row["target_id"])}, tombstone: "deleted_at"}
+	default:
+		return true, nil
+	}
+	var localUpdated string
+	var localTombstone bool
+	err := tx.QueryRowContext(ctx, key.query, key.args...).Scan(&localUpdated, &localTombstone)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read existing %s merge version: %w", table, err)
+	}
+	incomingUpdated := snapshotStringValue(row["updated_at"])
+	comparison := compareSnapshotTimes(incomingUpdated, localUpdated)
+	if comparison != 0 {
+		apply := comparison > 0
+		if table == "messages" && !apply {
+			state.rejectedMessages[messageKey] = struct{}{}
+		}
+		return apply, nil
+	}
+	incomingTombstone := false
+	if key.tombstone != "" {
+		incomingTombstone = snapshotTombstoneValue(row[key.tombstone])
+	}
+	if table == "messages" && !localTombstone {
+		var localSourceRank int64
+		var localRawJSON string
+		if err := tx.QueryRowContext(ctx, `select source_rank, raw_json from messages where channel_id = ? and ts = ?`, importValue(row["channel_id"]), importValue(row["ts"])).Scan(&localSourceRank, &localRawJSON); err != nil {
+			return false, fmt.Errorf("read existing message source rank: %w", err)
+		}
+		incomingSourceRank := snapshotInt64Value(row["source_rank"])
+		apply := incomingSourceRank <= localSourceRank
+		if !incomingTombstone {
+			apply = incomingSourceRank < localSourceRank || (incomingSourceRank == localSourceRank && snapshotStringValue(row["raw_json"]) == localRawJSON)
+		}
+		if !apply {
+			state.rejectedMessages[messageKey] = struct{}{}
+		}
+		return apply, nil
+	}
+	apply := !localTombstone || incomingTombstone
+	if table == "messages" && !apply {
+		state.rejectedMessages[messageKey] = struct{}{}
+	}
+	return apply, nil
+}
+
+func snapshotInt64Value(value any) int64 {
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func rejectWorkspaceIdentityCollision(ctx context.Context, tx *sql.Tx, table string, row map[string]any) error {
+	incomingWorkspace := snapshotStringValue(row["workspace_id"])
+	var existingWorkspace string
+	var id string
+	var err error
+	if table == "messages" {
+		id = messageSnapshotKey(row)
+		err = tx.QueryRowContext(ctx, `select workspace_id from messages where channel_id = ? and ts = ?`, importValue(row["channel_id"]), importValue(row["ts"])).Scan(&existingWorkspace)
+	} else {
+		id = snapshotStringValue(row["id"])
+		err = tx.QueryRowContext(ctx, "select workspace_id from "+quoteIdent(table)+" where id = ?", id).Scan(&existingWorkspace) //nolint:gosec // Fixed table allowlist above.
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read existing %s workspace: %w", table, err)
+	}
+	if existingWorkspace != incomingWorkspace {
+		return fmt.Errorf("merge %s %q workspace collision: existing %q, incoming %q", table, id, existingWorkspace, incomingWorkspace)
+	}
+	return nil
+}
+
+func messageSnapshotKey(row map[string]any) string {
+	return snapshotStringValue(row["channel_id"]) + "|" + snapshotStringValue(row["ts"])
+}
+
+func subordinateAllowedByParent(ctx context.Context, tx *sql.Tx, row map[string]any) (bool, error) {
+	channelID := snapshotStringValue(row["channel_id"])
+	ts := snapshotStringValue(row["ts"])
+	var parentUpdated string
+	var parentDeleted bool
+	err := tx.QueryRowContext(ctx, `
+select updated_at, trim(coalesce(deleted_ts, '')) <> ''
+from messages
+where channel_id = ? and ts = ?
+`, channelID, ts).Scan(&parentUpdated, &parentDeleted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read snapshot subordinate parent: %w", err)
+	}
+	if !parentDeleted {
+		return true, nil
+	}
+	comparison := compareSnapshotTimes(snapshotStringValue(row["updated_at"]), parentUpdated)
+	return comparison > 0 || (comparison == 0 && snapshotTombstoneValue(row["deleted_at"])), nil
+}
+
+func compareSnapshotTimes(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftTime.Before(rightTime):
+			return -1
+		case leftTime.After(rightTime):
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(strings.TrimSpace(left), strings.TrimSpace(right))
+}
+
+func snapshotTombstoneValue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case json.Number:
+		return typed.String() != "0"
+	case float64:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case string:
+		return strings.TrimSpace(typed) != "" && strings.TrimSpace(typed) != "0"
+	default:
+		return true
+	}
+}
+
+func snapshotStringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []byte:
+		return string(typed)
+	case json.Number:
+		return typed.String()
+	default:
+		return ""
+	}
+}
+
+func withoutString(values []string, remove string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != remove {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func quoteIdent(s string) string {
