@@ -1,9 +1,6 @@
-name: Release Validation
+name: Release Validation (legacy, manual only)
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:

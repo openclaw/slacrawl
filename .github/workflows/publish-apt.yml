@@ -25,7 +25,7 @@ jobs:
             exit 1
           fi
 
-      - name: Download release .deb assets
+      - name: Download and verify release .deb assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag_name }}
@@ -35,8 +35,36 @@ jobs:
           gh release download "${TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "*.deb" \
+            --pattern "ASSET-INVENTORY.json" \
+            --pattern "SHA256SUMS" \
             --dir dist
-          ls -1 dist/*.deb >/dev/null
+          shopt -s nullglob
+          packages=(dist/*.deb)
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::No .deb packages found in the release."
+            exit 1
+          fi
+          for pkg in "${packages[@]}"; do
+            name="${pkg##*/}"
+            expected=$(jq -r --arg name "${name}" '
+              .payloads[] |
+              select(.name == $name and .kind == "nfpm" and .packageFormat == "deb") |
+              .sha256
+            ' dist/ASSET-INVENTORY.json)
+            [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "::error::${name} is not a unique verified Debian package in ASSET-INVENTORY.json."
+              exit 1
+            }
+            observed=$(sha256sum "${pkg}" | cut -d' ' -f1)
+            [ "${observed}" = "${expected}" ] || {
+              echo "::error::${name} does not match its verified inventory digest."
+              exit 1
+            }
+            grep -Fqx "${expected}  ${name}" dist/SHA256SUMS || {
+              echo "::error::${name} is missing from SHA256SUMS."
+              exit 1
+            }
+          done
 
       - name: Install Cloudsmith CLI
         run: |

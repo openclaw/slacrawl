@@ -1,10 +1,19 @@
 # Changelog
 
-## 0.7.8 - Unreleased
+## 0.7.8 - 2026-07-18
+
+### Highlights
+
+- Made Git-shared archives resilient to incomplete snapshots: routine updates now merge safely, while explicit restore remains available when an exact replacement is intended.
 
 ### Fixes
 
 - Made routine Git-share imports merge-only so destination rows and newer message, user, and channel tombstones survive incomplete snapshots; exact replacement now requires `update --restore`, and removed file and mention rows retain source-attributed tombstones.
+
+### Maintenance
+
+- Migrated releases to the unified OpenClaw pipeline, adding notarized macOS binaries and checksum-bound Debian and RPM packages.
+- Updated CrawlKit to 0.14.3, including SQLite 1.54.0 and its related runtime dependency refresh.
 
 ## 0.7.7 - 2026-07-09
 

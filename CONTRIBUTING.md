@@ -53,33 +53,25 @@ GoReleaser snapshot builds stay credential-free and cross-platform:
 make release-snapshot
 ```
 
-Official releases must run from a clean, exact signed tag already pushed to
-`origin` on Apple Silicon macOS through the managed release keychain and an
-authenticated local GitHub CLI:
+Official releases run through the manual **Release (unified)** GitHub Actions
+workflow. It freezes the protected `main` head in an annotated tag, builds the
+GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
+OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only the independently
+verified bytes, updates the canonical Homebrew tap, and opens the next
+`Unreleased` changelog PR.
 
 ```bash
-make release
+gh workflow run release-unified.yml -f version=0.7.8
 ```
 
-The macOS binaries are signed as `org.openclaw.slacrawl` by OpenClaw
-Foundation Team ID `FWJYW4S8P8`. Missing or mismatched signing credentials fail
-the official release before GoReleaser creates assets. GoReleaser uploads a
-draft release; verify its assets before publishing it. After publishing, send a
-`release-published` repository dispatch from the same authorized local GitHub
-session so the canonical default-branch workflow verifies both native signatures
-before updating the Homebrew tap:
+The renamed **Release Validation (legacy, manual only)** workflow remains as a
+manual fallback for the old validation path; it no longer responds to tags.
+Cloudsmith APT and RPM publication remain separate manual workflows. They
+download their `.deb` and `.rpm` inputs directly from the unified pipeline's
+published GitHub Release assets.
 
-```bash
-tag=v0.7.7
-gh api --method POST repos/openclaw/slacrawl/dispatches \
-  -f event_type=release-published \
-  -f "client_payload[tag_name]=$tag"
-```
-
-Cloudsmith APT and RPM publication remain separate manual workflows.
-
-Private keychain and 1Password routing belongs only in the ignored local
-`.mac-release.env`; never commit it.
+Release credentials live only in GitHub Actions secrets. Never place signing or
+App Store Connect credentials in the repository or local release configuration.
 
 ## Coding Guidelines
 
