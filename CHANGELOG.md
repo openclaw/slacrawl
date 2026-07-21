@@ -1,10 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.7.9 - 2026-07-20
+
+### Highlights
+
+- Keep archived-message search reliable for malformed Unicode while refreshing the SQLite runtime dependency chain.
 
 ### Fixes
 
 - Prevented malformed Unicode in archived messages from hanging search normalization by updating `golang.org/x/text` to 0.40.0. Thanks @dependabot.
+
+### Maintenance
+
+- Update `modernc.org/libc` to v1.74.3, alongside the current `x/sys`, Kong, TruffleHog, setup-go, and CrawlKit v0.14.3 refreshes already landed on main.
 
 ## 0.7.8 - 2026-07-18
 
