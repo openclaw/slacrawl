@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- Prevented malformed Unicode in archived messages from hanging search normalization by updating `golang.org/x/text` to 0.40.0. Thanks @dependabot.
+
 ## 0.7.8 - 2026-07-18
 
 ### Highlights
