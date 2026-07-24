@@ -105,6 +105,10 @@ slacrawl sql "select entity_id, value from sync_state where source_name = 'deskt
 ## Operational Notes
 
 - Rich IndexedDB redux blob decoding uses `node` when available.
+- Slack Desktop can write a newer V8 wire format than the installed Node
+  release supports. Set `SLACRAWL_V8_RUNTIME` to a compatible Node or Electron
+  executable in that case. Electron is launched with
+  `ELECTRON_RUN_AS_NODE=1`.
 - If `node` is unavailable, desktop sync still runs, but decoded cached channel/user/message coverage will be reduced.
 - Desktop data is merged at lower precedence than API data.
 - Re-running desktop sync is safe; canonical rows are upserted by Slack-native keys.

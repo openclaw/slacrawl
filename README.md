@@ -64,7 +64,9 @@ If one of those gaps matters to your workflow, open an issue so it can be tracke
 ## Requirements
 
 - Go `1.26.5+`
-- `node` if you want richer desktop-local IndexedDB blob decoding
+- `node` if you want richer desktop-local IndexedDB blob decoding; newer Slack
+  releases may require a newer V8 runtime supplied through
+  `SLACRAWL_V8_RUNTIME`
 - a Slack bot token for standard API sync
 - a configured Slack MCP connector if you want MCP-backed sync
 - an app token if you want to use `tail`

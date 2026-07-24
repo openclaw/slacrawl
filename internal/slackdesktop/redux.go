@@ -23,9 +23,12 @@ import (
 const (
 	indexedDBBlobDir    = "IndexedDB/https_app.slack.com_0.indexeddb.blob"
 	indexedDBSourceName = "desktop-indexeddb"
-)
+	v8RuntimeEnv        = "SLACRAWL_V8_RUNTIME"
 
-var reduxV8Header = []byte{0xff, 0x0f}
+	blinkMinSeparateEnvelopeVersion = 16
+	blinkMinTrailerVersion          = 21
+	blinkTrailerSize                = 1 + 8 + 4
+)
 
 //go:embed redux_decoder.js
 var reduxDecoderScript string
@@ -104,8 +107,16 @@ type reduxBlobRef struct {
 }
 
 func nodeAvailable() bool {
-	_, err := exec.LookPath("node")
+	_, err := reduxV8Runtime()
 	return err == nil
+}
+
+func reduxV8Runtime() (string, error) {
+	runtime := strings.TrimSpace(os.Getenv(v8RuntimeEnv))
+	if runtime == "" {
+		runtime = "node"
+	}
+	return exec.LookPath(runtime)
 }
 
 func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
@@ -119,11 +130,17 @@ func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
 	}
 
 	byIdentity := map[string]ReduxDecodedState{}
+	var firstDecodeErr error
+	decodedBlobCount := 0
 	for _, ref := range refs {
 		state, err := decodeReduxBlob(ref.Path)
 		if err != nil {
+			if firstDecodeErr == nil {
+				firstDecodeErr = err
+			}
 			continue
 		}
+		decodedBlobCount++
 		if state.WorkspaceID == "" {
 			state.WorkspaceID = ref.WorkspaceID
 		}
@@ -138,6 +155,9 @@ func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
 		if !ok || reduxStateScore(state) > reduxStateScore(current) {
 			byIdentity[key] = state
 		}
+	}
+	if len(refs) > 0 && decodedBlobCount == 0 && firstDecodeErr != nil {
+		return nil, fmt.Errorf("decode Slack IndexedDB blobs: %w", firstDecodeErr)
 	}
 
 	states := make([]ReduxDecodedState, 0, len(byIdentity))
@@ -393,8 +413,8 @@ func decodeReduxBlob(blobPath string) (ReduxDecodedState, error) {
 		}
 	}
 
-	offset := bytes.Index(decoded, reduxV8Header)
-	if offset < 0 {
+	payloads := locateV8Payloads(decoded)
+	if len(payloads) == 0 {
 		return ReduxDecodedState{}, fmt.Errorf("v8 payload not found in %s", blobPath)
 	}
 
@@ -404,25 +424,106 @@ func decodeReduxBlob(blobPath string) (ReduxDecodedState, error) {
 	}
 	tempPath := tempFile.Name()
 	defer func() { _ = os.Remove(tempPath) }()
-	if _, err := tempFile.Write(decoded[offset:]); err != nil {
-		_ = tempFile.Close()
-		return ReduxDecodedState{}, err
-	}
 	if err := tempFile.Close(); err != nil {
 		return ReduxDecodedState{}, err
 	}
 
-	cmd := exec.Command("node", "-e", reduxDecoderScript, tempPath) //nolint:gosec // Node decodes a temporary V8 payload copied from the Slack data directory.
-	output, err := cmd.Output()
+	runtime, err := reduxV8Runtime()
 	if err != nil {
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, fmt.Errorf("find V8 runtime: %w", err)
+	}
+	var firstDecodeErr error
+	for _, payload := range payloads {
+		if err := os.WriteFile(tempPath, payload, 0o600); err != nil {
+			return ReduxDecodedState{}, err
+		}
+		cmd := exec.Command(runtime, "-e", reduxDecoderScript, tempPath) //nolint:gosec // The configured runtime decodes a temporary V8 payload copied from the Slack data directory.
+		cmd.Env = append(os.Environ(), "ELECTRON_RUN_AS_NODE=1")
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			if firstDecodeErr == nil {
+				firstDecodeErr = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+			}
+			continue
+		}
+
+		var state ReduxDecodedState
+		if err := json.Unmarshal(stdout.Bytes(), &state); err != nil {
+			if firstDecodeErr == nil {
+				firstDecodeErr = err
+			}
+			continue
+		}
+		return state, nil
+	}
+	return ReduxDecodedState{}, fmt.Errorf(
+		"decode V8 payload with %s: %w (set %s to a newer Node or Electron runtime if the wire format is unsupported)",
+		runtime,
+		firstDecodeErr,
+		v8RuntimeEnv,
+	)
+}
+
+func locateV8Payloads(decoded []byte) [][]byte {
+	var blinkPayloads [][]byte
+	var directPayloads [][]byte
+	seenOffsets := map[int]struct{}{}
+	addPayload := func(target *[][]byte, offset int) {
+		if _, ok := seenOffsets[offset]; ok {
+			return
+		}
+		seenOffsets[offset] = struct{}{}
+		*target = append(*target, decoded[offset:])
 	}
 
-	var state ReduxDecodedState
-	if err := json.Unmarshal(output, &state); err != nil {
-		return ReduxDecodedState{}, err
+	for offset := 0; offset < len(decoded); offset++ {
+		if decoded[offset] != 0xff {
+			continue
+		}
+		version, versionBytes, ok := readUint32Varint(decoded[offset+1:])
+		if !ok || version < 9 || version > 64 {
+			continue
+		}
+
+		afterVersion := offset + 1 + versionBytes
+		if version >= blinkMinSeparateEnvelopeVersion &&
+			version < blinkMinTrailerVersion &&
+			afterVersion < len(decoded) &&
+			decoded[afterVersion] == 0xff {
+			addPayload(&blinkPayloads, afterVersion)
+			continue
+		}
+		if version >= blinkMinTrailerVersion &&
+			afterVersion+blinkTrailerSize < len(decoded) &&
+			decoded[afterVersion] == 0xfe &&
+			decoded[afterVersion+blinkTrailerSize] == 0xff {
+			addPayload(&blinkPayloads, afterVersion+blinkTrailerSize)
+			continue
+		}
+
+		// This is a direct V8 envelope rather than Blink's outer envelope.
+		addPayload(&directPayloads, offset)
 	}
-	return state, nil
+	return append(blinkPayloads, directPayloads...)
+}
+
+func readUint32Varint(data []byte) (uint32, int, bool) {
+	var value uint32
+	for i := 0; i < len(data) && i < 5; i++ {
+		current := data[i]
+		if i == 4 && current > 0x0f {
+			return 0, 0, false
+		}
+		value |= uint32(current&0x7f) << (7 * i)
+		if current&0x80 == 0 {
+			return value, i + 1, true
+		}
+	}
+	return 0, 0, false
 }
 
 func reduxChannelKind(channel ReduxChannel) string {

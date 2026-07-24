@@ -398,7 +398,9 @@ fs.writeFileSync(process.argv[1], v8.serialize(value));
 
 	serialized, err := os.ReadFile(payloadPath) //nolint:gosec // Test reads the payload it just wrote to t.TempDir.
 	require.NoError(t, err)
-	blobPayload := append([]byte{0xff, 0x11, 0x02}, snappy.Encode(nil, serialized)...)
+	blinkEnvelope := append([]byte{0xff, 0x15, 0xfe}, make([]byte, 12)...)
+	blinkEnvelope = append(blinkEnvelope, serialized...)
+	blobPayload := append([]byte{0xff, 0x11, 0x02}, snappy.Encode(nil, blinkEnvelope)...)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "IndexedDB", "https_app.slack.com_0.indexeddb.blob", "1", "cd", "cd9a"), blobPayload, 0o600))
 
 	states, err := ExtractIndexedDBStates(root)
@@ -418,6 +420,43 @@ fs.writeFileSync(process.argv[1], v8.serialize(value));
 	require.Equal(t, "1710000001.000200", byTS["1710000002.000300"].ThreadTS)
 	require.Equal(t, "thread reply", byTS["1710000002.000300"].Text)
 	require.Equal(t, "D111", byTS["1710000003.000400"].Channel)
+}
+
+func TestLocateV8Payload(t *testing.T) {
+	t.Run("direct V8 envelope", func(t *testing.T) {
+		payload := []byte{0xff, 0x0f, 'o'}
+		got := locateV8Payloads(payload)
+		require.Equal(t, [][]byte{payload}, got)
+	})
+
+	t.Run("Blink envelope before trailer support", func(t *testing.T) {
+		payload := []byte{0xff, 0x10, 'o'}
+		decoded := append([]byte{0xff, 0x14}, payload...)
+		got := locateV8Payloads(decoded)
+		require.Equal(t, payload, got[0])
+	})
+
+	t.Run("Blink envelope with trailer offset", func(t *testing.T) {
+		payload := []byte{0xff, 0x10, 'o'}
+		decoded := append([]byte{0xff, 0x15, 0xfe}, make([]byte, 12)...)
+		decoded = append(decoded, payload...)
+		got := locateV8Payloads(decoded)
+		require.Equal(t, payload, got[0])
+	})
+
+	t.Run("prefix before payload", func(t *testing.T) {
+		payload := []byte{0xff, 0x0f, 'o'}
+		falseCandidate := []byte{0xff, 0x09, 'x'}
+		decoded := append(falseCandidate, payload...)
+		got := locateV8Payloads(decoded)
+		require.Len(t, got, 2)
+		require.Equal(t, decoded, got[0])
+		require.Equal(t, payload, got[1])
+	})
+
+	t.Run("missing payload", func(t *testing.T) {
+		require.Empty(t, locateV8Payloads([]byte("not serialized")))
+	})
 }
 
 func TestIngestReduxStatesIncludesIMs(t *testing.T) {
