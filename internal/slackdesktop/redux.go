@@ -33,10 +33,10 @@ const (
 	minWireVersionWindow = byte(13)
 	maxWireVersionWindow = byte(32)
 
-	blinkEnvelopeVersion21    = byte(21)
-	blinkEnvelopeTag          = byte(0xfe)
-	maxBlinkEnvelopePrefixLen = 64
-	maxBlinkEnvelopeVersion   = byte(21)
+	blinkEnvelopeVersion21     = byte(21)
+	blinkEnvelopeTag           = byte(0xfe)
+	blinkV21InnerPayloadOffset = 15
+	maxBlinkEnvelopeVersion    = byte(21)
 )
 
 //go:embed redux_decoder.js
@@ -135,14 +135,15 @@ func extractIndexedDBStates(path string) ([]ReduxDecodedState, IndexedDBSummary,
 		NodeAvailable: nodeAvailable(),
 		BlobFileCount: len(refs),
 	}
-	if !summary.NodeAvailable {
-		return nil, summary, nil
-	}
 
 	byIdentity := map[string]ReduxDecodedState{}
 	for _, ref := range refs {
-		result := decodeReduxBlob(ref.Path)
+		result := analyzeReduxBlob(ref.Path)
 		if !result.candidate {
+			if result.err != nil {
+				// Unreadable files are reported but never count as candidates.
+				summary.recordDecodeFailure(decodeErrorStage(result.err))
+			}
 			continue
 		}
 		summary.CandidateCount++
@@ -153,7 +154,14 @@ func extractIndexedDBStates(path string) ([]ReduxDecodedState, IndexedDBSummary,
 			summary.recordDecodeFailure(decodeErrorStage(result.err))
 			continue
 		}
-		state := result.state
+		if !summary.NodeAvailable {
+			continue
+		}
+		state, err := runReduxDecoder(result.payload)
+		if err != nil {
+			summary.recordDecodeFailure(decodeErrorStage(err))
+			continue
+		}
 		if state.WorkspaceID == "" {
 			state.WorkspaceID = ref.WorkspaceID
 		}
@@ -435,14 +443,35 @@ func decodeErrorStage(err error) string {
 type reduxBlobDecode struct {
 	candidate bool
 	v8Version byte
+	payload   []byte
 	state     ReduxDecodedState
 	err       error
 }
 
+// decodeReduxBlob analyzes a blob file and, for supported candidates, decodes
+// it with Node.
 func decodeReduxBlob(blobPath string) reduxBlobDecode {
+	result := analyzeReduxBlob(blobPath)
+	if !result.candidate || result.err != nil {
+		return result
+	}
+	state, err := runReduxDecoder(result.payload)
+	if err != nil {
+		result.payload = nil
+		result.err = err
+		return result
+	}
+	result.state = state
+	return result
+}
+
+// analyzeReduxBlob classifies a blob file and prepares the V8 payload for
+// supported candidates without invoking Node. Files whose framing is not
+// recognized are not Redux candidates and are ignored by callers.
+func analyzeReduxBlob(blobPath string) reduxBlobDecode {
 	raw, err := os.ReadFile(blobPath) //nolint:gosec // Blob path is discovered inside the Slack IndexedDB directory.
 	if err != nil {
-		return reduxBlobDecode{candidate: true, err: newReduxDecodeError("read", err)}
+		return reduxBlobDecode{err: newReduxDecodeError("read", err)}
 	}
 
 	decoded := raw
@@ -479,11 +508,7 @@ func decodeReduxBlob(blobPath string) reduxBlobDecode {
 		payload[1] = v8WireFormatV15
 	}
 
-	state, err := runReduxDecoder(payload)
-	if err != nil {
-		return reduxBlobDecode{candidate: true, v8Version: version, err: err}
-	}
-	return reduxBlobDecode{candidate: true, v8Version: version, state: state}
+	return reduxBlobDecode{candidate: true, v8Version: version, payload: payload}
 }
 
 // locateInnerV8Payload finds the inner V8 serialization header in a decoded
@@ -500,16 +525,13 @@ func locateInnerV8Payload(decoded []byte) (int, byte) {
 	if len(decoded) >= 4 && decoded[2] == 0xff && isKnownBlinkVersion(outer) && isRecognizedWireVersion(decoded[3]) {
 		return 2, decoded[3]
 	}
-	// Current Blink v21 envelope: ff 15 fe, a bounded binary header, then the
-	// inner V8 payload (observed at offset 15). Check this before the bare
-	// header because Blink version 21 (0x15) also falls in the wire version
-	// window.
+	// Current Blink v21 envelope: ff 15 fe, a fixed-size binary header, then
+	// the inner V8 payload anchored at offset 15 in every observed cache.
+	// Check this before the bare header because Blink version 21 (0x15) also
+	// falls in the wire version window.
 	if len(decoded) >= 3 && outer == blinkEnvelopeVersion21 && decoded[2] == blinkEnvelopeTag {
-		limit := min(len(decoded), maxBlinkEnvelopePrefixLen)
-		for offset := 3; offset+1 < limit; offset++ {
-			if decoded[offset] == 0xff && isRecognizedWireVersion(decoded[offset+1]) {
-				return offset, decoded[offset+1]
-			}
+		if len(decoded) > blinkV21InnerPayloadOffset+1 && decoded[blinkV21InnerPayloadOffset] == 0xff && isRecognizedWireVersion(decoded[blinkV21InnerPayloadOffset+1]) {
+			return blinkV21InnerPayloadOffset, decoded[blinkV21InnerPayloadOffset+1]
 		}
 		return -1, 0
 	}

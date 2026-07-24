@@ -167,7 +167,7 @@ func TestLocateInnerV8Payload(t *testing.T) {
 		{name: "blink v21 envelope", decoded: blink21, offset: 15, version: v8WireFormatV16},
 		{name: "unrelated content", decoded: []byte("plain blob content"), offset: -1},
 		{name: "jpeg magic", decoded: []byte{0xff, 0xd8, 0xff, 0xe0}, offset: -1},
-		{name: "header outside bounded prefix", decoded: append(append([]byte{0xff, blinkEnvelopeVersion21, blinkEnvelopeTag}, make([]byte, maxBlinkEnvelopePrefixLen)...), 0xff, v8WireFormatV15, 'o'), offset: -1},
+		{name: "inner payload not at anchored offset", decoded: append(append([]byte{0xff, blinkEnvelopeVersion21, blinkEnvelopeTag}, make([]byte, 64)...), 0xff, v8WireFormatV15, 'o'), offset: -1},
 	}
 
 	for _, tt := range tests {
@@ -233,6 +233,24 @@ func TestExtractIndexedDBStatesIgnoresUnrelatedBlobFiles(t *testing.T) {
 	require.Zero(t, summary.DecodeFailureCount)
 }
 
+func TestExtractIndexedDBStatesUnreadableFileIsNotACandidate(t *testing.T) {
+	root := t.TempDir()
+	writeBlob(t, root, "valid", serializeReduxFixture(t, "T111", "U111"))
+	unreadable := filepath.Join(root, indexedDBBlobDir, "1", "00", "unreadable")
+	require.NoError(t, os.WriteFile(unreadable, []byte("anything"), 0o600))
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+
+	states, summary, err := extractIndexedDBStates(root)
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, 2, summary.BlobFileCount)
+	require.Equal(t, 1, summary.CandidateCount)
+	require.Equal(t, 1, summary.DecodedBlobCount)
+	require.Equal(t, 1, summary.DecodeFailureCount)
+	require.Equal(t, map[string]int{"read": 1}, summary.DecodeFailures)
+}
+
 func TestExtractIndexedDBStatesNoCandidatesIsSuccessful(t *testing.T) {
 	root := t.TempDir()
 	writeBlob(t, root, "unrelated", []byte("not a redux blob"))
@@ -280,7 +298,10 @@ func TestExtractIndexedDBStatesNodeUnavailable(t *testing.T) {
 	require.Empty(t, states)
 	require.False(t, summary.NodeAvailable)
 	require.Equal(t, 1, summary.BlobFileCount)
-	require.Zero(t, summary.CandidateCount)
+	// Candidates are still classified without node; only decoding is skipped.
+	require.Equal(t, 1, summary.CandidateCount)
+	require.Equal(t, map[string]int{"15": 1}, summary.V8Versions)
+	require.Zero(t, summary.DecodedBlobCount)
 	require.Zero(t, summary.DecodeFailureCount)
 }
 
