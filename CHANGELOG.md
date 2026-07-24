@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixes
+
+- Restored wiretap imports from Slack Desktop caches written with V8 wire format 16 (Snappy + Blink v21 envelope), kept older formats working, and made complete IndexedDB decode failures visible instead of reporting an empty successful sync.
 ## 0.7.9 - 2026-07-20
 
 ### Highlights
