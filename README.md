@@ -278,8 +278,10 @@ Color is disabled automatically when stdout is not a TTY. You can also force pla
 ## Make Targets
 
 ```bash
+make help
 make build
 make test
+make check
 make run ARGS="status"
 make generate-sqlc
 make completion

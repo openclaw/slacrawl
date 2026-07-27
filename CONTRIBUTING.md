@@ -18,8 +18,8 @@ Requirements:
 Build and test:
 
 ```bash
-go test ./...
-go build ./cmd/slacrawl
+make build
+make check
 ```
 
 Run the CLI locally:
@@ -50,7 +50,7 @@ go run ./cmd/slacrawl --help
 GoReleaser snapshot builds stay credential-free and cross-platform:
 
 ```bash
-make release-snapshot
+make snapshot
 ```
 
 Official releases run through the manual **Release (unified)** GitHub Actions
@@ -61,12 +61,13 @@ verified bytes, updates the canonical Homebrew tap, and opens the next
 `Unreleased` changelog PR.
 
 ```bash
-gh workflow run release-unified.yml -f version=0.7.8
+gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=0.7.8
 ```
 
 `make release` and `scripts/release.sh` fail closed and point to that workflow;
 the former local path could publish signed macOS binaries before verifying
-notarization. Use `make release-snapshot` for local, credential-free packaging.
+notarization. Use `make snapshot` for local, credential-free packaging;
+`make release-snapshot` remains a compatibility alias.
 
 The renamed **Release Validation (legacy, manual only)** workflow remains as a
 manual fallback for the old validation path; it no longer responds to tags.
@@ -93,7 +94,7 @@ App Store Connect credentials in the repository or local release configuration.
 
 ## Testing Expectations
 
-- Run `go test ./...` before opening a PR.
+- Run `make check` before opening a PR.
 - Add targeted tests when changing parsing, normalization, config loading, store behavior, or CLI output.
 - If a known failing test blocks your branch, call that out clearly in the PR description.
 
