@@ -29,8 +29,7 @@ completion-zsh:
 	go run ./cmd/slacrawl completion zsh > "$(COMPLETION_DIR)/_slacrawl"
 
 release:
-	@helper="$${MAC_RELEASE_HELPER:-$$HOME/Projects/agent-scripts/skills/release-mac-app/scripts/mac-release}"; \
-	GORELEASER="$${GORELEASER:-goreleaser}" "$$helper" codesign-run -- ./scripts/release.sh
+	@./scripts/release.sh
 
 release-snapshot:
 	$${GORELEASER:-goreleaser} release --snapshot --clean --skip=publish

@@ -64,6 +64,10 @@ verified bytes, updates the canonical Homebrew tap, and opens the next
 gh workflow run release-unified.yml -f version=0.7.8
 ```
 
+`make release` and `scripts/release.sh` fail closed and point to that workflow;
+the former local path could publish signed macOS binaries before verifying
+notarization. Use `make release-snapshot` for local, credential-free packaging.
+
 The renamed **Release Validation (legacy, manual only)** workflow remains as a
 manual fallback for the old validation path; it no longer responds to tags.
 Cloudsmith APT and RPM publication remain separate manual workflows. They
