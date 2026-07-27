@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v0.7.11 - 2026-07-26
 
 - Re-release v0.7.10's content through the official signed and notarized release pipeline; v0.7.10's macOS archives were signed but not notarized.
