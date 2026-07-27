@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Standardized the Makefile's build, check, snapshot, and fail-closed release targets across the crawler repositories.
+- Refreshed terminal detection and Unicode display-width dependencies.
 
 ## v0.7.11 - 2026-07-26
 
