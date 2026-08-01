@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changes
+
+- Added generic external archive providers with an explicit `provider:<name>` sync source, a local JSONL subprocess protocol, scoped resumable checkpoints, bounded validation imports, and source-priority safeguards.
+
+### Performance
+
+- Batched unchanged-message checks and aligned search-index row IDs during external archive replays to avoid per-message database round trips and full-index replacement scans.
+
+### Maintenance
+
 - Standardized the Makefile's build, check, snapshot, and fail-closed release targets across the crawler repositories.
 - Refreshed terminal detection and Unicode display-width dependencies.
 
@@ -43,14 +53,6 @@
 
 - Migrated releases to the unified OpenClaw pipeline, adding notarized macOS binaries and checksum-bound Debian and RPM packages.
 - Updated CrawlKit to 0.14.3, including SQLite 1.54.0 and its related runtime dependency refresh.
-
-### Changes
-
-- Added generic external archive providers with an explicit `provider:<name>` sync source, a local JSONL subprocess protocol, scoped resumable checkpoints, bounded validation imports, and source-priority safeguards.
-
-### Performance
-
-- Batched unchanged-message checks and aligned search-index row IDs during external archive replays to avoid per-message database round trips and full-index replacement scans.
 
 ## 0.7.7 - 2026-07-09
 
