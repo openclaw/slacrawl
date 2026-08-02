@@ -54,29 +54,31 @@ make snapshot
 ```
 
 Official releases run through the manual **Release (unified)** GitHub Actions
-workflow. It freezes the protected `main` head in an annotated tag, builds the
+workflow, a thin caller of `openclaw/release-workflows`' reusable Go CLI
+pipeline. The shared workflow owns the annotated version tag, builds the
 GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
-OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only the independently
-verified bytes, updates the canonical Homebrew tap, and opens the next
-`Unreleased` changelog PR.
+OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only independently verified
+bytes, and opens the next `Unreleased` changelog PR. Slacrawl has no formula in
+`openclaw/homebrew-tap`, so releases do not dispatch a Homebrew handoff.
 
 ```bash
-gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=0.7.8
+gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
 ```
 
-`make release` and `scripts/release.sh` fail closed and point to that workflow;
-the former local path could publish signed macOS binaries before verifying
-notarization. Use `make snapshot` for local, credential-free packaging;
-`make release-snapshot` remains a compatibility alias.
+`make release` and `scripts/release.sh` fail closed and point to that workflow.
+Local commands never create release tags, sign, notarize, or publish. Use
+`make snapshot` for credential-free packaging; `make release-snapshot` remains
+a compatibility alias.
 
-The renamed **Release Validation (legacy, manual only)** workflow remains as a
-manual fallback for the old validation path; it no longer responds to tags.
+The renamed **Release Validation (legacy, manual only)** workflow remains a
+non-publishing diagnostic; it never creates tags or releases.
 Cloudsmith APT and RPM publication remain separate manual workflows. They
 download their `.deb` and `.rpm` inputs directly from the unified pipeline's
 published GitHub Release assets.
 
-Release credentials live only in GitHub Actions secrets. Never place signing or
-App Store Connect credentials in the repository or local release configuration.
+Release credentials live only in organization-approved GitHub Actions secrets.
+Never place signing or App Store Connect credentials in the repository, local
+release configuration, or developer environment.
 
 ## Coding Guidelines
 

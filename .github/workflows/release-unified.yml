@@ -22,8 +22,6 @@ jobs:
     with:
       version: ${{ inputs.version }}
       repository-type: openclaw
-      homebrew-tap: openclaw/homebrew-tap
-      homebrew-formula: slacrawl
       nfpm: auto
     secrets:
       MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
@@ -31,4 +29,3 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_PRIVATE_KEY_P8: ${{ secrets.ASC_PRIVATE_KEY_P8 }}
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
