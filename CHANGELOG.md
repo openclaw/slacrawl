@@ -12,6 +12,8 @@
 
 ### Maintenance
 
+- Require explicit workspace, channel, and timestamp scope for live local
+  validation instead of embedding workspace-specific defaults.
 - Standardized the Makefile's build, check, snapshot, and fail-closed release targets across the crawler repositories.
 - Refreshed terminal detection and Unicode display-width dependencies.
 - Updated CrawlKit to 0.14.4, SQLite to 1.55.0, `golang.org/x/net` to 0.57.0, and replaced the retracted libc 1.74.3 with 1.74.4.

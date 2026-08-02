@@ -16,9 +16,9 @@ if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
   exit 1
 fi
 
-workspace_id="${SLACRAWL_WORKSPACE_ID:-T7HML1FG9}"
-channel_id="${SLACRAWL_CHANNEL_ID:-C06DHKFEHGR}"
-since_ts="${SLACRAWL_SINCE_TS:-1772800000.000000}"
+workspace_id="${SLACRAWL_WORKSPACE_ID:?SLACRAWL_WORKSPACE_ID is required}"
+channel_id="${SLACRAWL_CHANNEL_ID:?SLACRAWL_CHANNEL_ID is required}"
+since_ts="${SLACRAWL_SINCE_TS:?SLACRAWL_SINCE_TS is required}"
 
 go test ./...
 go build -o "$tmpdir/slacrawl" ./cmd/slacrawl
