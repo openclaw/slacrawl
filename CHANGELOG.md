@@ -16,6 +16,8 @@
 
 ### Maintenance
 
+- Increased the AWS Crabbox root volume to match the current developer image
+  snapshot size.
 - Require explicit workspace, channel, and timestamp scope for live local
   validation instead of embedding workspace-specific defaults.
 - Updated govulncheck to 1.6.0 and deadcode to 0.48.0 across local and CI validation.
