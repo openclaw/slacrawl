@@ -537,6 +537,106 @@ func TestSubcommandHelpDoesNotLoadConfig(t *testing.T) {
 	}
 }
 
+func TestCommandHelpDoesNotLoadConfigAndReturnsSuccess(t *testing.T) {
+	commands := []string{
+		"report",
+		"digest",
+		"publish",
+		"update",
+		"sync",
+		"tail",
+		"watch",
+		"mentions",
+		"users",
+		"channels",
+		"init",
+		"import",
+		"subscribe",
+	}
+	helpFlags := []string{"--help", "-h"}
+
+	for _, command := range commands {
+		for _, helpFlag := range helpFlags {
+			t.Run(command+"/"+helpFlag, func(t *testing.T) {
+				tmp := t.TempDir()
+				configPath := filepath.Join(tmp, "config.toml")
+				const invalidConfig = "this is not valid TOML"
+				require.NoError(t, os.WriteFile(configPath, []byte(invalidConfig), 0o600))
+
+				var stdout, stderr bytes.Buffer
+				app := &App{Stdout: &stdout, Stderr: &stderr}
+				args := []string{"--config", configPath, command, helpFlag}
+
+				require.NoError(t, app.Run(context.Background(), args))
+				require.Contains(t, stdout.String(), "Usage of "+command+":")
+				require.Empty(t, stderr.String())
+				require.FileExists(t, configPath)
+				contents, err := os.ReadFile(configPath)
+				require.NoError(t, err)
+				require.Equal(t, invalidConfig, string(contents))
+			})
+		}
+	}
+}
+
+func TestCommandHelpAfterCompleteOptionsDoesNotLoadConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("this is not valid TOML"), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	err := app.Run(context.Background(), []string{
+		"--config", configPath,
+		"sync", "--workspace", "T1", "--help",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, stdout.String(), "Usage of sync:")
+	require.Empty(t, stderr.String())
+}
+
+func TestCommandHelpRespectsFlagParserBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		args    []string
+	}{
+		{
+			name:    "help-like option value",
+			command: "sync",
+			args:    []string{"sync", "--workspace", "--help"},
+		},
+		{
+			name:    "help after positional argument",
+			command: "users",
+			args:    []string{"users", "query", "--help"},
+		},
+		{
+			name:    "help after end of options",
+			command: "import",
+			args:    []string{"import", "--workspace", "T1", "--", "--help"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			configPath := filepath.Join(tmp, "config.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte("this is not valid TOML"), 0o600))
+
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+			args := append([]string{"--config", configPath}, tt.args...)
+			err := app.Run(context.Background(), args)
+
+			require.Error(t, err)
+			require.NotContains(t, stdout.String(), "Usage of "+tt.command+":")
+			require.Empty(t, stderr.String())
+		})
+	}
+}
+
 func mustTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)

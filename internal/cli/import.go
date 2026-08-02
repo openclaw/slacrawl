@@ -61,7 +61,6 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	}
 
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspace := fs.String("workspace", "", "workspace id")
 	dryRun := fs.Bool("dry-run", false, "walk and count without writing")
 	force := fs.Bool("force", false, "overwrite existing slack-export rows at the same rank")
@@ -71,7 +70,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 		parseArgs = append([]string{}, args[1:]...)
 		parseArgs = append(parseArgs, args[0])
 	}
-	if err := fs.Parse(parseArgs); err != nil {
+	if err := a.parseCommandFlags(fs, parseArgs); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,27 +117,27 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "metadata":
 		return a.runMetadata(rest[1:], outputFormat)
 	case "init":
-		return a.runInit(configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runInit(configPath, rest[1:], outputFormat))
 	case "doctor":
 		return a.runDoctor(ctx, configPath, rest[1:], outputFormat)
 	case "report":
-		return a.runReport(ctx, configPath, outputFormat)
+		return normalizeCommandHelp(a.runReport(ctx, configPath, rest[1:], outputFormat))
 	case "digest":
-		return a.runDigest(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runDigest(ctx, configPath, rest[1:], outputFormat))
 	case "analytics":
 		return a.runAnalytics(ctx, configPath, rest[1:], outputFormat)
 	case "publish":
-		return a.runPublish(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runPublish(ctx, configPath, rest[1:], outputFormat))
 	case "subscribe":
-		return a.runSubscribe(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runSubscribe(ctx, configPath, rest[1:], outputFormat))
 	case "update":
-		return a.runUpdate(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runUpdate(ctx, configPath, rest[1:], outputFormat))
 	case "status":
 		return a.runStatus(ctx, configPath, rest[1:], outputFormat)
 	case "sync":
-		return a.runSync(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runSync(ctx, configPath, rest[1:], outputFormat))
 	case "import":
-		return a.runImport(ctx, rest[1:])
+		return normalizeCommandHelp(a.runImport(ctx, rest[1:]))
 	case "purge":
 		return a.runPurge(ctx, configPath, rest[1:], outputFormat)
 	case "search":
@@ -148,19 +149,19 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "files":
 		return a.runFiles(ctx, configPath, rest[1:], outputFormat)
 	case "mentions":
-		return a.runMentions(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runMentions(ctx, configPath, rest[1:], outputFormat))
 	case "sql":
 		return a.runSQL(ctx, configPath, rest[1:], outputFormat)
 	case "users":
-		return a.runUsers(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runUsers(ctx, configPath, rest[1:], outputFormat))
 	case "channels":
-		return a.runChannels(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runChannels(ctx, configPath, rest[1:], outputFormat))
 	case "completion":
 		return a.runCompletion(rest[1:])
 	case "tail":
-		return a.runTail(ctx, configPath, rest[1:])
+		return normalizeCommandHelp(a.runTail(ctx, configPath, rest[1:]))
 	case "watch":
-		return a.runWatch(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runWatch(ctx, configPath, rest[1:], outputFormat))
 	default:
 		return fmt.Errorf("unknown command: %s", rest[0])
 	}
@@ -260,10 +261,9 @@ func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {
 
 func (a *App) runInit(configPath string, args []string, format OutputFormat) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	dbPath := fs.String("db", "", "database path")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -514,13 +514,12 @@ func (a *App) runMetadata(args []string, format OutputFormat) error {
 }
 
 func (a *App) runSync(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all|provider:<name>")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channels := fs.String("channels", "", "comma separated channel ids")
@@ -532,8 +531,11 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
 	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during sync")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if *limit < 0 {
 		return errors.New("limit cannot be negative")
@@ -1188,17 +1190,19 @@ func (a *App) fetchFiles(ctx context.Context, cfg config.Config, st *store.Store
 }
 
 func (a *App) runMentions(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("mentions", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	target := fs.String("target", "", "target id or label")
 	limit := fs.Int("limit", 50, "row limit")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
@@ -1268,15 +1272,17 @@ type slacrawlSQLArgs struct {
 }
 
 func (a *App) runUsers(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("users", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	query := ""
 	if fs.NArg() > 0 {
@@ -1295,16 +1301,18 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 }
 
 func (a *App) runChannels(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("channels", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	kind := fs.String("kind", "", "channel kind")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	resolvedKind := normalizeChannelKind(*kind)
 	if resolvedKind != "" && !isValidChannelKind(resolvedKind) {
@@ -1327,16 +1335,18 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 }
 
 func (a *App) runTail(ctx context.Context, configPath string, args []string) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("tail", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	repairEvery := fs.String("repair-every", cfg.Sync.RepairEvery, "repair interval")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
@@ -1358,16 +1368,18 @@ func (a *App) runTail(ctx context.Context, configPath string, args []string) err
 }
 
 func (a *App) runWatch(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	desktopEvery := fs.String("desktop-every", cfg.Sync.DesktopRefreshEvery, "desktop refresh interval")
 	workspaceID := fs.String("workspace", "", "workspace id")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if !cfg.Slack.Desktop.Enabled {
 		return errors.New("desktop sync is disabled in config")
@@ -1423,20 +1435,22 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 }
 
 func (a *App) runDigest(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("digest", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	since := fs.String("since", "7d", "lookback window, e.g. 24h, 7d, 30d")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channel := fs.String("channel", "", "channel id or name")
 	topN := fs.Int("top-n", 1, "number of top posters and mentions per channel")
 	formatFlag := fs.String("format", string(format), "output format: text|json|log")
 	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	lookback, err := parseLookback(*since)
 	if err != nil {
@@ -1494,7 +1508,11 @@ func parseLookback(value string) (time.Duration, error) {
 	return d, nil
 }
 
-func (a *App) runReport(ctx context.Context, configPath string, format OutputFormat) error {
+func (a *App) runReport(ctx context.Context, configPath string, args []string, format OutputFormat) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	if err := a.parseCommandFlags(fs, args); err != nil {
+		return err
+	}
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
@@ -1880,12 +1898,11 @@ func stripKnownFlags(args []string, strip map[string]bool) []string {
 }
 
 func (a *App) runPublish(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "git repo path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
@@ -1894,8 +1911,11 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	noCommit := fs.Bool("no-commit", false, "skip git commit")
 	push := fs.Bool("push", false, "push to origin")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "omit cached media files")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() != 0 {
 		return errors.New("publish takes no positional arguments")
@@ -1953,12 +1973,11 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 }
 
 func (a *App) runSubscribe(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfigOrDefault(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfigOrDefault(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("subscribe", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "local clone path")
 	dbPath := fs.String("db", cfg.DBPath, "database path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
@@ -1967,8 +1986,11 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	noAutoUpdate := fs.Bool("no-auto-update", false, "disable read-time auto refresh")
 	noImport := fs.Bool("no-import", false, "skip initial import")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() > 1 {
 		return errors.New("subscribe takes at most one remote")
@@ -2032,20 +2054,22 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 }
 
 func (a *App) runUpdate(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "local clone path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
 	ref := fs.String("ref", "", "historical git ref to import")
 	restore := fs.Bool("restore", false, "exactly replace snapshot tables instead of merging")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() != 0 {
 		return errors.New("update takes no positional arguments")
@@ -2422,6 +2446,34 @@ func hasHelpArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeCommandHelp(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	return err
+}
+
+func (a *App) parseCommandFlags(fs *flag.FlagSet, args []string) error {
+	var output bytes.Buffer
+	fs.SetOutput(&output)
+	err := fs.Parse(args)
+	if output.Len() == 0 {
+		return err
+	}
+
+	target := a.Stderr
+	if errors.Is(err, flag.ErrHelp) {
+		target = a.Stdout
+	}
+	if target == nil {
+		target = io.Discard
+	}
+	if _, writeErr := io.Copy(target, &output); writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 
 func normalizeSingleDashLongFlags(args []string, names ...string) []string {
