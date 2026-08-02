@@ -217,6 +217,20 @@ Must include:
 - sync metadata such as first / last timestamps
 - configured git-share repo plus last import / stale state when share mode is enabled
 
+### `users`
+
+Purpose:
+
+- list synced users, optionally filtered by workspace and a positional text query
+- return up to 100 rows by default, with `--limit <n>` accepting positive overrides
+
+### `channels`
+
+Purpose:
+
+- list synced channels, optionally filtered by workspace, channel kind, and a positional text query
+- return up to 100 rows by default, with `--limit <n>` accepting positive overrides
+
 ### `report`
 
 Purpose:

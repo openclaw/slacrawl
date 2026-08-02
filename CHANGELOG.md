@@ -6,12 +6,23 @@
 
 - Added generic external archive providers with an explicit `provider:<name>` sync source, a local JSONL subprocess protocol, scoped resumable checkpoints, bounded validation imports, and source-priority safeguards.
 
+### Fixes
+
+- Made command help independent of local configuration and consistently successful for `--help` and `-h`.
+- Added configurable positive row limits to `users` and `channels` while preserving the existing 100-row default.
+
 ### Performance
 
 - Batched unchanged-message checks and aligned search-index row IDs during external archive replays to avoid per-message database round trips and full-index replacement scans.
 
 ### Maintenance
 
+- Increased the AWS Crabbox root volume to match the current developer image
+  snapshot size.
+- Require explicit workspace, channel, and timestamp scope for live local
+  validation instead of embedding workspace-specific defaults.
+- Updated govulncheck to 1.6.0 and deadcode to 0.48.0 across local and CI validation.
+- Pinned every external GitHub Action and reusable workflow to an exact reviewed commit.
 - Standardized the Makefile's build, check, snapshot, and fail-closed release targets across the crawler repositories.
 - Refreshed terminal detection and Unicode display-width dependencies.
 - Updated CrawlKit to 0.14.4, SQLite to 1.55.0, `golang.org/x/net` to 0.57.0, and replaced the retracted libc 1.74.3 with 1.74.4.

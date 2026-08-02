@@ -503,6 +503,68 @@ func TestWorkspaceFilteredReadCommands(t *testing.T) {
 	require.ErrorContains(t, err, "invalid channel kind")
 }
 
+func TestUsersAndChannelsLimits(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.toml")
+	dbPath := filepath.Join(tmp, "slacrawl.db")
+
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	require.NoError(t, cfg.Save(configPath))
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	now := mustTime(t, "2026-03-08T18:20:43Z")
+	require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{
+		ID:        "T1",
+		Name:      "one",
+		RawJSON:   "{}",
+		UpdatedAt: now,
+	}))
+	for i := range 105 {
+		suffix := fmt.Sprintf("%03d", i)
+		require.NoError(t, st.UpsertUser(context.Background(), store.User{
+			ID:          "U" + suffix,
+			WorkspaceID: "T1",
+			Name:        "user-" + suffix,
+			RawJSON:     "{}",
+			UpdatedAt:   now,
+		}))
+		require.NoError(t, st.UpsertChannel(context.Background(), store.Channel{
+			ID:          "C" + suffix,
+			WorkspaceID: "T1",
+			Name:        "channel-" + suffix,
+			Kind:        "public_channel",
+			RawJSON:     "{}",
+			UpdatedAt:   now,
+		}))
+	}
+	require.NoError(t, st.Close())
+
+	for _, command := range []string{"users", "channels"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+
+			require.NoError(t, app.Run(context.Background(), []string{"--config", configPath, "--json", command}))
+			var rows []map[string]any
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+			require.Len(t, rows, 100)
+			require.Empty(t, stderr.String())
+
+			stdout.Reset()
+			require.NoError(t, app.Run(context.Background(), []string{"--config", configPath, "--json", command, "--limit", "105"}))
+			rows = nil
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+			require.Len(t, rows, 105)
+
+			stdout.Reset()
+			err := app.Run(context.Background(), []string{"--config", configPath, "--json", command, "--limit", "0"})
+			require.ErrorContains(t, err, command+" --limit must be positive")
+		})
+	}
+}
+
 func TestHelpIncludesBannerAndUsage(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{
@@ -534,6 +596,106 @@ func TestSubcommandHelpDoesNotLoadConfig(t *testing.T) {
 		require.NoError(t, app.Run(context.Background(), args), "args=%v", args)
 		require.Contains(t, stdout.String(), "Usage:", "args=%v", args)
 		require.Empty(t, stderr.String(), "args=%v", args)
+	}
+}
+
+func TestCommandHelpDoesNotLoadConfigAndReturnsSuccess(t *testing.T) {
+	commands := []string{
+		"report",
+		"digest",
+		"publish",
+		"update",
+		"sync",
+		"tail",
+		"watch",
+		"mentions",
+		"users",
+		"channels",
+		"init",
+		"import",
+		"subscribe",
+	}
+	helpFlags := []string{"--help", "-h"}
+
+	for _, command := range commands {
+		for _, helpFlag := range helpFlags {
+			t.Run(command+"/"+helpFlag, func(t *testing.T) {
+				tmp := t.TempDir()
+				configPath := filepath.Join(tmp, "config.toml")
+				const invalidConfig = "this is not valid TOML"
+				require.NoError(t, os.WriteFile(configPath, []byte(invalidConfig), 0o600))
+
+				var stdout, stderr bytes.Buffer
+				app := &App{Stdout: &stdout, Stderr: &stderr}
+				args := []string{"--config", configPath, command, helpFlag}
+
+				require.NoError(t, app.Run(context.Background(), args))
+				require.Contains(t, stdout.String(), "Usage of "+command+":")
+				require.Empty(t, stderr.String())
+				require.FileExists(t, configPath)
+				contents, err := os.ReadFile(configPath)
+				require.NoError(t, err)
+				require.Equal(t, invalidConfig, string(contents))
+			})
+		}
+	}
+}
+
+func TestCommandHelpAfterCompleteOptionsDoesNotLoadConfig(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("this is not valid TOML"), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	err := app.Run(context.Background(), []string{
+		"--config", configPath,
+		"sync", "--workspace", "T1", "--help",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, stdout.String(), "Usage of sync:")
+	require.Empty(t, stderr.String())
+}
+
+func TestCommandHelpRespectsFlagParserBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		args    []string
+	}{
+		{
+			name:    "help-like option value",
+			command: "sync",
+			args:    []string{"sync", "--workspace", "--help"},
+		},
+		{
+			name:    "help after positional argument",
+			command: "users",
+			args:    []string{"users", "query", "--help"},
+		},
+		{
+			name:    "help after end of options",
+			command: "import",
+			args:    []string{"import", "--workspace", "T1", "--", "--help"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			configPath := filepath.Join(tmp, "config.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte("this is not valid TOML"), 0o600))
+
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+			args := append([]string{"--config", configPath}, tt.args...)
+			err := app.Run(context.Background(), args)
+
+			require.Error(t, err)
+			require.NotContains(t, stdout.String(), "Usage of "+tt.command+":")
+			require.Empty(t, stderr.String())
+		})
 	}
 }
 
@@ -728,6 +890,8 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--max-bytes")
 	require.Contains(t, out, "--desktop-every --workspace")
 	require.Contains(t, out, "--keep-message-events")
+	require.Contains(t, out, "--workspace --limit --help")
+	require.Contains(t, out, "--workspace --kind --limit --help")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -759,6 +923,7 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--ref[historical Git ref to import; requires --restore]")
 	require.Contains(t, out, "--restore[exactly replace snapshot tables instead of merging]")
 	require.Contains(t, out, "--workspace[workspace id]")
+	require.Contains(t, out, "'--limit[row limit]:limit:'")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {

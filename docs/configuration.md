@@ -104,6 +104,7 @@ Behavior:
 - `sync --source bot` without `--workspace` runs against every configured `[[workspaces]]` entry
 - `tail` without `--workspace` starts one live tail per configured `[[workspaces]]` entry
 - `search`, `messages`, `mentions`, `users`, and `channels` accept `--workspace` to filter the shared SQLite database
+- `users` and `channels` return 100 rows by default and accept a positive `--limit` override
 - if `[[workspaces]]` is empty, the legacy top-level `[slack.*]` token config is used
 
 ## Visibility Boundaries

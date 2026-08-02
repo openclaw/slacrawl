@@ -217,10 +217,10 @@ _slacrawl()
             COMPREPLY=( $(compgen -W "--workspace --target --limit --help -h ${global_flags}" -- "${cur}") )
             ;;
         users)
-            COMPREPLY=( $(compgen -W "--workspace --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--workspace --limit --help -h ${global_flags}" -- "${cur}") )
             ;;
 		channels)
-			COMPREPLY=( $(compgen -W "--workspace --kind --help -h ${global_flags}" -- "${cur}") )
+			COMPREPLY=( $(compgen -W "--workspace --kind --limit --help -h ${global_flags}" -- "${cur}") )
 			;;
         completion)
             COMPREPLY=( $(compgen -W "bash zsh --help -h ${global_flags}" -- "${cur}") )
@@ -348,10 +348,10 @@ _slacrawl() {
           _arguments '--workspace[workspace id]:workspace id:' '--target[target id or label]:target:' '--limit[row limit]:limit:'
           ;;
         users)
-          _arguments '--workspace[workspace id]:workspace id:'
+          _arguments '--workspace[workspace id]:workspace id:' '--limit[row limit]:limit:'
           ;;
 		channels)
-		  _arguments '--workspace[workspace id]:workspace id:' '--kind[channel kind]:kind:(im mpim public_channel private_channel)'
+		  _arguments '--workspace[workspace id]:workspace id:' '--kind[channel kind]:kind:(im mpim public_channel private_channel)' '--limit[row limit]:limit:'
 		  ;;
         completion)
           _values 'shell' bash zsh
