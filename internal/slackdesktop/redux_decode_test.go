@@ -306,6 +306,7 @@ func TestExtractIndexedDBStatesNodeUnavailable(t *testing.T) {
 }
 
 func TestInspectReportsAllCandidateFailureWithoutError(t *testing.T) {
+	requireNode(t)
 	root := t.TempDir()
 	writeBlob(t, root, "truncated", []byte{0xff, v8WireFormatV15, 0x6f})
 
@@ -321,6 +322,7 @@ func TestInspectReportsAllCandidateFailureWithoutError(t *testing.T) {
 }
 
 func TestIngestFailsWhenEveryCandidateFails(t *testing.T) {
+	requireNode(t)
 	root := t.TempDir()
 	writeBlob(t, root, "truncated", []byte{0xff, v8WireFormatV15, 0x6f})
 

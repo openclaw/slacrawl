@@ -19,6 +19,8 @@
 
 - Increased the AWS Crabbox root volume to match the current developer image
   snapshot size.
+- Provisioned Node.js 24 in Crabbox hydration and made Node-dependent Redux
+  decoder tests declare their runtime prerequisite.
 - Require explicit workspace, channel, and timestamp scope for live local
   validation instead of embedding workspace-specific defaults.
 - Updated govulncheck to 1.6.0 and deadcode to 0.48.0 across local and CI validation.
