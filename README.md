@@ -206,8 +206,8 @@ Choose the path that matches your setup:
 - `messages` lists stored messages with filters
 - `mentions` lists structured mention records
 - `sql` runs read-only SQL against the local database
-- `users` lists synced users
-- `channels` lists synced channels
+- `users` lists synced users, with `--limit <n>` overriding the 100-row default
+- `channels` lists synced channels, with `--limit <n>` overriding the 100-row default
 - `status` prints workspace and sync status
 - `metadata --json`, `status --json`, and `doctor --json` expose crawlkit
   control/status payloads for launchers, automation, and CI
@@ -586,7 +586,8 @@ go run ./cmd/slacrawl sync --source bot
 go run ./cmd/slacrawl status
 go run ./cmd/slacrawl report
 go run ./cmd/slacrawl digest --since 7d
-go run ./cmd/slacrawl channels
+go run ./cmd/slacrawl channels --limit 200
+go run ./cmd/slacrawl users --limit 200
 go run ./cmd/slacrawl messages --channel C12345678 --limit 20
 go run ./cmd/slacrawl mentions --limit 20
 go run ./cmd/slacrawl sql 'select channel_id, count(*) as messages from messages group by channel_id order by messages desc limit 10;'

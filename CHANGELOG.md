@@ -9,6 +9,7 @@
 ### Fixes
 
 - Made command help independent of local configuration and consistently successful for `--help` and `-h`.
+- Added configurable positive row limits to `users` and `channels` while preserving the existing 100-row default.
 
 ### Performance
 

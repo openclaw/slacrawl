@@ -1278,11 +1278,15 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 	}
 	fs := flag.NewFlagSet("users", flag.ContinueOnError)
 	workspaceID := fs.String("workspace", "", "workspace id")
+	limit := fs.Int("limit", 100, "row limit")
 	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 	if configErr != nil {
 		return configErr
+	}
+	if *limit <= 0 {
+		return errors.New("users --limit must be positive")
 	}
 	query := ""
 	if fs.NArg() > 0 {
@@ -1293,7 +1297,7 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	results, err := st.Users(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, 100)
+	results, err := st.Users(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, *limit)
 	if err != nil {
 		return err
 	}
@@ -1308,11 +1312,15 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 	fs := flag.NewFlagSet("channels", flag.ContinueOnError)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	kind := fs.String("kind", "", "channel kind")
+	limit := fs.Int("limit", 100, "row limit")
 	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 	if configErr != nil {
 		return configErr
+	}
+	if *limit <= 0 {
+		return errors.New("channels --limit must be positive")
 	}
 	resolvedKind := normalizeChannelKind(*kind)
 	if resolvedKind != "" && !isValidChannelKind(resolvedKind) {
@@ -1327,7 +1335,7 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	results, err := st.ChannelsByKind(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, resolvedKind, 100)
+	results, err := st.ChannelsByKind(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, resolvedKind, *limit)
 	if err != nil {
 		return err
 	}

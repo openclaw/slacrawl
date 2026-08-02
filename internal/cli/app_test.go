@@ -503,6 +503,68 @@ func TestWorkspaceFilteredReadCommands(t *testing.T) {
 	require.ErrorContains(t, err, "invalid channel kind")
 }
 
+func TestUsersAndChannelsLimits(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.toml")
+	dbPath := filepath.Join(tmp, "slacrawl.db")
+
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	require.NoError(t, cfg.Save(configPath))
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	now := mustTime(t, "2026-03-08T18:20:43Z")
+	require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{
+		ID:        "T1",
+		Name:      "one",
+		RawJSON:   "{}",
+		UpdatedAt: now,
+	}))
+	for i := range 105 {
+		suffix := fmt.Sprintf("%03d", i)
+		require.NoError(t, st.UpsertUser(context.Background(), store.User{
+			ID:          "U" + suffix,
+			WorkspaceID: "T1",
+			Name:        "user-" + suffix,
+			RawJSON:     "{}",
+			UpdatedAt:   now,
+		}))
+		require.NoError(t, st.UpsertChannel(context.Background(), store.Channel{
+			ID:          "C" + suffix,
+			WorkspaceID: "T1",
+			Name:        "channel-" + suffix,
+			Kind:        "public_channel",
+			RawJSON:     "{}",
+			UpdatedAt:   now,
+		}))
+	}
+	require.NoError(t, st.Close())
+
+	for _, command := range []string{"users", "channels"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+
+			require.NoError(t, app.Run(context.Background(), []string{"--config", configPath, "--json", command}))
+			var rows []map[string]any
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+			require.Len(t, rows, 100)
+			require.Empty(t, stderr.String())
+
+			stdout.Reset()
+			require.NoError(t, app.Run(context.Background(), []string{"--config", configPath, "--json", command, "--limit", "105"}))
+			rows = nil
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &rows))
+			require.Len(t, rows, 105)
+
+			stdout.Reset()
+			err := app.Run(context.Background(), []string{"--config", configPath, "--json", command, "--limit", "0"})
+			require.ErrorContains(t, err, command+" --limit must be positive")
+		})
+	}
+}
+
 func TestHelpIncludesBannerAndUsage(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{
@@ -828,6 +890,8 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--max-bytes")
 	require.Contains(t, out, "--desktop-every --workspace")
 	require.Contains(t, out, "--keep-message-events")
+	require.Contains(t, out, "--workspace --limit --help")
+	require.Contains(t, out, "--workspace --kind --limit --help")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -859,6 +923,7 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--ref[historical Git ref to import; requires --restore]")
 	require.Contains(t, out, "--restore[exactly replace snapshot tables instead of merging]")
 	require.Contains(t, out, "--workspace[workspace id]")
+	require.Contains(t, out, "'--limit[row limit]:limit:'")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {
