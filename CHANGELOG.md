@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Documentation
+
+- Rewrote the README around installation and a verified quick start, with detailed command and Git archive references moved to `docs/`.
+
 ## v0.8.0 - 2026-08-02
 
 ### Changes

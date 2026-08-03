@@ -1,611 +1,136 @@
-<h1 align="center">💾 slacrawl</h1>
+# slacrawl 💾 — Your Slack history, on your terms.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/openclaw/slacrawl/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/openclaw/slacrawl/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/openclaw/slacrawl?style=flat-square)](https://github.com/openclaw/slacrawl/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/openclaw/slacrawl?style=flat-square)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/openclaw/slacrawl/releases/latest)
+[![License](https://img.shields.io/github/license/openclaw/slacrawl?style=flat-square)](LICENSE)
+[![Homebrew](https://img.shields.io/badge/homebrew-openclaw%2Ftap-FBB040?style=flat-square&logo=homebrew&logoColor=black)](https://github.com/openclaw/homebrew-tap)
+
+`slacrawl` mirrors Slack workspace data into local SQLite for full-text search, terminal browsing, reporting, and read-only SQL. It is for people who want a queryable Slack archive that stays under their control.
 
 <p align="center">
-  <strong>A Go-based CLI for mirroring Slack workspace data into local SQLite<br> for search, querying, and offline inspection.</strong>
+  <img src="screenshot.png" alt="slacrawl terminal interface showing archived Slack messages" width="801">
 </p>
-
-<p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/github/license/vincentkoc/slacrawl" alt="License"></a>
-  <img src="https://img.shields.io/badge/go-1.26.5%2B-00ADD8" alt="Go 1.26.5+">
-  <img src="https://img.shields.io/badge/storage-SQLite-003B57" alt="SQLite">
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform">
-</p>
-
-<p align="center">
-  <img src="screenshot.png" alt="slascrawl Demo"/>
-</p>
-
-## Why slacrawl?
-
-Slack search is convenient until you need your own workflow, your own retention, or your own queries. `slacrawl` is a Go-based CLI that pulls Slack workspace metadata and message history into SQLite so you can inspect it without depending on the Slack UI.
-
-Data stays on your machine. You can run it in API mode, MCP connector mode, desktop mode, external-provider mode, or a hybrid workflow. That covers one-shot syncs, live tailing over Socket Mode, connector-backed fetching, local archive imports, and local desktop recovery or "wiretap" style inspection from Slack Desktop artifacts already on your machine.
-
-## Included
-
-- local SQLite storage with full-text search backed by SQLite FTS5
-- workspace, channel, user, and message sync
-- MCP connector sync through Codex's HTTP Slack connector or the reference Slack MCP server
-- generic external archive providers over a local JSONL subprocess protocol
-- thread reply backfill when a user token is available
-- DM and MPIM sync when a user token is available
-- incremental API history sync by default, with `--full` reserved for deliberate backfills
-- `sync --latest-only` for cheap incremental refreshes on already-seeded channels
-- mention extraction for structured querying
-- read-only SQL access for ad hoc analysis
-- `doctor` diagnostics for config, database, token, and desktop-source checks
-- desktop-local ingestion of workspace metadata, channels, users, cached channel/DM messages, drafts, read markers, recent-channel hints, and custom-status metadata
-- optional Socket Mode live tailing via app token
-- periodic desktop refresh with `watch`
-- retention previews and transactional message purging by absolute or relative cutoff
-- git-backed archive publishing, subscription, and read-time auto-refresh
-
-## Current Coverage
-
-- multi-workspace storage and filtering
-- multi-workspace API sync when `[[workspaces]]` is configured
-- multi-workspace live tailing when per-workspace app tokens are configured
-- public channels
-- private channels
-- top-level messages
-- channel threads
-- local FTS search
-- read-only SQL access
-- macOS and Linux Slack Desktop discovery
-- optional Slack file media caching
-
-## Not Yet Included
-
-- write-back actions
-- public Marketplace-style distribution hardening
-- desktop-local message extraction beyond the documented bootstrap surface
-
-If one of those gaps matters to your workflow, open an issue so it can be tracked explicitly.
-
-## Requirements
-
-- Go `1.26.5+`
-- `node` if you want richer desktop-local IndexedDB blob decoding
-- a Slack bot token for standard API sync
-- a configured Slack MCP connector if you want MCP-backed sync
-- an app token if you want to use `tail`
-- an optional user token for fuller historical thread coverage
-- Slack Desktop on macOS or Linux only if you want desktop-local discovery
 
 ## Install
 
-<details open>
-<summary>Linux packages from GitHub Releases</summary>
+Homebrew is the shortest path on macOS or Linux:
 
-Download the package that matches your platform from the [latest release](https://github.com/openclaw/slacrawl/releases/latest).
-Set `version` to the release you want to install (shown for `0.8.0`).
-
-Debian/Ubuntu:
-
-```bash
-version=0.8.0
-curl -LO "https://github.com/openclaw/slacrawl/releases/download/v${version}/slacrawl_${version}_amd64.deb"
-sudo dpkg -i "slacrawl_${version}_amd64.deb"
+```sh
+brew install openclaw/tap/slacrawl
 ```
 
-RHEL/Fedora:
+The tap can trail the newest release. [GitHub Releases](https://github.com/openclaw/slacrawl/releases/latest) provides signed and notarized macOS archives, Linux archives, and Debian/RPM packages for AMD64 and ARM64.
 
-```bash
-version=0.8.0
-curl -LO "https://github.com/openclaw/slacrawl/releases/download/v${version}/slacrawl-${version}-1.x86_64.rpm"
-sudo rpm -i "slacrawl-${version}-1.x86_64.rpm"
-```
+To build the latest source, install Go 1.26.5 or newer, then run:
 
-</details>
-
-<details>
-<summary>Build from source</summary>
-
-```bash
+```sh
 git clone https://github.com/openclaw/slacrawl.git
 cd slacrawl
-go build -o bin/slacrawl ./cmd/slacrawl
+make build
 ./bin/slacrawl --help
 ```
 
-</details>
+The repository also includes a [`Dockerfile`](Dockerfile) for container builds.
 
-<details>
-<summary>Docker</summary>
+## Quick start
 
-```bash
-docker build -t slacrawl .
-docker run --rm -e SLACK_BOT_TOKEN -v "$PWD/.slacrawl:/data" slacrawl doctor
-docker run --rm -e SLACK_BOT_TOKEN -e SLACK_APP_TOKEN -v "$PWD/.slacrawl:/data" slacrawl tail
+Set `SLACK_BOT_TOKEN` to a bot token that can read the workspace, then replace the example workspace and channel IDs:
+
+```sh
+slacrawl init --workspace T01234567
+slacrawl doctor
+slacrawl sync --source bot --channels C01234567
+slacrawl search "incident"
+slacrawl tui
 ```
 
-The image stores config, SQLite data, cache, and Git snapshot state under `/data`. Desktop/wiretap mode needs an explicit host mount to the Slack Desktop data directory.
+`init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A user token is optional for broader thread and DM coverage; an app token is only needed for live Socket Mode tailing.
 
-</details>
+Already have a Slack export? Import its ZIP or extracted directory instead of syncing from the API:
 
-<details>
-<summary>Run without building a binary</summary>
-
-```bash
-git clone https://github.com/openclaw/slacrawl.git
-cd slacrawl
-go run ./cmd/slacrawl --help
+```sh
+slacrawl import ~/Downloads/slack-export.zip --workspace T01234567
 ```
 
-</details>
+## Choose an ingestion source
 
-## Quick Start
+Every source feeds the same SQLite archive and search index.
 
-```bash
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_APP_TOKEN="xapp-..."
-export SLACK_USER_TOKEN="xoxp-..."
+| Source | Command | Use it for |
+| --- | --- | --- |
+| Slack API | `slacrawl sync --source bot` | Token-backed channel history, users, threads, and incremental refreshes |
+| Slack Desktop | `slacrawl sync --source wiretap` | Read-only recovery from local macOS or Linux desktop caches |
+| MCP connector | `slacrawl sync --source mcp --workspace T01234567` | Connector-backed history without a direct Slack API integration |
+| External provider | `slacrawl sync --source provider:archive --workspace T01234567` | A trusted local JSONL adapter for another archive |
+| Slack export | `slacrawl import <path> --workspace T01234567` | ZIP or directory exports |
 
-go run ./cmd/slacrawl init
-go run ./cmd/slacrawl doctor
-go run ./cmd/slacrawl sync --source bot
-go run ./cmd/slacrawl sync --source mcp --workspace T01234567
-go run ./cmd/slacrawl search --workspace T01234567 "incident"
-go run ./cmd/slacrawl purge --older-than 90d
-go run ./cmd/slacrawl analytics trends --weeks 4
-go run ./cmd/slacrawl tail --repair-every 30m
-go run ./cmd/slacrawl watch --desktop-every 5m
+Treat one config and database as one visibility boundary. Keep personal and company archives in separate configs, database paths, and share remotes. See [Configuration](docs/configuration.md) for tokens, multiple workspaces, MCP, external providers, media caching, and source precedence; see [Desktop mode](docs/desktop-mode.md) for local-cache coverage and limitations.
+
+## Explore the archive
+
+Search uses SQLite FTS5 with a substring fallback. The same archive is available through the TUI, structured commands, and read-only SQL:
+
+```sh
+slacrawl report
+slacrawl messages --limit 20
+slacrawl sql 'select channel_id, count(*) from messages group by channel_id;'
+slacrawl --json status
 ```
 
-If you built the binary, replace `go run ./cmd/slacrawl` with `./bin/slacrawl`.
+Use `--format text`, `--format json`, or `--format log` on commands that support structured output. Color turns off when stdout is not a TTY; `--no-color` and `NO_COLOR=1` force plain output.
 
-`tail` is the live API side of the tool. `watch` is the recurring desktop-side refresh loop. By default, `watch` refreshes every workspace in the signed-in desktop profile; pass `--workspace T01234567` to restrict it to one workspace.
+## Keep it current
 
-## Visibility Model
+Run an incremental API refresh after the first sync:
 
-Treat one `slacrawl` config/database as one Slack visibility boundary. The archive should mean "what this bot/account/profile can see", not a blend of unrelated personal and company backups.
+```sh
+slacrawl sync --source bot
+```
 
-- `--source bot` is an alias for `--source api`; it crawls Slack through configured bot/user tokens
-- `--source mcp` fetches through Codex's HTTP Slack connector or the reference Slack MCP server over stdio and requires a workspace ID for archive ownership
-- `--source provider:<name>` imports a configured external archive through a local subprocess and requires a workspace ID for archive ownership
-- `--source wiretap` is an alias for `--source desktop`; it reads the local Slack Desktop cache
-- `--source all` runs API first, then desktop enrichment; external providers remain explicit
-- `[share]` is a backup/restore target for the current DB, not a second Slack source
+Use `--latest-only` to update only channels that already have local history, `tail` for Socket Mode events, or `watch` for recurring desktop-cache refreshes. Ordinary incremental sync preserves retention cutoffs; `--full`, an older explicit `--since`, desktop ingestion, or imports can deliberately restore older records.
 
-For separate company and personal archives, use separate configs with separate `db_path` and `[share].remote` values.
+## Share an archive
 
-Choose the path that matches your setup:
+One machine can publish compressed, git-backed snapshots while other machines subscribe and query locally without Slack credentials. Routine updates merge safely and preserve destination-only rows; exact replacement requires `update --restore`.
 
-- use `sync --source bot` for normal token-backed incremental syncs
-- use `sync --source bot --full` only when you want a deliberate full backfill
-- use `sync --source bot --latest-only` when you only want fresh deltas on channels that already have local history
-- use `sync --source mcp --workspace T01234567` when a configured HTTP or stdio MCP connector can read the workspace
-- use `sync --source provider:archive --workspace T01234567` when a configured local provider should import another archive
-- use `sync --source wiretap` when you want local desktop recovery only
-- use `watch` when you want desktop-local state to refresh into SQLite continuously
+See [Git archive sharing](docs/git-archive-sharing.md) for publisher and subscriber setup, snapshot tags, media behavior, and restore semantics.
 
-## Commands
+## Retention
 
-- `init` creates a starter config file
-- `doctor` checks config, DB access, token presence, FTS, and desktop source availability
-- `report` summarizes archive activity and git-share freshness without writing SQL
-- `publish` exports the local SQLite archive into a git repo as compressed JSONL shards plus a manifest
-- `subscribe` configures a git-backed reader that can run without Slack credentials
-- `update` safely merges the latest git snapshot; `update --restore` performs explicit exact replacement, including historical tag/ref restores
-- `sync` performs a one-shot crawl from bot/API, MCP connector, an external provider, wiretap/desktop, or the combined API-plus-desktop mode
-- `import` imports a Slack export ZIP or extracted export directory
-- `purge` previews or deletes messages and message-owned records older than a cutoff, with optional retained-event compaction
-- `tail` listens for live events through Socket Mode, including one tail per configured workspace
-- `watch` refreshes desktop-local state on a schedule, optionally scoped with `--workspace <id>`
-- `search` runs safe local text search with FTS and substring fallback, optionally filtered by workspace
-- `messages` lists stored messages with filters
-- `mentions` lists structured mention records
-- `sql` runs read-only SQL against the local database
-- `users` lists synced users, with `--limit <n>` overriding the 100-row default
-- `channels` lists synced channels, with `--limit <n>` overriding the 100-row default
-- `status` prints workspace and sync status
-- `metadata --json`, `status --json`, and `doctor --json` expose crawlkit
-  control/status payloads for launchers, automation, and CI
-- `check-update` checks GitHub Releases for newer OpenClaw builds; interactive
-  terminal runs also print a cached daily stderr notice unless
-  `SLACRAWL_NO_UPDATE_CHECK=1` or `CRAWLKIT_NO_UPDATE_CHECK=1` is set
-- `digest` prints a per-channel activity summary for a time window
-- `analytics` groups analytics subcommands (`digest`, `quiet`, `trends`)
-- `completion` prints shell completion for `bash` or `zsh`
+`purge` previews its effect unless `--force` is supplied:
 
-## Retention Purge
-
-`purge` removes archived messages before an exclusive cutoff. Choose either an
-absolute UTC date/timestamp or a relative age. Threads are retained or removed
-as a unit using the parent message timestamp:
-
-```bash
-# Preview messages older than 90 days.
+```sh
 slacrawl purge --older-than 90d
-
-# Preview one workspace before January 1, 2026 UTC.
-slacrawl purge --workspace T01234567 --before 2026-01-01
-
-# Delete matching rows and unreferenced cached media.
-slacrawl purge --older-than 90d --force
-
-# Also compact the SQLite file after deletion.
 slacrawl purge --older-than 90d --force --vacuum
 ```
 
-Preview is the default. `--force` deletes matching messages plus their event
-history, file metadata, mentions, embedding jobs, and FTS entries in one SQLite
-transaction. Workspace/channel/user metadata and sync cursors remain so later
-API and MCP syncs can continue incrementally without crossing the retained
-cutoff. Cached media no longer referenced by another message is removed after
-the database commit; pass `--keep-media` to retain it. Explicit full syncs,
-older `--since` values, desktop ingestion, and imports can restore older data.
-
-SQLite normally reuses freed pages without shrinking the database file. Add
-`--vacuum` when you need to reclaim filesystem space immediately. If git-backed
-sharing is enabled, publish a fresh snapshot after purging; importing an older
-snapshot can restore records that were removed locally.
-
-## Importing a Slack Export
-
-```bash
-slacrawl import ./my-export.zip --workspace T01234567
-slacrawl import ./extracted-export/ --workspace T01234567 --dry-run
-```
-
-Set `SLACK_USER_TOKEN` with `im:history`, `mpim:history`, `im:read`, and `mpim:read` scopes to include DMs and MPIMs in API sync.
-
-## Analytics
-
-- `analytics digest [--since 7d] [--workspace X] [--channel C]`
-- `analytics quiet [--since 30d] [--workspace X]`
-- `analytics trends [--weeks 8] [--workspace X] [--channel C]`
-
-Planned follow-ups: `health`, `response-times`, `threads-stale`, `activity`.
-
-## Output Modes
-
-The CLI supports three output modes:
-
-- `--format text` for the styled default terminal view
-- `--format json` or `--json` for machine-readable output
-- `--format log` for line-oriented automation-friendly output
-
-Color is disabled automatically when stdout is not a TTY. You can also force plain text with `--no-color` or `NO_COLOR=1`.
-
-## Make Targets
-
-```bash
-make help
-make build
-make test
-make check
-make run ARGS="status"
-make generate-sqlc
-make completion
-```
-
-Completion files are generated into `dist/completions/`.
-
-## Shell Completion
-
-Generate completion scripts with:
-
-```bash
-go run ./cmd/slacrawl completion bash
-go run ./cmd/slacrawl completion zsh
-```
-
-Or use the Makefile:
-
-```bash
-make completion
-```
-
-Typical install locations:
-
-```bash
-# bash
-go run ./cmd/slacrawl completion bash > /usr/local/etc/bash_completion.d/slacrawl
-
-# zsh
-mkdir -p "${HOME}/.zsh/completions"
-go run ./cmd/slacrawl completion zsh > "${HOME}/.zsh/completions/_slacrawl"
-```
-
-## Default Paths
-
-- config: `~/.slacrawl/config.toml`
-- database: `~/.slacrawl/slacrawl.db`
-- cache: `~/.slacrawl/cache`
-- logs: `~/.slacrawl/logs`
-
-## Configuration
-
-For one workspace, keep using the top-level `[slack.bot]`, `[slack.app]`, and `[slack.user]` token config.
-
-For multiple API workspaces or multiple live wiretap/tail sessions, add `[[workspaces]]` entries with per-workspace token env vars:
-
-```toml
-workspace_id = "T01234567"
-
-[[workspaces]]
-id = "T01234567"
-default = true
-
-[[workspaces]]
-id = "T08976543"
-bot_token_env = "SLACK_CLIENT_BOT_TOKEN"
-app_token_env = "SLACK_CLIENT_APP_TOKEN"
-user_token_env = "SLACK_CLIENT_USER_TOKEN"
-```
-
-By default, each workspace entry automatically looks for `SLACK_<WORKSPACE_ID>_BOT_TOKEN`, `SLACK_<WORKSPACE_ID>_APP_TOKEN`, and `SLACK_<WORKSPACE_ID>_USER_TOKEN`, so you only need the `id` in the common case. Top-level `enabled` flags still apply globally, which avoids repeating `enabled = true` per workspace.
-
-Without `--workspace`, `sync --source bot` and `tail` fan out across every configured workspace entry. Read commands such as `search`, `messages`, `mentions`, `users`, and `channels` accept `--workspace` to scope the shared local database when needed.
-
-File media downloads are opt-in. SQLite stores file metadata and cache pointers; bytes live under `cache_dir/media`.
-
-```toml
-[sync]
-file_media = false
-max_file_bytes = 104857600
-```
-
-Use `sync --with-media` or `files fetch` when you want to populate the local cache.
-
-```bash
-go run ./cmd/slacrawl files --filename runbook
-go run ./cmd/slacrawl files fetch --missing --max-bytes 104857600
-go run ./cmd/slacrawl sync --source bot --latest-only --with-media
-```
-
-## External Archive Providers
-
-An external provider is a trusted local executable that streams workspace,
-channel, user, and message records into the normal SQLite archive. Configure it
-with a unique name, then select it explicitly with `provider:<name>`:
-
-```toml
-[[providers]]
-name = "archive"
-command = "/usr/local/bin/archive-provider"
-args = ["provide", "--format", "jsonl"]
-env_allowlist = ["ARCHIVE_DB_PATH"]
-source_rank = 5
-batch_size = 1000
-```
-
-```bash
-slacrawl sync --source provider:archive --workspace T01234567
-slacrawl sync --source provider:archive --workspace T01234567 --latest-only
-slacrawl sync --source provider:archive --workspace T01234567 --full
-slacrawl sync --source provider:archive --workspace T01234567 --limit 100
-```
-
-`command` must be an absolute path; `~` and `~/...` are expanded before
-validation. The
-configured `args` are passed directly without a shell. Only a minimal runtime
-environment and variables named by `env_allowlist` reach the process, so put
-secret values in the environment rather than in TOML. `source_rank` must be
-greater than `2`; lower numeric ranks win, keeping higher-priority native data
-authoritative. Equal ranks may replace, so use a larger number for a
-lower-priority provider.
-
-`batch_size` defaults to `1000`, must be between `1` and `100000`, and is sent to
-the provider as a preferred upstream batch size.
-
-`slacrawl` writes one JSON request line to provider stdin. The request identifies
-protocol `slacrawl-provider-v1` and forwards the workspace, `since`, `full`,
-`latest_only`, channel filters, opaque saved checkpoint, batch size, and optional
-validation limit. Provider stdout must be JSONL: one `hello` record, zero or more
-`workspace`, `channel`, `user`, `message`, or `checkpoint` records, then one
-`done` record. A successful run must emit `done` and exit zero. `slacrawl`
-validates workspace ownership and the message limit, builds normalized search
-text, updates FTS and mentions, and does not replace a higher-priority canonical
-message.
-
-Checkpoints are isolated by invocation scope. A normal incremental run reuses
-the workspace checkpoint; filters, `--since`, `--full`, `--latest-only`, and
-`--limit` use separate checkpoints so bounded or partial runs cannot advance the
-normal cursor. A completed unbounded full run promotes its last checkpoint to
-the matching incremental scope. Providers should emit a checkpoint only after
-the records it covers and must honor the forwarded filters; `slacrawl` cannot
-infer provider-specific filtering.
-
-Treat provider executables as part of the archive's trust boundary. They can
-read allowlisted environment values, run with the caller's OS permissions, and
-emit private Slack data. See
-[Configuration](./docs/configuration.md#external-archive-providers) for the
-complete request and response contract.
-
-## Git Archive Sharing
-
-Use git-share mode when one machine has Slack credentials and should publish snapshots, while other machines only need a local read-only archive.
-
-Typical split:
-
-- publisher machine: runs `sync`, then `publish --push`
-- subscriber machine: runs `subscribe`, then reads from local SQLite with optional read-time auto-refresh
-
-Git-backed archive sharing is configured under `[share]`:
-
-```toml
-[share]
-remote = "git@github.com:your-org/private-slacrawl-archive.git"
-repo_path = "~/.slacrawl/share"
-branch = "main"
-auto_update = true
-stale_after = "15m"
-```
-
-Behavior:
-
-- `publish` writes gzipped JSONL shards plus `manifest.json` into `repo_path`
-- `publish --tag <name>` attaches an immutable lightweight tag to the committed snapshot
-- cached non-DM/non-private file media is included by default; use `--no-media` to omit it
-- `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
-- pass `--db` to `subscribe` when you want the reader archive to land in a non-default SQLite path
-- `update` pulls and merges only when the manifest changes; rows absent from a snapshot remain local
-- `update --restore` explicitly replaces snapshot tables so the database exactly matches the latest snapshot
-- `update --restore --ref <tag-or-commit>` exactly restores that historical snapshot without checking it out
-- `status`, `search`, `messages`, `mentions`, `sql`, `users`, `channels`, and `report` auto-refresh stale git snapshots before reading when `auto_update = true`
-- `sync --source bot` and `sync --source all` warm from the git snapshot before hitting Slack when a share remote is configured
-- `status` and `doctor` surface the current git-share repo, last import time, and whether the local snapshot is stale
-
-### `publish`
-
-`publish` is the writer-side command. It exports the current SQLite archive into the git share repo and can commit/push it in one step.
-
-```bash
-go run ./cmd/slacrawl publish --remote /path/to/private/slacrawl-archive.git --push
-go run ./cmd/slacrawl publish --repo ~/.slacrawl/share --branch main --message "archive: daily refresh" --push
-go run ./cmd/slacrawl publish --tag backup-2026-06-19 --push
-```
-
-Relevant flags:
-
-- `--repo` chooses the local git working repo path
-- `--remote` sets or overrides the git remote used for publish
-- `--branch` chooses the target branch
-- `--message` sets the git commit message
-- `--tag` creates an immutable snapshot tag and requires a commit
-- `--no-commit` exports files without creating a git commit
-- `--push` pushes the new commit to `origin`
-- `--no-media` omits cached media files from the snapshot
-
-### `subscribe`
-
-`subscribe` is the reader-side setup command. It clones the git archive, writes a share-reader config, disables live Slack sources for that config, and imports the snapshot into SQLite.
-
-```bash
-go run ./cmd/slacrawl subscribe --repo ~/.slacrawl/share --db ~/.slacrawl/slacrawl.db /path/to/private/slacrawl-archive.git
-go run ./cmd/slacrawl subscribe --remote git@github.com:your-org/private-slacrawl-archive.git --stale-after 30m
-go run ./cmd/slacrawl subscribe --repo ~/.slacrawl/share --no-import --no-auto-update /path/to/private/slacrawl-archive.git
-```
-
-Relevant flags:
-
-- `--repo` chooses the local clone path
-- `--db` chooses the SQLite file used by the reader
-- `--branch` chooses which branch to track
-- `--remote` stores the remote in config without requiring it as a positional arg
-- `--stale-after` controls when read-time refresh considers the local snapshot stale
-- `--no-auto-update` disables read-time refresh for search/status/report-style commands
-- `--no-import` skips the initial snapshot import
-- `--no-media` skips restoring cached media files
-
-### `update`
-
-`update` is the explicit reader-side refresh. Use it when you want to pull and safely merge on demand instead of waiting for automatic stale checks. Routine merges preserve destination-only rows, local sync state and embedding work, event history, and newer message, user, or channel tombstones. A row missing from a snapshot is not treated as deleted.
-
-```bash
-go run ./cmd/slacrawl update
-go run ./cmd/slacrawl update --repo ~/.slacrawl/share --branch main
-go run ./cmd/slacrawl update --restore
-go run ./cmd/slacrawl update --restore --ref backup-2026-06-19
-```
-
-`--restore` is the explicit exact-replacement mode. `--ref` requires it and accepts a tag, branch, or commit. Historical restores read Git objects directly and leave the share repo's current branch and working tree unchanged.
-
-### `report`
-
-`report` is the fastest human-readable archive summary and is especially handy in git-share mode because it shows the current archive footprint plus share freshness.
-
-```bash
-go run ./cmd/slacrawl report
-```
-
-Typical publish / subscribe flow:
-
-```bash
-# publisher
-go run ./cmd/slacrawl sync --source bot --latest-only
-go run ./cmd/slacrawl publish --remote /path/to/private/slacrawl-archive.git --push
-
-# subscriber
-go run ./cmd/slacrawl subscribe --repo ~/.slacrawl/share --db ~/.slacrawl/slacrawl.db /path/to/private/slacrawl-archive.git
-go run ./cmd/slacrawl search incident
-```
-
-The starter config lives in [`config.example.toml`](./config.example.toml). By default it points to these environment variables:
-
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
-- `SLACK_USER_TOKEN`
-
-Desktop discovery is enabled by default and checks the supported Slack Desktop
-locations for your platform:
-
-```text
-# macOS
-~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack
-
-# Linux
-${XDG_CONFIG_HOME}/Slack
-~/.config/Slack
-```
-
-Desktop config notes:
-
-- set `[slack.desktop].enabled = false` to disable desktop ingestion
-- leave `[slack.desktop].path = ""` to auto-detect the macOS or Linux Slack path
-- set a custom absolute path if Slack Desktop data lives elsewhere
-- set `[slack.bot]`, `[slack.app]`, or `[slack.user]` `enabled = false` to ignore that token source entirely
-
-Separate visibility profiles should use separate config files:
-
-```toml
-# ~/.slacrawl/company.toml
-db_path = "~/.slacrawl/company.db"
-
-[share]
-remote = "git@github.com:your-org/company-slacrawl-archive.git"
-repo_path = "~/.slacrawl/company-share"
-```
-
-```toml
-# ~/.slacrawl/personal.toml
-db_path = "~/.slacrawl/personal.db"
-
-[share]
-remote = "git@github.com:your-user/personal-slacrawl-archive.git"
-repo_path = "~/.slacrawl/personal-share"
-```
-
-## Typical Workflow
-
-```bash
-go run ./cmd/slacrawl init
-go run ./cmd/slacrawl sync --source bot
-go run ./cmd/slacrawl status
-go run ./cmd/slacrawl report
-go run ./cmd/slacrawl digest --since 7d
-go run ./cmd/slacrawl channels --limit 200
-go run ./cmd/slacrawl users --limit 200
-go run ./cmd/slacrawl messages --channel C12345678 --limit 20
-go run ./cmd/slacrawl mentions --limit 20
-go run ./cmd/slacrawl sql 'select channel_id, count(*) as messages from messages group by channel_id order by messages desc limit 10;'
-```
-
-## Notes on Coverage
-
-- Full historical thread reply coverage in public and private channels depends on providing a user token.
-- `tail` requires an app token because it uses Socket Mode.
-- SQLite FTS5 is the built-in full-text index that powers fast local text search without an external search server.
-- Indexed text is sanitized before it reaches FTS, so malformed UTF-8, zero-width junk, and odd whitespace do not poison search.
-- Desktop-local support is broader than simple discovery, but still not a full write-back or export-import path.
+Threads are retained or removed as a unit based on the parent timestamp. See [Retention purge](docs/retention.md) for workspace scoping, message-event compaction, cached media, and git-backed archive behavior.
+
+## Commands
+
+| Area | Commands |
+| --- | --- |
+| Setup and health | `init`, `doctor`, `status`, `check-update` |
+| Ingest and refresh | `sync`, `import`, `tail`, `watch`, `files` |
+| Browse and query | `search`, `tui`, `messages`, `mentions`, `users`, `channels`, `sql` |
+| Reports | `report`, `digest`, `analytics` |
+| Git snapshots | `publish`, `subscribe`, `update` |
+| Automation | `metadata`, `completion` |
+
+The [command reference](docs/commands.md) describes every command, output modes, shell completion, and common workflows. `slacrawl <command> --help` is the authoritative flag reference.
 
 ## Development
 
-```bash
-go test ./...
-go build ./cmd/slacrawl
+```sh
+make build
+make test
+make check
 ```
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution workflow and [`SPEC.md`](./SPEC.md) for the implementation contract.
+`make check` runs the local CI gates, including formatting, vet, vulnerability and dead-code checks, tests, CLI smoke tests, and a release snapshot. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing behavior and [`SPEC.md`](SPEC.md) for the implementation contract.
 
-Deep-dive docs:
+## License
 
-- [`docs/configuration.md`](./docs/configuration.md)
-- [`docs/desktop-mode.md`](./docs/desktop-mode.md)
-- [`docs/retention.md`](./docs/retention.md)
-
----
-
-Built by <a href="https://github.com/vincentkoc">Vincent Koc</a> · <a href="./LICENSE">MIT</a>
+MIT. Built by [Vincent Koc](https://github.com/vincentkoc).
