@@ -12,7 +12,7 @@
 
 ### Maintenance
 
-- Updated CrawlKit to 0.14.5 and refreshed go-colorful to 1.4.1.
+- Updated CrawlKit to 0.14.5, SQLite to 1.56.0, and go-colorful to 1.4.1.
 
 ## v0.8.0 - 2026-08-02
 
