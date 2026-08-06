@@ -108,6 +108,13 @@ func (a *App) runAnalyticsTrends(ctx context.Context, configPath string, args []
 	if *weeks < 0 {
 		return errors.New("--weeks must be zero or greater")
 	}
+	// Every channel row materializes one WeeklyCount per week, so an absurd
+	// count is an OOM, not a long report. A decade of weekly buckets is more
+	// than any digest needs.
+	const maxTrendWeeks = 520
+	if *weeks > maxTrendWeeks {
+		return fmt.Errorf("--weeks must be %d or fewer", maxTrendWeeks)
+	}
 	outputFormat, err := resolveOutputFormat(*formatFlag, *jsonOut)
 	if err != nil {
 		return err

@@ -1361,3 +1361,22 @@ func cliSlackForm(r *http.Request) url.Values {
 	_ = r.ParseForm()
 	return r.Form
 }
+
+func TestNormalizeSinceTimestamp(t *testing.T) {
+	// The --since contract is "slack ts or RFC3339", but only the MCP backend
+	// normalized RFC3339; the API path passed it raw to Slack's oldest param.
+	normalized, err := normalizeSinceTimestamp("2026-08-01T00:00:00Z")
+	require.NoError(t, err)
+	require.Equal(t, "1785542400.000000", normalized)
+
+	normalized, err = normalizeSinceTimestamp("1710000000.000100")
+	require.NoError(t, err)
+	require.Equal(t, "1710000000.000100", normalized)
+
+	normalized, err = normalizeSinceTimestamp("  ")
+	require.NoError(t, err)
+	require.Empty(t, normalized)
+
+	_, err = normalizeSinceTimestamp("7d")
+	require.ErrorContains(t, err, "--since must be a slack timestamp or an RFC3339 time")
+}

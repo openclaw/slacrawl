@@ -17,6 +17,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/importer"
 	"github.com/openclaw/slacrawl/internal/search"
+	"github.com/openclaw/slacrawl/internal/slackapi"
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
@@ -160,7 +161,7 @@ func runImportExecution(ctx context.Context, st *store.Store, ex *importer.Expor
 			return ImportReport{}, nil, err
 		}
 		for _, user := range users {
-			if err := st.UpsertUser(ctx, toStoreUser(workspaceID, user, now)); err != nil {
+			if err := st.UpsertUser(ctx, slackapi.ToStoreUser(workspaceID, user, now)); err != nil {
 				return ImportReport{}, nil, err
 			}
 		}
@@ -314,21 +315,6 @@ where workspace_id = ? and channel_id = ? and ts = ?
 		return 0, "", false, err
 	}
 	return rank, source, true, nil
-}
-
-func toStoreUser(workspaceID string, user slack.User, now time.Time) store.User {
-	return store.User{
-		ID:          user.ID,
-		WorkspaceID: workspaceID,
-		Name:        user.Name,
-		RealName:    user.RealName,
-		DisplayName: user.Profile.DisplayName,
-		Title:       user.Profile.Title,
-		IsBot:       user.IsBot,
-		IsDeleted:   user.Deleted,
-		RawJSON:     store.MarshalRaw(user),
-		UpdatedAt:   now,
-	}
 }
 
 func toStoreChannel(workspaceID string, channel importer.ChannelInfo, now time.Time) store.Channel {

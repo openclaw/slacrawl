@@ -547,6 +547,10 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	}
 	workspaceSet := flagWasSet(fs, "workspace")
 	resolvedWorkspaceID := resolveSyncWorkspaceID(*workspaceID, workspaceSet)
+	normalizedSince, err := normalizeSinceTimestamp(*since)
+	if err != nil {
+		return err
+	}
 	runOptions := syncer.Options{
 		Source:       resolvedSource,
 		WorkspaceID:  resolvedWorkspaceID,
@@ -556,7 +560,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 			cfg.Sync.ExcludeChannels,
 			csv(*excludeChannels),
 		),
-		Since:       *since,
+		Since:       normalizedSince,
 		Full:        *full,
 		LatestOnly:  *latestOnly,
 		Limit:       *limit,
@@ -1608,6 +1612,24 @@ func mergeStringSlices(values ...[]string) []string {
 	return out
 }
 
+// normalizeSinceTimestamp converts the documented "slack ts or RFC3339" flag
+// contract into a slack ts for every backend. Only the MCP path used to
+// normalize RFC3339, so the API and desktop paths silently passed the raw
+// string through to Slack's `oldest` parameter.
+func normalizeSinceTimestamp(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return value, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return fmt.Sprintf("%d.%06d", parsed.Unix(), parsed.Nanosecond()/1000), nil
+	}
+	return "", fmt.Errorf("--since must be a slack timestamp or an RFC3339 time, got %q", value)
+}
+
 func flagWasSet(fs *flag.FlagSet, name string) bool {
 	wasSet := false
 	fs.Visit(func(candidate *flag.Flag) {
@@ -1785,8 +1807,17 @@ func (a *App) runTailTargets(ctx context.Context, st *store.Store, cfg config.Co
 	case err := <-errCh:
 		return err
 	case <-done:
-		return ctx.Err()
 	case <-ctx.Done():
+		<-done
+	}
+	// A failing tail sends its error and then cancels the others, so by the
+	// time done closes, errCh and ctx.Done() are both ready and a bare select
+	// would pick randomly — returning "context canceled" instead of the real
+	// error for a measurable fraction of failures. Drain the error first.
+	select {
+	case err := <-errCh:
+		return err
+	default:
 		return ctx.Err()
 	}
 }
