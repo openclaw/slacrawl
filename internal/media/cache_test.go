@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -66,6 +68,56 @@ func TestFetchSkipsTooLargeFile(t *testing.T) {
 	rows, err := st.Files(ctx, store.FileListOptions{})
 	require.NoError(t, err)
 	require.Equal(t, "too_large", rows[0].FetchStatus)
+}
+
+func TestFetchStoresFileWhenMaxBytesIsUnbounded(t *testing.T) {
+	ctx := context.Background()
+	body := []byte("file bytes")
+	st := seedFileStore(t, "https://files.example/file.png")
+	defer func() { require.NoError(t, st.Close()) }()
+
+	// math.MaxInt64 is the natural way to ask for "no cap". Incrementing it for
+	// the over-limit probe wrapped negative, so io.LimitReader returned EOF
+	// immediately and every attachment was recorded as a fetched empty file.
+	stats, err := Fetch(ctx, st, FetchOptions{
+		CacheDir: t.TempDir(),
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return testHTTPResponse(r, body, int64(len(body))), nil
+		})},
+		MaxBytes:     math.MaxInt64,
+		StatusUpdate: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Fetched)
+
+	rows, err := st.Files(ctx, store.FileListOptions{})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "fetched", rows[0].FetchStatus)
+	require.Equal(t, int64(len(body)), rows[0].ContentSize, "the body must not be truncated to zero")
+	sum := sha256.Sum256(body)
+	require.Equal(t, hex.EncodeToString(sum[:]), rows[0].ContentSHA256)
+}
+
+func TestReadLimitDoesNotOverflow(t *testing.T) {
+	require.Equal(t, int64(5), readLimit(4))
+	require.Equal(t, int64(math.MaxInt64), readLimit(math.MaxInt64))
+	require.Positive(t, readLimit(math.MaxInt64))
+}
+
+func TestFileMediaPathKeepsExtensionForNonLatinNames(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	// safeFilename strips non-ASCII runes, so "写真.png" survived only as "png"
+	// and the cached file lost the extension anything content-types by.
+	require.Equal(t, ".png", filepath.Ext(fileMediaPath(hash, "写真.png", "image/png")))
+	require.Equal(t, ".pdf", filepath.Ext(fileMediaPath(hash, "отчёт.pdf", "application/pdf")))
+	require.Equal(t, ".png", filepath.Ext(fileMediaPath(hash, "photo.png", "image/png")), "ASCII names keep working")
+}
+
+func TestClampErrorKeepsValidUTF8(t *testing.T) {
+	clamped := clampError(strings.Repeat("é", 400))
+	require.LessOrEqual(t, len(clamped), 512)
+	require.True(t, utf8.ValidString(clamped), "a clamped error must not be cut mid-rune")
 }
 
 func TestFetchRefusesTokenOnNonSlackURL(t *testing.T) {

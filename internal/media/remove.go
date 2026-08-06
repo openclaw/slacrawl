@@ -39,18 +39,15 @@ func cachedRegularFile(cacheDir, mediaPath string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	root := filepath.Clean(filepath.Join(cacheDir, cacheSubdir))
-	rootInfo, err := os.Lstat(root)
+	relative, err := filepath.Rel(filepath.Clean(filepath.Join(cacheDir, cacheSubdir)), target)
 	if err != nil {
 		return "", "", err
 	}
-	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
-		return "", "", fmt.Errorf("unsafe media root %q", root)
-	}
-	relative, err := filepath.Rel(root, target)
+	root, err := ResolveRoot(filepath.Clean(filepath.Join(cacheDir, cacheSubdir)))
 	if err != nil {
 		return "", "", err
 	}
+	target = filepath.Join(root, relative)
 	current := root
 	parts := splitPath(relative)
 	for _, part := range parts[:len(parts)-1] {

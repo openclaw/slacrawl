@@ -1051,9 +1051,12 @@ order by f.media_path, f.channel_id, f.ts, f.file_id
 			return nil, err
 		}
 		info, err := regularMediaFile(filepath.Join(opts.CacheDir, "media"), source, mediaPath)
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errUnsafeMediaPath) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		// An unsafe path is a broken cache, not an absent file. Skipping it
+		// silently let publish emit a manifest claiming the archive has no
+		// media at all, which wipes attachments for every subscriber.
 		if err != nil {
 			return nil, fmt.Errorf("stat media %s: %w", mediaPath, err)
 		}
@@ -1278,11 +1281,14 @@ where channel_id = ? and ts = ? and file_id = ?
 select coalesce(media_path, '') from message_files
 where channel_id = ? and ts = ? and file_id = ?
 `, channelID, ts, fileID).Scan(&mediaPath)
-		if errors.Is(err, sql.ErrNoRows) || mediaPath == "" {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		if err != nil {
 			return err
+		}
+		if mediaPath == "" {
+			continue
 		}
 		if _, ok := manifested[mediaPath]; ok {
 			continue
@@ -1352,10 +1358,16 @@ func regularMediaFile(root, path, label string) (os.FileInfo, error) {
 	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return nil, fmt.Errorf("%w: invalid media path %q", errUnsafeMediaPath, label)
 	}
-	current := root
-	if info, err := os.Lstat(current); err == nil && !info.IsDir() {
-		return nil, fmt.Errorf("%w: media root for %s is not a directory", errUnsafeMediaPath, label)
+	// The root itself may legitimately be a symlink — a cache or repo parked on
+	// another volume — and the fetch path writes through one, so resolve it
+	// once rather than rejecting it. Symlinked components inside the tree stay
+	// fatal below.
+	resolvedRoot, err := media.ResolveRoot(root)
+	if err != nil {
+		return nil, err
 	}
+	path = filepath.Join(resolvedRoot, rel)
+	current := resolvedRoot
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)

@@ -368,7 +368,13 @@ func TestPurgeCommandReportsPostCommitCleanupFailure(t *testing.T) {
 	cfg.CacheDir = cacheDir
 	require.NoError(t, cfg.Save(configPath))
 	require.NoError(t, os.MkdirAll(cacheDir, 0o755))
-	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cacheDir, "media")))
+	// A media root symlinked to a directory is a supported setup, so it no
+	// longer fails cleanup. Point it at a regular file instead: that is a
+	// genuinely broken cache, and the purge must still report the failure
+	// after the database transaction has already committed.
+	brokenRoot := filepath.Join(dir, "not-a-directory")
+	require.NoError(t, os.WriteFile(brokenRoot, []byte("not a media root"), 0o600))
+	require.NoError(t, os.Symlink(brokenRoot, filepath.Join(cacheDir, "media")))
 
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	oldTime := now.Add(-120 * 24 * time.Hour)
@@ -389,6 +395,46 @@ func TestPurgeCommandReportsPostCommitCleanupFailure(t *testing.T) {
 	var response purgeResponse
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &response))
 	require.False(t, response.DryRun)
+	require.Equal(t, int64(1), response.Messages)
+	require.Zero(t, purgeTestMessageCount(t, dbPath))
+}
+
+func TestPurgeCommandSucceedsWithSymlinkedMediaRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires additional privileges on Windows")
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "slacrawl.db")
+	cacheDir := filepath.Join(dir, "cache")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.CacheDir = cacheDir
+	require.NoError(t, cfg.Save(configPath))
+	require.NoError(t, os.MkdirAll(cacheDir, 0o755))
+	// Attachment caches are routinely parked on another volume. files fetch
+	// has always written through such a symlink, but every read path rejected
+	// it, so purge failed permanently on a cache slacrawl itself filled.
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cacheDir, "media")))
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	oldTime := now.Add(-120 * 24 * time.Hour)
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, st.UpsertMessage(context.Background(), store.Message{
+		WorkspaceID: "T1", ChannelID: "C1", TS: purgeTestSlackTS(oldTime),
+		Text: "old", NormalizedText: "old", SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: oldTime,
+	}, nil))
+	require.NoError(t, st.Close())
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout, now: func() time.Time { return now }}
+	require.NoError(t, app.Run(context.Background(), []string{
+		"--config", configPath, "--json", "purge", "--older-than", "90d", "--force",
+	}), "a symlinked media root must not fail the purge")
+
+	var response purgeResponse
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &response))
 	require.Equal(t, int64(1), response.Messages)
 	require.Zero(t, purgeTestMessageCount(t, dbPath))
 }
