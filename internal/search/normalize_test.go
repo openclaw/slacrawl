@@ -271,9 +271,19 @@ func TestExtractMentionsSanitizesNoisyText(t *testing.T) {
 	require.Equal(t, "eng", mentions[1].DisplayText)
 }
 
-func TestExtractMentionsUnescapesSlackEntities(t *testing.T) {
-	mentions := ExtractMentions("hello &lt;@U123|alice&gt; and &lt;#C123|eng&gt;")
+func TestExtractMentionsIgnoresEscapedLiterals(t *testing.T) {
+	// Slack escapes literal <, >, & in message bodies and never escapes real
+	// mention tokens, so &lt;@U123&gt; is a user talking *about* mention
+	// syntax, not a mention. Unescaping before matching used to record these
+	// as real mentions. Mirrors normalizeMessageText, which parses tokens
+	// before entity decoding for the same reason.
+	mentions := ExtractMentions("how do I write &lt;@U123|alice&gt; or &lt;#C123|eng&gt; in a message?")
+	require.Empty(t, mentions)
+}
+
+func TestExtractMentionsUnescapesDisplayLabels(t *testing.T) {
+	mentions := ExtractMentions("ping <@U123|R&amp;D lead> in <#C123|r&amp;d>")
 	require.Len(t, mentions, 2)
-	require.Equal(t, "alice", mentions[0].DisplayText)
-	require.Equal(t, "eng", mentions[1].DisplayText)
+	require.Equal(t, "R&D lead", mentions[0].DisplayText)
+	require.Equal(t, "r&d", mentions[1].DisplayText)
 }
