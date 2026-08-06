@@ -30,7 +30,7 @@ func TestRemoveCachedFile(t *testing.T) {
 
 func TestValidateCachedFileRequiresCacheDir(t *testing.T) {
 	err := ValidateCachedFile("", "files/aa/file.txt")
-	require.ErrorContains(t, err, "cache dir is required")
+	require.ErrorContains(t, err, "media base dir is required")
 }
 
 func TestRemoveCachedFileRejectsSymlinkedParent(t *testing.T) {

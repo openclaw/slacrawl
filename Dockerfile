@@ -9,7 +9,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/slacrawl ./cmd/slacrawl
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/openclaw/slacrawl/internal/cli.version=${VERSION}" -o /out/slacrawl ./cmd/slacrawl
 
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates git nodejs npm openssh-client tzdata \

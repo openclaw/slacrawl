@@ -262,7 +262,7 @@ func fetchURL(ctx context.Context, opts FetchOptions, file store.FileRow, url st
 // incrementing it wraps negative, which makes io.LimitReader return EOF at once
 // and every attachment look like a successfully fetched empty file.
 func readLimit(maxBytes int64) int64 {
-	if maxBytes >= math.MaxInt64 {
+	if maxBytes == math.MaxInt64 {
 		return math.MaxInt64
 	}
 	return maxBytes + 1
@@ -436,27 +436,25 @@ func ResolveRoot(root string) (string, error) {
 }
 
 func LocalPath(cacheDir, mediaPath string) (string, error) {
-	root := filepath.Clean(filepath.Join(cacheDir, cacheSubdir))
-	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(mediaPath)))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid media path %q", mediaPath)
-	}
-	full := filepath.Clean(filepath.Join(root, clean))
-	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("media path escapes cache: %q", mediaPath)
-	}
-	return full, nil
+	return containedJoin(cacheDir, mediaPath, "cache")
 }
 
 func RepoPath(repoPath, mediaPath string) (string, error) {
-	root := filepath.Clean(filepath.Join(repoPath, cacheSubdir))
+	return containedJoin(repoPath, mediaPath, "repo")
+}
+
+// containedJoin is the single lexical-containment check for media paths: the
+// joined result must stay under <base>/media. Both the cache and the share
+// repo enforce the same invariant, so they share one implementation.
+func containedJoin(base, mediaPath, label string) (string, error) {
+	root := filepath.Clean(filepath.Join(base, cacheSubdir))
 	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(mediaPath)))
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("invalid media path %q", mediaPath)
 	}
 	full := filepath.Clean(filepath.Join(root, clean))
 	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("media path escapes repo: %q", mediaPath)
+		return "", fmt.Errorf("media path escapes %s: %q", label, mediaPath)
 	}
 	return full, nil
 }
