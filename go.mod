@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/alecthomas/kong v1.16.0
 	github.com/golang/snappy v1.0.0
+	github.com/mattn/go-runewidth v0.0.27
 	github.com/openclaw/crawlkit v0.14.5
 	github.com/slack-go/slack v0.27.0
 	github.com/stretchr/testify v1.11.1
@@ -32,7 +33,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
