@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	slackExportSourceName = "slack-export"
-	slackExportSourceRank = 2
+	slackExportSourceName      = "slack-export"
+	slackExportSourceRank      = 2
+	importMessageBatchSize     = 500
+	importCollisionLookupChunk = 499
 )
 
 type ImportReport struct {
@@ -175,6 +177,7 @@ func runImportExecution(ctx context.Context, st *store.Store, ex *importer.Expor
 	progress := make([]importChannelProgress, 0, len(allChannels))
 	for _, channel := range allChannels {
 		row := importChannelProgress{ID: channel.ID, Name: channel.Name, Kind: channel.Kind}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, importMessageBatchSize)}
 		candidates := []string{channel.Name}
 		if channel.ID != "" && channel.ID != channel.Name {
 			candidates = append(candidates, channel.ID)
@@ -207,12 +210,21 @@ func runImportExecution(ctx context.Context, st *store.Store, ex *importer.Expor
 				if dryRun {
 					continue
 				}
-				if err := st.UpsertMessage(ctx, message, mentions); err != nil {
-					return ImportReport{}, nil, err
+				batch.Messages = append(batch.Messages, store.MessageWrite{Message: message, Mentions: mentions})
+				if len(batch.Messages) == importMessageBatchSize {
+					if _, err := st.ApplyWriteBatch(ctx, batch); err != nil {
+						return ImportReport{}, nil, err
+					}
+					batch.Messages = batch.Messages[:0]
 				}
 			}
 			if channelRows > 0 {
 				break
+			}
+		}
+		if len(batch.Messages) > 0 {
+			if _, err := st.ApplyWriteBatch(ctx, batch); err != nil {
+				return ImportReport{}, nil, err
 			}
 		}
 		progress = append(progress, row)
@@ -229,6 +241,8 @@ func validateImportMessageKeys(ctx context.Context, st *store.Store, ex *importe
 		}
 		for _, candidate := range candidates {
 			channelRows := 0
+			timestamps := make([]string, 0)
+			seenTimestamps := map[string]struct{}{}
 			for env, iterErr := range ex.Messages(candidate) {
 				if iterErr != nil {
 					return iterErr
@@ -238,12 +252,58 @@ func validateImportMessageKeys(ctx context.Context, st *store.Store, ex *importe
 				if ts == "" {
 					continue
 				}
-				if err := rejectCrossWorkspaceMessageCollision(ctx, st, workspaceID, channel.ID, ts); err != nil {
-					return err
+				if _, seen := seenTimestamps[ts]; !seen {
+					seenTimestamps[ts] = struct{}{}
+					timestamps = append(timestamps, ts)
 				}
+			}
+			if err := rejectCrossWorkspaceMessageCollisions(ctx, st, workspaceID, channel.ID, timestamps); err != nil {
+				return err
 			}
 			if channelRows > 0 {
 				break
+			}
+		}
+	}
+	return nil
+}
+
+func rejectCrossWorkspaceMessageCollisions(ctx context.Context, st *store.Store, workspaceID, channelID string, timestamps []string) error {
+	for start := 0; start < len(timestamps); start += importCollisionLookupChunk {
+		end := min(start+importCollisionLookupChunk, len(timestamps))
+		chunk := timestamps[start:end]
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, channelID)
+		for _, ts := range chunk {
+			args = append(args, ts)
+		}
+		query := `
+select ts, workspace_id
+from messages
+where channel_id = ? and ts in (` + strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",") + `)
+`
+		rows, err := st.DB().QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		existing := make(map[string]string, len(chunk))
+		for rows.Next() {
+			var ts, existingWorkspaceID string
+			if err := rows.Scan(&ts, &existingWorkspaceID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			existing[ts] = existingWorkspaceID
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, ts := range chunk {
+			if existingWorkspaceID, ok := existing[ts]; ok && existingWorkspaceID != workspaceID {
+				return fmt.Errorf("message %s/%s already exists in workspace %s; cross-workspace channel/timestamp collisions are not supported", channelID, ts, existingWorkspaceID)
 			}
 		}
 	}

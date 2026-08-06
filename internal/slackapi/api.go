@@ -518,28 +518,41 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
+		threadTSs := make([]string, 0)
+		queuedThreads := map[string]struct{}{}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
 				msg.Channel = channel.ID
 			}
-			stored := toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now)
-			var err error
-			if enforceRetention {
-				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
-			} else {
-				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
-			}
-			if err != nil {
-				if !c.skipMessageCollision(err, workspaceID, channel.ID, msg.Timestamp) {
-					return err
-				}
-				continue
-			}
+			batch.Messages = append(batch.Messages, store.MessageWrite{
+				Message:                toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now),
+				Mentions:               toStoreMentions(msg),
+				EnforceRetention:       enforceRetention,
+				SkipWorkspaceCollision: true,
+			})
 			if msg.ReplyCount > 0 && userRepliesAvailable {
-				if err := syncThreadOnce(msg.Timestamp); err != nil {
-					return err
+				if _, synced := syncedThreads[msg.Timestamp]; !synced {
+					if _, queued := queuedThreads[msg.Timestamp]; !queued {
+						queuedThreads[msg.Timestamp] = struct{}{}
+						threadTSs = append(threadTSs, msg.Timestamp)
+					}
 				}
+			}
+		}
+		if len(batch.Messages) > 0 {
+			result, err := st.ApplyWriteBatch(ctx, batch)
+			if err != nil {
+				return err
+			}
+			for _, skip := range result.CollisionsSkipped {
+				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
+			}
+		}
+		for _, threadTS := range threadTSs {
+			if err := syncThreadOnce(threadTS); err != nil {
+				return err
 			}
 		}
 		if resp.NextCursor == "" {
@@ -562,23 +575,26 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		if err != nil {
 			return err
 		}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
 				msg.Channel = channelID
 			}
-			stored := toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now)
-			var err error
-			if enforceRetention {
-				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
-			} else {
-				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
-			}
+			batch.Messages = append(batch.Messages, store.MessageWrite{
+				Message:                toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now),
+				Mentions:               toStoreMentions(msg),
+				EnforceRetention:       enforceRetention,
+				SkipWorkspaceCollision: true,
+			})
+		}
+		if len(batch.Messages) > 0 {
+			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
-				if !c.skipMessageCollision(err, workspaceID, channelID, msg.Timestamp) {
-					return err
-				}
-				continue
+				return err
+			}
+			for _, skip := range result.CollisionsSkipped {
+				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
 			}
 		}
 		if resp.NextCursor == "" {

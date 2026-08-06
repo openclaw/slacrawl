@@ -393,6 +393,7 @@ type MessageWrite struct {
 	Mentions               []Mention
 	PreserveHigherPriority bool
 	EnforceRetention       bool
+	SkipWorkspaceCollision bool
 	// SkipUnchangedProviderRow avoids derived-index rewrites for provider rows
 	// whose scalar state, mentions, and event head already match. It is not a
 	// general repair path and deliberately refuses messages with file payloads.
@@ -414,8 +415,15 @@ type WriteBatch struct {
 	SyncStates []SyncStateWrite
 }
 
+type CollisionSkip struct {
+	ChannelID string
+	TS        string
+	Err       error
+}
+
 type WriteBatchResult struct {
-	MessagesWritten int
+	MessagesWritten   int
+	CollisionsSkipped []CollisionSkip
 }
 
 type Mention struct {
@@ -1015,6 +1023,10 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		}
 		written, err := upsertMessageInTransaction(ctx, dbtx, qtx, write.Message, write.Mentions, write.PreserveHigherPriority, write.EnforceRetention)
 		if err != nil {
+			if write.SkipWorkspaceCollision && IsWorkspaceCollision(err, "message") {
+				result.CollisionsSkipped = append(result.CollisionsSkipped, CollisionSkip{ChannelID: write.Message.ChannelID, TS: write.Message.TS, Err: err})
+				continue
+			}
 			return WriteBatchResult{}, err
 		}
 		if written {

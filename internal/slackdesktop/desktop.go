@@ -483,6 +483,13 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			UpdatedAt:   now,
 		})
 	}
+	draftBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(extracted.Drafts))}
+	type legacyDraftDeletion struct {
+		workspaceID string
+		channelID   string
+		ts          string
+	}
+	legacyDraftDeletions := make([]legacyDraftDeletion, 0)
 	for _, draft := range extracted.Drafts {
 		if len(draft.Destinations) == 0 {
 			continue
@@ -538,13 +545,26 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 		if message.Text == "" {
 			continue
 		}
-		if err := upsertDesktopMessage(ctx, st, message, nil); err != nil {
+		draftBatch.Messages = append(draftBatch.Messages, store.MessageWrite{
+			Message:                message,
+			SkipWorkspaceCollision: true,
+		})
+		if legacyTS := legacyDraftTS(draft); legacyTS != message.TS {
+			legacyDraftDeletions = append(legacyDraftDeletions, legacyDraftDeletion{
+				workspaceID: workspaceID,
+				channelID:   channelID,
+				ts:          legacyTS,
+			})
+		}
+	}
+	if len(draftBatch.Messages) > 0 {
+		if _, err := st.ApplyWriteBatch(ctx, draftBatch); err != nil {
 			return Source{}, err
 		}
-		if legacyTS := legacyDraftTS(draft); legacyTS != message.TS {
-			if _, err := st.DeleteMessageBySource(ctx, workspaceID, channelID, legacyTS, draftSourceName); err != nil {
-				return Source{}, err
-			}
+	}
+	for _, deletion := range legacyDraftDeletions {
+		if _, err := st.DeleteMessageBySource(ctx, deletion.workspaceID, deletion.channelID, deletion.ts, draftSourceName); err != nil {
+			return Source{}, err
 		}
 	}
 	for _, channel := range channelHints {
@@ -822,17 +842,6 @@ func upsertDesktopUser(ctx context.Context, st *store.Store, user store.User) er
 		return nil
 	}
 	if store.IsWorkspaceCollision(err, "user") {
-		return nil
-	}
-	return err
-}
-
-func upsertDesktopMessage(ctx context.Context, st *store.Store, message store.Message, mentions []store.Mention) error {
-	err := st.UpsertMessage(ctx, message, mentions)
-	if err == nil {
-		return nil
-	}
-	if store.IsWorkspaceCollision(err, "message") {
 		return nil
 	}
 	return err

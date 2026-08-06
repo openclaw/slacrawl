@@ -252,6 +252,7 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				return err
 			}
 		}
+		messageBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(state.Messages), 500))}
 		for _, message := range state.Messages {
 			if message.Channel == "" || message.TS == "" {
 				continue
@@ -286,25 +287,38 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 			if message.ParentUserID != "" {
 				referencedUsers[message.ParentUserID] = struct{}{}
 			}
-			if err := upsertDesktopMessage(ctx, st, store.Message{
-				ChannelID:      message.Channel,
-				TS:             message.TS,
-				WorkspaceID:    workspaceID,
-				UserID:         message.User,
-				Subtype:        message.Subtype,
-				ClientMsgID:    message.ClientMsgID,
-				ThreadTS:       message.ThreadTS,
-				ParentUserID:   message.ParentUserID,
-				Text:           text,
-				NormalizedText: normalizeReduxMessage(message),
-				ReplyCount:     message.ReplyCount,
-				LatestReply:    message.LatestReply,
-				EditedTS:       editedTS(message),
-				SourceRank:     3,
-				SourceName:     indexedDBSourceName,
-				RawJSON:        store.MarshalRaw(message),
-				UpdatedAt:      now,
-			}, reduxMentions(message.Text)); err != nil {
+			messageBatch.Messages = append(messageBatch.Messages, store.MessageWrite{
+				Message: store.Message{
+					ChannelID:      message.Channel,
+					TS:             message.TS,
+					WorkspaceID:    workspaceID,
+					UserID:         message.User,
+					Subtype:        message.Subtype,
+					ClientMsgID:    message.ClientMsgID,
+					ThreadTS:       message.ThreadTS,
+					ParentUserID:   message.ParentUserID,
+					Text:           text,
+					NormalizedText: normalizeReduxMessage(message),
+					ReplyCount:     message.ReplyCount,
+					LatestReply:    message.LatestReply,
+					EditedTS:       editedTS(message),
+					SourceRank:     3,
+					SourceName:     indexedDBSourceName,
+					RawJSON:        store.MarshalRaw(message),
+					UpdatedAt:      now,
+				},
+				Mentions:               reduxMentions(message.Text),
+				SkipWorkspaceCollision: true,
+			})
+			if len(messageBatch.Messages) == 500 {
+				if _, err := st.ApplyWriteBatch(ctx, messageBatch); err != nil {
+					return err
+				}
+				messageBatch.Messages = messageBatch.Messages[:0]
+			}
+		}
+		if len(messageBatch.Messages) > 0 {
+			if _, err := st.ApplyWriteBatch(ctx, messageBatch); err != nil {
 				return err
 			}
 		}

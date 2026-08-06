@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Performance
+
+- Batch Slack API, desktop, MCP, and import ingestion into per-page write transactions (~3.4x faster sync writes).
+
 ### Maintenance
 
 - Updated CrawlKit to 0.14.6, fixing the archive TUI filter (typing `q` no longer quits and backspace is rune-safe for CJK/emoji queries) and preventing slow refreshes from stacking overlapping refresh goroutines.

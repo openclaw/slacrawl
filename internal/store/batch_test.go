@@ -126,6 +126,48 @@ func TestApplyWriteBatchRollsBackMessagesAndCheckpointOnFailure(t *testing.T) {
 	assertBatchCount(t, st, `select count(*) from sync_state where source_name = 'provider:test'`, 0)
 }
 
+func TestApplyWriteBatchCanSkipMessageWorkspaceCollisions(t *testing.T) {
+	t.Run("skip collision", func(t *testing.T) {
+		st := openBatchTestStore(t)
+		ctx := context.Background()
+		now := time.Now().UTC()
+		seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+		seedBatchCatalog(t, st, "T2", "C2", "U2", now)
+		require.NoError(t, st.UpsertMessage(ctx, batchMessage("C2", "2.000002", "T2", "existing", now), nil))
+
+		result, err := st.ApplyWriteBatch(ctx, WriteBatch{Messages: []MessageWrite{
+			{Message: batchMessage("C1", "1.000001", "T1", "first", now)},
+			{Message: batchMessage("C2", "2.000002", "T1", "collision", now), SkipWorkspaceCollision: true},
+			{Message: batchMessage("C1", "3.000003", "T1", "last", now)},
+		}})
+		require.NoError(t, err)
+		require.Equal(t, 2, result.MessagesWritten)
+		require.Len(t, result.CollisionsSkipped, 1)
+		require.Equal(t, "C2", result.CollisionsSkipped[0].ChannelID)
+		require.Equal(t, "2.000002", result.CollisionsSkipped[0].TS)
+		require.Error(t, result.CollisionsSkipped[0].Err)
+		require.True(t, IsWorkspaceCollision(result.CollisionsSkipped[0].Err, "message"))
+		assertBatchCount(t, st, `select count(*) from messages where workspace_id = 'T1' and channel_id = 'C1'`, 2)
+		assertBatchCount(t, st, `select count(*) from messages where workspace_id = 'T2' and channel_id = 'C2' and text = 'existing'`, 1)
+	})
+
+	t.Run("abort collision", func(t *testing.T) {
+		st := openBatchTestStore(t)
+		ctx := context.Background()
+		now := time.Now().UTC()
+		seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+		seedBatchCatalog(t, st, "T2", "C2", "U2", now)
+		require.NoError(t, st.UpsertMessage(ctx, batchMessage("C2", "2.000002", "T2", "existing", now), nil))
+
+		_, err := st.ApplyWriteBatch(ctx, WriteBatch{Messages: []MessageWrite{
+			{Message: batchMessage("C1", "1.000001", "T1", "first", now)},
+			{Message: batchMessage("C2", "2.000002", "T1", "collision", now)},
+		}})
+		require.ErrorContains(t, err, "already belongs to workspace")
+		assertBatchCount(t, st, `select count(*) from messages where workspace_id = 'T1' and channel_id = 'C1'`, 0)
+	})
+}
+
 func TestApplyWriteBatchRollsBackWhenCheckpointWriteFails(t *testing.T) {
 	st := openBatchTestStore(t)
 	ctx := context.Background()
