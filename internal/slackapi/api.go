@@ -278,6 +278,21 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 	for _, user := range users {
 		if err := st.UpsertUser(ctx, toStoreUser(workspaceID, user, now)); err != nil {
+			if store.IsWorkspaceCollision(err, "user") {
+				// Slack's built-in slackbot has the literal ID USLACKBOT in every
+				// workspace, and Slack Connect can expose externally owned members.
+				// The workspace that recorded the user first keeps the row.
+				logger := c.logger
+				if logger == nil {
+					logger = slog.Default()
+				}
+				logger.Warn("skipping user owned by another workspace",
+					"workspace_id", workspaceID,
+					"user_id", user.ID,
+					"err", err,
+				)
+				continue
+			}
 			return err
 		}
 	}

@@ -1028,6 +1028,41 @@ func newSkipChannelSlackServer(t *testing.T) *mockSlackServer {
 	return mock
 }
 
+func newSkipUserSlackServer(t *testing.T) *mockSlackServer {
+	t.Helper()
+	mock := &mockSlackServer{counts: map[string]int{}, lastOld: map[string]string{}}
+	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth.test":
+			_, _ = w.Write([]byte(`{"ok":true,"team":"Test Team","team_id":"T123","user":"bot","user_id":"Ubot","bot_id":"B123"}`))
+		case "/conversations.list":
+			_, _ = w.Write([]byte(`{"ok":true,"channels":[
+				{"id":"C111","name":"private-ish","is_channel":true,"is_private":true,"is_archived":false,"is_shared":false,"is_general":false,"topic":{"value":""},"purpose":{"value":""}},
+				{"id":"C222","name":"general","is_channel":true,"is_private":false,"is_archived":false,"is_shared":false,"is_general":true,"topic":{"value":"topic"},"purpose":{"value":"purpose"}}
+			],"response_metadata":{"next_cursor":""}}`))
+		case "/conversations.history":
+			values := mustFormValues(r)
+			switch values.Get("channel") {
+			case "C111":
+				_, _ = w.Write([]byte(`{"ok":false,"error":"not_in_channel"}`))
+			case "C222":
+				_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","channel":"C222","user":"U123","text":"accessible message","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":""}}`))
+			default:
+				http.NotFound(w, r)
+			}
+		case "/users.list":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[
+				{"id":"USLACKBOT","name":"slackbot"},
+				{"id":"U123","name":"alice"}
+			],"response_metadata":{"next_cursor":""}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return mock
+}
+
 func newInvalidUserSlackServer(t *testing.T) *mockSlackServer {
 	t.Helper()
 	mock := &mockSlackServer{counts: map[string]int{}, lastOld: map[string]string{}}
@@ -1654,6 +1689,42 @@ func TestSyncSkipsChannelOwnedByAnotherWorkspace(t *testing.T) {
 	owner, err := st.ChannelWorkspaceID(context.Background(), "C111")
 	require.NoError(t, err)
 	require.Equal(t, "Tother", owner, "the original workspace keeps the shared channel")
+}
+
+func TestSyncSkipsUserOwnedByAnotherWorkspace(t *testing.T) {
+	server := newSkipUserSlackServer(t)
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{
+		Bot: "xoxb-test",
+	}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	now := time.Now().UTC()
+	// USLACKBOT is present in every Slack workspace, and Slack Connect can
+	// expose externally owned members. Seed the user as owned by a different
+	// workspace; the sync for T123 must keep that row and continue.
+	require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{ID: "Tother", Name: "other", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertUser(context.Background(), store.User{ID: "USLACKBOT", WorkspaceID: "Tother", Name: "slackbot", RawJSON: "{}", UpdatedAt: now}))
+
+	err := client.Sync(context.Background(), st, SyncOptions{})
+	require.NoError(t, err, "one cross-workspace user must not abort the sync")
+
+	owner, err := st.UserWorkspaceID(context.Background(), "USLACKBOT")
+	require.NoError(t, err)
+	require.Equal(t, "Tother", owner, "the original workspace keeps the shared user")
+
+	owner, err = st.UserWorkspaceID(context.Background(), "U123")
+	require.NoError(t, err)
+	require.Equal(t, "T123", owner, "other users must still sync")
+
+	rows, err := st.Messages(context.Background(), "", "C222", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "channel messages must remain stored after the trailing user collision")
+	require.Equal(t, "accessible message", rows[0].Text)
 }
 
 func TestSyncSkipsExcludedChannels(t *testing.T) {
