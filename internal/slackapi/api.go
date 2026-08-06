@@ -324,7 +324,7 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 	socketClient := c.socketModeFn(c.bot)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- socketClient.Run()
+		errCh <- socketClient.Run(ctx)
 	}()
 
 	var ticker *time.Ticker
@@ -345,7 +345,18 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 			return ctx.Err()
 		case <-tickerChan(ticker):
 			if err := c.repairWorkspace(ctx, st, workspaceID); err != nil {
-				return err
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// Repair is a periodic reconciliation sweep; a transient
+				// network failure during one tick must not kill a long-running
+				// tail daemon. The next tick retries, and store errors surface
+				// through the event handler path regardless.
+				c.warnLogger().Warn("tail repair sweep failed; will retry next interval",
+					"workspace_id", workspaceID,
+					"err", err,
+				)
+				continue
 			}
 			if err := st.SetSyncState(ctx, "tail", "repair", workspaceID, c.now().Format(time.RFC3339)); err != nil {
 				return err
@@ -939,7 +950,9 @@ func toStoreChannel(workspaceID string, channel slack.Channel, now time.Time) st
 	}
 }
 
-func toStoreUser(workspaceID string, user slack.User, now time.Time) store.User {
+// ToStoreUser is the single slack.User -> store.User mapping; the export
+// importer reuses it so a new stored field cannot silently miss one path.
+func ToStoreUser(workspaceID string, user slack.User, now time.Time) store.User {
 	return store.User{
 		ID:          user.ID,
 		WorkspaceID: workspaceID,
@@ -1041,7 +1054,7 @@ func toStoreMentions(msg slack.Message) []store.Mention {
 }
 
 type socketModeRunner interface {
-	Run() error
+	Run(ctx context.Context) error
 	Ack(req socketmode.Request, payload ...interface{})
 	Events() <-chan socketmode.Event
 }
@@ -1050,7 +1063,7 @@ type managedSocketMode struct {
 	client *socketmode.Client
 }
 
-func (m managedSocketMode) Run() error { return m.client.Run() }
+func (m managedSocketMode) Run(ctx context.Context) error { return m.client.RunContext(ctx) }
 func (m managedSocketMode) Ack(req socketmode.Request, payload ...interface{}) {
 	_ = m.client.Ack(req, payload...)
 }
@@ -1190,7 +1203,7 @@ func (c *Client) skipChannelCollision(ctx context.Context, st *store.Store, work
 // listed by several workspaces. The workspace that recorded the user first
 // keeps it, and later workspaces skip with a warning instead of aborting.
 func (c *Client) skipUserCollision(ctx context.Context, st *store.Store, workspaceID string, user slack.User, now time.Time) (bool, error) {
-	err := st.UpsertUser(ctx, toStoreUser(workspaceID, user, now))
+	err := st.UpsertUser(ctx, ToStoreUser(workspaceID, user, now))
 	if err == nil {
 		return false, nil
 	}

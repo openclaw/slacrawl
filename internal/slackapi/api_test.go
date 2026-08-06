@@ -884,7 +884,7 @@ type fakeSocketMode struct {
 	acks   int
 }
 
-func (f *fakeSocketMode) Run() error { return nil }
+func (f *fakeSocketMode) Run(context.Context) error { return nil }
 func (f *fakeSocketMode) Ack(req socketmode.Request, payload ...interface{}) {
 	f.acks++
 }
