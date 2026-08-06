@@ -12,6 +12,16 @@
 - `search` and `messages` no longer emit invalid UTF-8 when a message containing emoji or CJK is truncated, and wide characters now count as their display width rather than their byte length.
 - Table output stays aligned when cells are empty, `null`, boolean, or non-ASCII; column widths were measured on the ANSI-colorized bytes.
 - Cached attachments with fully non-Latin filenames keep their extension, so a published `media/` tree serves them with the right content type.
+- Messages that merely quote mention syntax (`&lt;@U…&gt;` in escaped form) are no longer recorded as real mentions in the archive or the `mentions` command.
+- Ctrl-C and SIGTERM now cancel long-running commands cleanly instead of hard-killing the process mid-sync.
+- `slacrawl tail` survives transient network failures during its periodic repair sweep instead of exiting, its websocket now honors cancellation, and a failing workspace reports its real error instead of an occasional bare `context canceled`.
+- `sync --since` accepts RFC3339 timestamps on every backend as documented; previously only the MCP source normalized them and junk values were passed through silently.
+- `analytics trends --weeks` rejects absurd values that previously attempted multi-gigabyte allocations.
+- MCP stdio responses written just before server exit are no longer occasionally reported as decode errors, and provider subprocesses that die at startup now surface their stderr instead of a bare broken-pipe error.
+
+### Performance
+
+- Thread synchronization no longer scans whole channels per message: a new schema v7 index makes the thread-root lookup O(log n); a 50k-message channel dropped from minutes to milliseconds. Message-event deletes and rendered mention replacement also stopped doing redundant work.
 
 ## v0.8.1 - 2026-08-02
 
