@@ -62,6 +62,7 @@ create index idx_messages_workspace_ts on messages(workspace_id, ts desc);
 create index idx_messages_workspace_channel_ts on messages(workspace_id, channel_id, ts desc);
 create index idx_messages_workspace_user_ts on messages(workspace_id, user_id, ts desc);
 create index idx_messages_key_expr on messages((channel_id || '|' || ts));
+create index idx_messages_channel_thread on messages(channel_id, thread_ts);
 
 create table message_files (
   workspace_id text not null,
@@ -111,6 +112,7 @@ create table message_events (
   created_at text not null
 );
 create unique index idx_message_events_identity on message_events(event_key);
+create index idx_message_events_channel_ts on message_events(channel_id, ts);
 
 create table message_event_heads (
   channel_id text not null,

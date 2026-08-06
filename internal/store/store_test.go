@@ -894,6 +894,39 @@ where type = 'trigger' and name = 'seed_message_event_head_before_update'
 	require.Equal(t, 1, triggerCount)
 }
 
+func TestOpenMigratesVersion6AddsLookupIndexes(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+drop index idx_messages_channel_thread;
+drop index idx_message_events_channel_ts;
+pragma user_version = 6;
+`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	var version int
+	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+	require.Equal(t, schemaVersion, version)
+	var indexCount int
+	require.NoError(t, s.DB().QueryRow(`
+select count(*)
+from sqlite_master
+where type = 'index'
+  and name in ('idx_messages_channel_thread', 'idx_message_events_channel_ts')
+`).Scan(&indexCount))
+	require.Equal(t, 2, indexCount, "v7 must add the thread and event lookup indexes")
+}
+
 func TestOpenMigratesVersion5SubordinatesToTombstones(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(dbPath)
