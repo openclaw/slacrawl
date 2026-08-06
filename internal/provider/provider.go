@@ -178,17 +178,18 @@ func Sync(ctx context.Context, st *store.Store, providerConfig config.Provider, 
 		_ = stdin.Close()
 		return Summary{}, fmt.Errorf("start provider %q: %w", providerConfig.Name, err)
 	}
-	if err := json.NewEncoder(stdin).Encode(providerRequest); err != nil {
-		_ = stdin.Close()
-		cancel()
-		_ = cmd.Wait()
-		return Summary{}, fmt.Errorf("write provider request: %w", err)
-	}
-	if err := stdin.Close(); err != nil {
-		cancel()
-		_ = cmd.Wait()
-		return Summary{}, fmt.Errorf("close provider request: %w", err)
-	}
+	// Write the request from a goroutine so a provider that emits more than a
+	// pipe buffer of output before draining stdin cannot deadlock against a
+	// request larger than a pipe buffer — the consumer below reads while the
+	// request is still being written.
+	writeErrCh := make(chan error, 1)
+	go func() {
+		err := json.NewEncoder(stdin).Encode(providerRequest)
+		if closeErr := stdin.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close provider request: %w", closeErr)
+		}
+		writeErrCh <- err
+	}()
 
 	consumer := consumer{
 		store:         st,
@@ -210,9 +211,15 @@ func Sync(ctx context.Context, st *store.Store, providerConfig config.Provider, 
 	if consumeErr != nil {
 		cancel()
 	}
+	writeErr := <-writeErrCh
 	waitErr := cmd.Wait()
 	if consumeErr != nil {
 		return consumer.summary, withStderr(fmt.Errorf("consume provider %q: %w", providerConfig.Name, consumeErr), stderr.String())
+	}
+	// A provider that died before reading its request breaks the write with
+	// EPIPE; its stderr explains why, so keep it attached here too.
+	if writeErr != nil {
+		return consumer.summary, withStderr(fmt.Errorf("write provider request: %w", writeErr), stderr.String())
 	}
 	if waitErr != nil {
 		return consumer.summary, withStderr(fmt.Errorf("provider %q exited: %w", providerConfig.Name, waitErr), stderr.String())
