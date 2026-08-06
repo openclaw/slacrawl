@@ -1624,6 +1624,38 @@ func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+func TestSyncSkipsChannelOwnedByAnotherWorkspace(t *testing.T) {
+	server := newSkipChannelSlackServer(t)
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{
+		Bot: "xoxb-test",
+	}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	now := time.Now().UTC()
+	// Slack Connect shared channels surface in multiple workspaces. Seed the
+	// channel as owned by a different workspace, the state a multi-workspace
+	// archive can legitimately reach; the sync for T123 must not abort.
+	require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{ID: "Tother", Name: "other", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertChannel(context.Background(), store.Channel{ID: "C111", WorkspaceID: "Tother", Name: "private-ish", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+
+	err := client.Sync(context.Background(), st, SyncOptions{})
+	require.NoError(t, err, "one cross-workspace channel must not abort the sync")
+
+	rows, err := st.Messages(context.Background(), "", "C222", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "other channels must still sync")
+	require.Equal(t, "accessible message", rows[0].Text)
+
+	owner, err := st.ChannelWorkspaceID(context.Background(), "C111")
+	require.NoError(t, err)
+	require.Equal(t, "Tother", owner, "the original workspace keeps the shared channel")
+}
+
 func TestSyncSkipsExcludedChannels(t *testing.T) {
 	server := newExcludeChannelSlackServer(t)
 	defer server.Close()

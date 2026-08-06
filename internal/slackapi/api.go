@@ -1151,6 +1151,33 @@ func normalizeChannelName(value string) string {
 	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "#"))
 }
 
+// skipChannelCollision upserts the channel and reports whether it must be
+// skipped because another workspace already owns it. Slack Connect shared
+// channels legitimately appear under multiple workspaces, so a collision must
+// not abort the whole sync — the workspace that recorded the channel first
+// keeps it, and the channel is skipped here with a warning. Any other upsert
+// error is returned for the caller's fatal path.
+func (c *Client) skipChannelCollision(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, now time.Time) (bool, error) {
+	err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now))
+	if err == nil {
+		return false, nil
+	}
+	if store.IsWorkspaceCollision(err, "channel") {
+		logger := c.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn("skipping channel owned by another workspace",
+			"workspace_id", workspaceID,
+			"channel_id", channel.ID,
+			"channel_name", channel.Name,
+			"err", err,
+		)
+		return true, nil
+	}
+	return false, err
+}
+
 func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
 	if len(channels) == 0 {
 		return nil
@@ -1178,9 +1205,13 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	})
 	if workerCount == 1 {
 		for _, channel := range channels {
-			if err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+			skip, err := c.skipChannelCollision(ctx, st, workspaceID, channel, now)
+			if err != nil {
 				tracker.Finish(err)
 				return err
+			}
+			if skip {
+				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				tracker.Finish(err)
@@ -1201,13 +1232,17 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	worker := func() {
 		defer wg.Done()
 		for channel := range workCh {
-			if err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+			skip, err := c.skipChannelCollision(ctx, st, workspaceID, channel, now)
+			if err != nil {
 				select {
 				case errCh <- err:
 				default:
 				}
 				cancel()
 				return
+			}
+			if skip {
+				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				select {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- Slack Connect shared channels no longer abort workspace syncs: when a channel already belongs to another workspace in the archive, the bot sync skips it with a warning and keeps syncing the remaining channels instead of failing the whole run.
+
 ## v0.8.1 - 2026-08-02
 
 ### Fixes
