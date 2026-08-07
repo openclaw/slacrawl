@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- Refined the `metadata` control manifest: Slack-accurate branding, scheduler-friendly `sync` argv, added `search`/`watch` capabilities, and moved it to a tested `controlManifest` helper.
+
 ## v0.8.3 - 2026-08-07
 
 ### Performance

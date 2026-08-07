@@ -115,7 +115,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "check-update":
 		return a.runCheckUpdate(ctx, rest[1:], outputFormat)
 	case "metadata":
-		return a.runMetadata(rest[1:], outputFormat)
+		return a.runMetadata(configPath, rest[1:], outputFormat)
 	case "init":
 		return normalizeCommandHelp(a.runInit(configPath, rest[1:], outputFormat))
 	case "doctor":
@@ -464,7 +464,7 @@ func (a *App) runStatus(ctx context.Context, configPath string, args []string, f
 	return a.writeOutput("Status", statusResponse{Status: status, ArchiveProfile: archiveProfile, Share: shareState}, format, true)
 }
 
-func (a *App) runMetadata(args []string, format OutputFormat) error {
+func (a *App) runMetadata(configPath string, args []string, format OutputFormat) error {
 	fs := flag.NewFlagSet("metadata", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
 	jsonOut := fs.Bool("json", false, "write crawlkit metadata JSON")
@@ -480,37 +480,7 @@ func (a *App) runMetadata(args []string, format OutputFormat) error {
 	if fs.NArg() != 0 {
 		return errors.New("metadata takes flags only")
 	}
-	defaults := config.Default()
-	configPath, err := config.DefaultConfigPath()
-	if err != nil {
-		return err
-	}
-	manifest := control.NewManifest("slacrawl", "Slack Crawl", "slacrawl")
-	manifest.Description = "Local-first Slack archive crawler."
-	manifest.Branding = control.Branding{SymbolName: "bubble.left.and.bubble.right", AccentColor: "#36c5f0", BundleIdentifier: "com.tinyspeck.slackmacgap"}
-	manifest.Paths = control.Paths{
-		DefaultConfig:   configPath,
-		ConfigEnv:       "SLACRAWL_CONFIG",
-		DefaultDatabase: defaults.DBPath,
-		DefaultCache:    defaults.CacheDir,
-		DefaultLogs:     defaults.LogDir,
-		DefaultShare:    defaults.Share.RepoPath,
-	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "tap", "tui", "git-share", "sql"}
-	manifest.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"slack", "desktop-cache", "sqlite", "git-share"}}
-	manifest.Commands = map[string]control.Command{
-		"status":      {Title: "Status", Argv: []string{"slacrawl", "status", "--json"}, JSON: true},
-		"doctor":      {Title: "Doctor", Argv: []string{"slacrawl", "doctor", "--json"}, JSON: true},
-		"sync":        {Title: "Sync", Argv: []string{"slacrawl", "--json", "sync"}, JSON: true, Mutates: true},
-		"tap":         {Title: "Import desktop cache", Argv: []string{"slacrawl", "--json", "sync", "--source", "desktop"}, JSON: true, Mutates: true},
-		"tui":         {Title: "Terminal browser", Argv: []string{"slacrawl", "tui"}},
-		"tui-json":    {Title: "Terminal browser rows", Argv: []string{"slacrawl", "tui", "--json"}, JSON: true},
-		"publish":     {Title: "Publish share", Argv: []string{"slacrawl", "--json", "publish"}, JSON: true, Mutates: true},
-		"subscribe":   {Title: "Subscribe share", Argv: []string{"slacrawl", "--json", "subscribe"}, JSON: true, Mutates: true},
-		"update":      {Title: "Update share", Argv: []string{"slacrawl", "--json", "update"}, JSON: true, Mutates: true},
-		"legacy-json": {Title: "Legacy JSON flag", Argv: []string{"slacrawl", "--json"}, JSON: true, Legacy: true},
-	}
-	return a.writeOutput("Metadata", manifest, format, false)
+	return a.writeOutput("Metadata", controlManifest(configPath), format, false)
 }
 
 func (a *App) runSync(ctx context.Context, configPath string, args []string, format OutputFormat) error {
