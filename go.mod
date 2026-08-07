@@ -6,7 +6,7 @@ require (
 	github.com/alecthomas/kong v1.16.0
 	github.com/golang/snappy v1.0.0
 	github.com/mattn/go-runewidth v0.0.27
-	github.com/openclaw/crawlkit v0.14.5
+	github.com/openclaw/crawlkit v0.14.6
 	github.com/slack-go/slack v0.27.0
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0

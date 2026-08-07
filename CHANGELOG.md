@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Updated CrawlKit to 0.14.6, fixing the archive TUI filter (typing `q` no longer quits and backspace is rune-safe for CJK/emoji queries) and preventing slow refreshes from stacking overlapping refresh goroutines.
+
 ## v0.8.2 - 2026-08-06
 
 ### Fixes
