@@ -541,6 +541,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				}
 			}
 		}
+		collidedTSs := map[string]struct{}{}
 		if len(batch.Messages) > 0 {
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
@@ -548,9 +549,14 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			for _, skip := range result.CollisionsSkipped {
 				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
+				collidedTSs[skip.TS] = struct{}{}
 			}
 		}
 		for _, threadTS := range threadTSs {
+			// A collided parent belongs to another workspace; its thread does too.
+			if _, collided := collidedTSs[threadTS]; collided {
+				continue
+			}
 			if err := syncThreadOnce(threadTS); err != nil {
 				return err
 			}
