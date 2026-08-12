@@ -635,7 +635,7 @@ func (a *App) runSearch(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -962,7 +962,7 @@ func (a *App) runMessages(ctx context.Context, configPath string, args []string,
 	if err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -990,7 +990,7 @@ func (a *App) runFiles(ctx context.Context, configPath string, args []string, fo
 	if err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1195,7 +1195,7 @@ func (a *App) runMentions(ctx context.Context, configPath string, args []string,
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1231,7 +1231,7 @@ func (a *App) runSQL(ctx context.Context, configPath string, args []string, form
 	if query == "" {
 		return errors.New("sql query required")
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1277,7 +1277,7 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 	if fs.NArg() > 0 {
 		query = fs.Arg(0)
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1309,7 +1309,7 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 	if fs.NArg() > 0 {
 		query = fs.Arg(0)
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1441,7 +1441,7 @@ func (a *App) runDigest(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1494,7 +1494,7 @@ func (a *App) runReport(ctx context.Context, configPath string, format OutputFor
 	if err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openQueryStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -2098,6 +2098,20 @@ func (a *App) openReadableStore(ctx context.Context, cfg config.Config) (*store.
 		return nil, err
 	}
 	return st, nil
+}
+
+// openQueryStore preserves automatic share imports when configured, but keeps
+// ordinary local archive queries from changing database state or permissions.
+func (a *App) openQueryStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
+	if cfg.ShareEnabled() && cfg.Share.AutoUpdate {
+		return a.openReadableStore(ctx, cfg)
+	}
+	if _, err := os.Stat(cfg.DBPath); errors.Is(err, os.ErrNotExist) {
+		return a.openStore(cfg)
+	} else if err != nil {
+		return nil, err
+	}
+	return store.OpenReadOnly(cfg.DBPath)
 }
 
 func (a *App) autoUpdateShare(ctx context.Context, cfg config.Config, st *store.Store) error {

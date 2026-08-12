@@ -849,6 +849,27 @@ func TestPublishSubscribeAndSearchGitArchive(t *testing.T) {
 	require.Equal(t, "test-snapshot", update["ref"])
 }
 
+func TestSearchDoesNotChangeLocalArchivePermissions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "slacrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	require.NoError(t, cfg.Save(configPath))
+	seedArchiveStore(t, dbPath, "read-only archive")
+	require.NoError(t, os.Chmod(dbPath, 0o444))
+
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	require.NoError(t, app.Run(context.Background(), []string{
+		"--config", configPath, "--json", "search", "archive",
+	}))
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o444), info.Mode().Perm())
+}
+
 func TestSubscribePersistsNoMedia(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
