@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Local archive queries now open the database strictly read-only (and reopen read-only after share imports), so read commands work on read-only filesystems and mounts. Thanks @rabsef-bicrym! (#145, #146)
 - Refined the `metadata` control manifest: Slack-accurate branding, scheduler-friendly `sync` argv, added `search`/`watch` capabilities, and moved it to a tested `controlManifest` helper.
 
 ## v0.8.3 - 2026-08-07
