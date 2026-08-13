@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,29 +115,29 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "check-update":
 		return a.runCheckUpdate(ctx, rest[1:], outputFormat)
 	case "metadata":
-		return a.runMetadata(rest[1:], outputFormat)
+		return a.runMetadata(configPath, rest[1:], outputFormat)
 	case "init":
-		return a.runInit(configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runInit(configPath, rest[1:], outputFormat))
 	case "doctor":
 		return a.runDoctor(ctx, configPath, rest[1:], outputFormat)
 	case "report":
-		return a.runReport(ctx, configPath, outputFormat)
+		return normalizeCommandHelp(a.runReport(ctx, configPath, rest[1:], outputFormat))
 	case "digest":
-		return a.runDigest(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runDigest(ctx, configPath, rest[1:], outputFormat))
 	case "analytics":
 		return a.runAnalytics(ctx, configPath, rest[1:], outputFormat)
 	case "publish":
-		return a.runPublish(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runPublish(ctx, configPath, rest[1:], outputFormat))
 	case "subscribe":
-		return a.runSubscribe(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runSubscribe(ctx, configPath, rest[1:], outputFormat))
 	case "update":
-		return a.runUpdate(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runUpdate(ctx, configPath, rest[1:], outputFormat))
 	case "status":
 		return a.runStatus(ctx, configPath, rest[1:], outputFormat)
 	case "sync":
-		return a.runSync(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runSync(ctx, configPath, rest[1:], outputFormat))
 	case "import":
-		return a.runImport(ctx, rest[1:])
+		return normalizeCommandHelp(a.runImport(ctx, rest[1:]))
 	case "purge":
 		return a.runPurge(ctx, configPath, rest[1:], outputFormat)
 	case "search":
@@ -148,19 +149,19 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "files":
 		return a.runFiles(ctx, configPath, rest[1:], outputFormat)
 	case "mentions":
-		return a.runMentions(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runMentions(ctx, configPath, rest[1:], outputFormat))
 	case "sql":
 		return a.runSQL(ctx, configPath, rest[1:], outputFormat)
 	case "users":
-		return a.runUsers(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runUsers(ctx, configPath, rest[1:], outputFormat))
 	case "channels":
-		return a.runChannels(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runChannels(ctx, configPath, rest[1:], outputFormat))
 	case "completion":
 		return a.runCompletion(rest[1:])
 	case "tail":
-		return a.runTail(ctx, configPath, rest[1:])
+		return normalizeCommandHelp(a.runTail(ctx, configPath, rest[1:]))
 	case "watch":
-		return a.runWatch(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runWatch(ctx, configPath, rest[1:], outputFormat))
 	default:
 		return fmt.Errorf("unknown command: %s", rest[0])
 	}
@@ -260,10 +261,9 @@ func resolveOutputFormat(value string, jsonOut bool) (OutputFormat, error) {
 
 func (a *App) runInit(configPath string, args []string, format OutputFormat) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	dbPath := fs.String("db", "", "database path")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -464,7 +464,7 @@ func (a *App) runStatus(ctx context.Context, configPath string, args []string, f
 	return a.writeOutput("Status", statusResponse{Status: status, ArchiveProfile: archiveProfile, Share: shareState}, format, true)
 }
 
-func (a *App) runMetadata(args []string, format OutputFormat) error {
+func (a *App) runMetadata(configPath string, args []string, format OutputFormat) error {
 	fs := flag.NewFlagSet("metadata", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
 	jsonOut := fs.Bool("json", false, "write crawlkit metadata JSON")
@@ -480,59 +480,35 @@ func (a *App) runMetadata(args []string, format OutputFormat) error {
 	if fs.NArg() != 0 {
 		return errors.New("metadata takes flags only")
 	}
-	defaults := config.Default()
-	configPath, err := config.DefaultConfigPath()
-	if err != nil {
-		return err
-	}
-	manifest := control.NewManifest("slacrawl", "Slack Crawl", "slacrawl")
-	manifest.Description = "Local-first Slack archive crawler."
-	manifest.Branding = control.Branding{SymbolName: "bubble.left.and.bubble.right", AccentColor: "#36c5f0", BundleIdentifier: "com.tinyspeck.slackmacgap"}
-	manifest.Paths = control.Paths{
-		DefaultConfig:   configPath,
-		ConfigEnv:       "SLACRAWL_CONFIG",
-		DefaultDatabase: defaults.DBPath,
-		DefaultCache:    defaults.CacheDir,
-		DefaultLogs:     defaults.LogDir,
-		DefaultShare:    defaults.Share.RepoPath,
-	}
-	manifest.Capabilities = []string{"metadata", "status", "doctor", "sync", "tap", "tui", "git-share", "sql"}
-	manifest.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"slack", "desktop-cache", "sqlite", "git-share"}}
-	manifest.Commands = map[string]control.Command{
-		"status":      {Title: "Status", Argv: []string{"slacrawl", "status", "--json"}, JSON: true},
-		"doctor":      {Title: "Doctor", Argv: []string{"slacrawl", "doctor", "--json"}, JSON: true},
-		"sync":        {Title: "Sync", Argv: []string{"slacrawl", "--json", "sync"}, JSON: true, Mutates: true},
-		"tap":         {Title: "Import desktop cache", Argv: []string{"slacrawl", "--json", "sync", "--source", "desktop"}, JSON: true, Mutates: true},
-		"tui":         {Title: "Terminal browser", Argv: []string{"slacrawl", "tui"}},
-		"tui-json":    {Title: "Terminal browser rows", Argv: []string{"slacrawl", "tui", "--json"}, JSON: true},
-		"publish":     {Title: "Publish share", Argv: []string{"slacrawl", "--json", "publish"}, JSON: true, Mutates: true},
-		"subscribe":   {Title: "Subscribe share", Argv: []string{"slacrawl", "--json", "subscribe"}, JSON: true, Mutates: true},
-		"update":      {Title: "Update share", Argv: []string{"slacrawl", "--json", "update"}, JSON: true, Mutates: true},
-		"legacy-json": {Title: "Legacy JSON flag", Argv: []string{"slacrawl", "--json"}, JSON: true, Legacy: true},
-	}
-	return a.writeOutput("Metadata", manifest, format, false)
+	return a.writeOutput("Metadata", controlManifest(configPath), format, false)
 }
 
 func (a *App) runSync(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
-	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all")
+	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all|provider:<name>")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channels := fs.String("channels", "", "comma separated channel ids")
 	excludeChannels := fs.String("exclude-channels", "", "comma separated channel names to skip during sync")
 	since := fs.String("since", "", "oldest slack ts or RFC3339 timestamp")
 	full := fs.Bool("full", false, "full sync")
 	latestOnly := fs.Bool("latest-only", false, "skip first-time historical backfills")
+	limit := fs.Int("limit", 0, "maximum provider messages (validation imports only)")
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
 	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during sync")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
+	}
+	if *limit < 0 {
+		return errors.New("limit cannot be negative")
 	}
 
 	resolvedSource, err := syncer.ParseSource(*source)
@@ -541,6 +517,10 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	}
 	workspaceSet := flagWasSet(fs, "workspace")
 	resolvedWorkspaceID := resolveSyncWorkspaceID(*workspaceID, workspaceSet)
+	normalizedSince, err := normalizeSinceTimestamp(*since)
+	if err != nil {
+		return err
+	}
 	runOptions := syncer.Options{
 		Source:       resolvedSource,
 		WorkspaceID:  resolvedWorkspaceID,
@@ -550,9 +530,10 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 			cfg.Sync.ExcludeChannels,
 			csv(*excludeChannels),
 		),
-		Since:       *since,
+		Since:       normalizedSince,
 		Full:        *full,
 		LatestOnly:  *latestOnly,
+		Limit:       *limit,
 		Concurrency: *concurrency,
 		AutoJoin:    boolPtr(*autoJoin),
 		APIURL:      a.apiURL,
@@ -635,7 +616,7 @@ func (a *App) runSearch(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -962,7 +943,7 @@ func (a *App) runMessages(ctx context.Context, configPath string, args []string,
 	if err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -990,7 +971,7 @@ func (a *App) runFiles(ctx context.Context, configPath string, args []string, fo
 	if err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1038,7 +1019,7 @@ func (a *App) runFilesFetch(ctx context.Context, configPath string, args []strin
 	if *maxBytes <= 0 {
 		return errors.New("--max-bytes must be positive")
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	st, err := a.openAutoUpdatingStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1183,19 +1164,21 @@ func (a *App) fetchFiles(ctx context.Context, cfg config.Config, st *store.Store
 }
 
 func (a *App) runMentions(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("mentions", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	target := fs.String("target", "", "target id or label")
 	limit := fs.Int("limit", 50, "row limit")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	if configErr != nil {
+		return configErr
+	}
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1231,7 +1214,7 @@ func (a *App) runSQL(ctx context.Context, configPath string, args []string, form
 	if query == "" {
 		return errors.New("sql query required")
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1263,26 +1246,32 @@ type slacrawlSQLArgs struct {
 }
 
 func (a *App) runUsers(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("users", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
-	if err := fs.Parse(args); err != nil {
+	limit := fs.Int("limit", 100, "row limit")
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
+	}
+	if *limit <= 0 {
+		return errors.New("users --limit must be positive")
 	}
 	query := ""
 	if fs.NArg() > 0 {
 		query = fs.Arg(0)
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	results, err := st.Users(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, 100)
+	results, err := st.Users(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, *limit)
 	if err != nil {
 		return err
 	}
@@ -1290,16 +1279,22 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 }
 
 func (a *App) runChannels(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("channels", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	kind := fs.String("kind", "", "channel kind")
-	if err := fs.Parse(args); err != nil {
+	limit := fs.Int("limit", 100, "row limit")
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
+	}
+	if *limit <= 0 {
+		return errors.New("channels --limit must be positive")
 	}
 	resolvedKind := normalizeChannelKind(*kind)
 	if resolvedKind != "" && !isValidChannelKind(resolvedKind) {
@@ -1309,12 +1304,12 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 	if fs.NArg() > 0 {
 		query = fs.Arg(0)
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	results, err := st.ChannelsByKind(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, resolvedKind, 100)
+	results, err := st.ChannelsByKind(ctx, coalesce(*workspaceID, cfg.WorkspaceID), query, resolvedKind, *limit)
 	if err != nil {
 		return err
 	}
@@ -1322,18 +1317,20 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 }
 
 func (a *App) runTail(ctx context.Context, configPath string, args []string) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("tail", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	repairEvery := fs.String("repair-every", cfg.Sync.RepairEvery, "repair interval")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
-	st, err := a.openReadableStore(ctx, cfg)
+	if configErr != nil {
+		return configErr
+	}
+	st, err := a.openAutoUpdatingStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1353,16 +1350,18 @@ func (a *App) runTail(ctx context.Context, configPath string, args []string) err
 }
 
 func (a *App) runWatch(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	desktopEvery := fs.String("desktop-every", cfg.Sync.DesktopRefreshEvery, "desktop refresh interval")
 	workspaceID := fs.String("workspace", "", "workspace id")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if !cfg.Slack.Desktop.Enabled {
 		return errors.New("desktop sync is disabled in config")
@@ -1418,20 +1417,22 @@ func (a *App) runWatch(ctx context.Context, configPath string, args []string, fo
 }
 
 func (a *App) runDigest(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("digest", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	since := fs.String("since", "7d", "lookback window, e.g. 24h, 7d, 30d")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channel := fs.String("channel", "", "channel id or name")
 	topN := fs.Int("top-n", 1, "number of top posters and mentions per channel")
 	formatFlag := fs.String("format", string(format), "output format: text|json|log")
 	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	lookback, err := parseLookback(*since)
 	if err != nil {
@@ -1441,7 +1442,7 @@ func (a *App) runDigest(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1489,12 +1490,16 @@ func parseLookback(value string) (time.Duration, error) {
 	return d, nil
 }
 
-func (a *App) runReport(ctx context.Context, configPath string, format OutputFormat) error {
+func (a *App) runReport(ctx context.Context, configPath string, args []string, format OutputFormat) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	if err := a.parseCommandFlags(fs, args); err != nil {
+		return err
+	}
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
-	st, err := a.openQueryStore(ctx, cfg)
+	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1575,6 +1580,24 @@ func mergeStringSlices(values ...[]string) []string {
 		}
 	}
 	return out
+}
+
+// normalizeSinceTimestamp converts the documented "slack ts or RFC3339" flag
+// contract into a slack ts for every backend. Only the MCP path used to
+// normalize RFC3339, so the API and desktop paths silently passed the raw
+// string through to Slack's `oldest` parameter.
+func normalizeSinceTimestamp(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return value, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return fmt.Sprintf("%d.%06d", parsed.Unix(), parsed.Nanosecond()/1000), nil
+	}
+	return "", fmt.Errorf("--since must be a slack timestamp or an RFC3339 time, got %q", value)
 }
 
 func flagWasSet(fs *flag.FlagSet, name string) bool {
@@ -1754,8 +1777,17 @@ func (a *App) runTailTargets(ctx context.Context, st *store.Store, cfg config.Co
 	case err := <-errCh:
 		return err
 	case <-done:
-		return ctx.Err()
 	case <-ctx.Done():
+		<-done
+	}
+	// A failing tail sends its error and then cancels the others, so by the
+	// time done closes, errCh and ctx.Done() are both ready and a bare select
+	// would pick randomly — returning "context canceled" instead of the real
+	// error for a measurable fraction of failures. Drain the error first.
+	select {
+	case err := <-errCh:
+		return err
+	default:
 		return ctx.Err()
 	}
 }
@@ -1875,12 +1907,11 @@ func stripKnownFlags(args []string, strip map[string]bool) []string {
 }
 
 func (a *App) runPublish(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "git repo path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
@@ -1889,8 +1920,11 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	noCommit := fs.Bool("no-commit", false, "skip git commit")
 	push := fs.Bool("push", false, "push to origin")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "omit cached media files")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() != 0 {
 		return errors.New("publish takes no positional arguments")
@@ -1948,12 +1982,11 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 }
 
 func (a *App) runSubscribe(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfigOrDefault(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfigOrDefault(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("subscribe", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "local clone path")
 	dbPath := fs.String("db", cfg.DBPath, "database path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
@@ -1962,8 +1995,11 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	noAutoUpdate := fs.Bool("no-auto-update", false, "disable read-time auto refresh")
 	noImport := fs.Bool("no-import", false, "skip initial import")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() > 1 {
 		return errors.New("subscribe takes at most one remote")
@@ -2027,22 +2063,28 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 }
 
 func (a *App) runUpdate(ctx context.Context, configPath string, args []string, format OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
+	cfg, configErr := loadConfig(configPath)
+	if configErr != nil {
+		cfg = config.Default()
 	}
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	repoPath := fs.String("repo", cfg.Share.RepoPath, "local clone path")
 	remote := fs.String("remote", cfg.Share.Remote, "git remote")
 	branch := fs.String("branch", cfg.Share.Branch, "git branch")
 	ref := fs.String("ref", "", "historical git ref to import")
+	restore := fs.Bool("restore", false, "exactly replace snapshot tables instead of merging")
 	noMedia := fs.Bool("no-media", !cfg.ShareMediaEnabled(), "skip restoring cached media")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
+	}
+	if configErr != nil {
+		return configErr
 	}
 	if fs.NArg() != 0 {
 		return errors.New("update takes no positional arguments")
+	}
+	if strings.TrimSpace(*ref) != "" && !*restore {
+		return errors.New("update --ref requires --restore because historical snapshots replace local rows")
 	}
 	st, err := a.openStore(cfg)
 	if err != nil {
@@ -2059,12 +2101,17 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 		if err := share.Pull(ctx, opts); err != nil {
 			return err
 		}
-		manifest, imported, err = share.ImportIfChanged(ctx, st, opts)
+		if *restore {
+			manifest, err = share.Restore(ctx, st, opts)
+			imported = err == nil
+		} else {
+			manifest, imported, err = share.ImportIfChanged(ctx, st, opts)
+		}
 		if err != nil {
 			return err
 		}
 	} else {
-		manifest, err = share.ImportAt(ctx, st, opts, *ref)
+		manifest, err = share.RestoreAt(ctx, st, opts, *ref)
 		if err != nil {
 			return err
 		}
@@ -2078,6 +2125,7 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 		"media":        manifest.Media,
 		"imported":     imported,
 		"ref":          strings.TrimSpace(*ref),
+		"restore":      *restore,
 	}, format, true)
 }
 
@@ -2088,7 +2136,7 @@ func (a *App) openStore(cfg config.Config) (*store.Store, error) {
 	return store.Open(cfg.DBPath)
 }
 
-func (a *App) openReadableStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
+func (a *App) openAutoUpdatingStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
 	st, err := a.openStore(cfg)
 	if err != nil {
 		return nil, err
@@ -2100,11 +2148,18 @@ func (a *App) openReadableStore(ctx context.Context, cfg config.Config) (*store.
 	return st, nil
 }
 
-// openQueryStore preserves automatic share imports when configured, but keeps
+// openReadableStore preserves automatic share imports when configured, but keeps
 // ordinary local archive queries from changing database state or permissions.
-func (a *App) openQueryStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
+func (a *App) openReadableStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
 	if cfg.ShareEnabled() && cfg.Share.AutoUpdate {
-		return a.openReadableStore(ctx, cfg)
+		st, err := a.openAutoUpdatingStore(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := st.Close(); err != nil {
+			return nil, fmt.Errorf("close store after automatic share update: %w", err)
+		}
+		return store.OpenReadOnly(cfg.DBPath)
 	}
 	if _, err := os.Stat(cfg.DBPath); errors.Is(err, os.ErrNotExist) {
 		return a.openStore(cfg)
@@ -2421,6 +2476,34 @@ func hasHelpArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeCommandHelp(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	return err
+}
+
+func (a *App) parseCommandFlags(fs *flag.FlagSet, args []string) error {
+	var output bytes.Buffer
+	fs.SetOutput(&output)
+	err := fs.Parse(args)
+	if output.Len() == 0 {
+		return err
+	}
+
+	target := a.Stderr
+	if errors.Is(err, flag.ErrHelp) {
+		target = a.Stdout
+	}
+	if target == nil {
+		target = io.Discard
+	}
+	if _, writeErr := io.Copy(target, &output); writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 
 func normalizeSingleDashLongFlags(args []string, names ...string) []string {

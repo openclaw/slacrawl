@@ -4,7 +4,7 @@ set -euo pipefail
 binary=${1:-}
 target=${2:-}
 version=${3:-}
-identifier=${SLACRAWL_CODESIGN_IDENTIFIER:-org.openclaw.slacrawl}
+identifier=${SLACRAWL_CODESIGN_IDENTIFIER:-org.openclaw.slacrawl.slacrawl}
 expected_team_id=${SLACRAWL_CODESIGN_TEAM_ID:-FWJYW4S8P8}
 signing_required=${SLACRAWL_RELEASE_SIGNING_REQUIRED:-0}
 requirement="identifier \"$identifier\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$expected_team_id\""

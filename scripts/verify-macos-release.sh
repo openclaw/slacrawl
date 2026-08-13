@@ -4,12 +4,12 @@ set -euo pipefail
 tag=${1:-}
 checksum_file=${2:-}
 shift 2 || true
-identifier=${SLACRAWL_CODESIGN_IDENTIFIER:-org.openclaw.slacrawl}
+identifier=${SLACRAWL_CODESIGN_IDENTIFIER:-org.openclaw.slacrawl.slacrawl}
 expected_team_id=${SLACRAWL_CODESIGN_TEAM_ID:-FWJYW4S8P8}
 requirement="identifier \"$identifier\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$expected_team_id\""
 
 if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ || "$#" -eq 0 ]]; then
-  echo "usage: $0 vX.Y.Z sha256sums.txt slacrawl_X.Y.Z_darwin_ARCH.tar.gz [...]" >&2
+  echo "usage: $0 vX.Y.Z SHA256SUMS slacrawl_X.Y.Z_darwin_ARCH.tar.gz [...]" >&2
   exit 2
 fi
 [[ "$(uname -s)" == Darwin ]] || {
@@ -52,6 +52,7 @@ for archive in "$@"; do
   tar -xOzf "$archive" slacrawl > "$binary"
   chmod 0755 "$binary"
 
+  codesign --verify --strict --check-notarization -R=notarized --verbose=2 "$binary"
   codesign --verify --strict -R="$requirement" --verbose=2 "$binary"
   signature=$(codesign -dvvv "$binary" 2>&1)
   grep -Fx "Identifier=$identifier" <<<"$signature" >/dev/null

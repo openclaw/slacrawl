@@ -1,10 +1,10 @@
 package slackdesktop
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,9 +23,21 @@ import (
 const (
 	indexedDBBlobDir    = "IndexedDB/https_app.slack.com_0.indexeddb.blob"
 	indexedDBSourceName = "desktop-indexeddb"
-)
 
-var reduxV8Header = []byte{0xff, 0x0f}
+	v8WireFormatV15 = byte(15)
+	v8WireFormatV16 = byte(16)
+
+	// minWireVersionWindow and maxWireVersionWindow bound which version bytes
+	// are treated as V8-family framing. Versions inside the window but not
+	// explicitly supported are reported as unsupported instead of ignored.
+	minWireVersionWindow = byte(13)
+	maxWireVersionWindow = byte(32)
+
+	blinkEnvelopeVersion21     = byte(21)
+	blinkEnvelopeTag           = byte(0xfe)
+	blinkV21InnerPayloadOffset = 15
+	maxBlinkEnvelopeVersion    = byte(21)
+)
 
 //go:embed redux_decoder.js
 var reduxDecoderScript string
@@ -109,19 +121,45 @@ func nodeAvailable() bool {
 }
 
 func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
-	if !nodeAvailable() {
-		return nil, nil
-	}
+	states, _, err := extractIndexedDBStates(path)
+	return states, err
+}
 
+func extractIndexedDBStates(path string) ([]ReduxDecodedState, IndexedDBSummary, error) {
 	refs, err := scanReduxBlobRefs(filepath.Join(path, indexedDBBlobDir))
 	if err != nil {
-		return nil, err
+		return nil, IndexedDBSummary{}, err
+	}
+
+	summary := IndexedDBSummary{
+		NodeAvailable: nodeAvailable(),
+		BlobFileCount: len(refs),
 	}
 
 	byIdentity := map[string]ReduxDecodedState{}
 	for _, ref := range refs {
-		state, err := decodeReduxBlob(ref.Path)
+		result := analyzeReduxBlob(ref.Path)
+		if !result.candidate {
+			if result.err != nil {
+				// Unreadable files are reported but never count as candidates.
+				summary.recordDecodeFailure(decodeErrorStage(result.err))
+			}
+			continue
+		}
+		summary.CandidateCount++
+		if result.v8Version > 0 {
+			summary.recordV8Version(result.v8Version)
+		}
+		if result.err != nil {
+			summary.recordDecodeFailure(decodeErrorStage(result.err))
+			continue
+		}
+		if !summary.NodeAvailable {
+			continue
+		}
+		state, err := runReduxDecoder(result.payload)
 		if err != nil {
+			summary.recordDecodeFailure(decodeErrorStage(err))
 			continue
 		}
 		if state.WorkspaceID == "" {
@@ -131,8 +169,10 @@ func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
 			state.UserID = ref.UserID
 		}
 		if state.WorkspaceID == "" && state.UserID == "" {
+			summary.recordDecodeFailure("identity")
 			continue
 		}
+		summary.DecodedBlobCount++
 		key := state.WorkspaceID + "|" + state.UserID
 		current, ok := byIdentity[key]
 		if !ok || reduxStateScore(state) > reduxStateScore(current) {
@@ -150,7 +190,8 @@ func ExtractIndexedDBStates(path string) ([]ReduxDecodedState, error) {
 		}
 		return states[i].WorkspaceID < states[j].WorkspaceID
 	})
-	return states, nil
+	summary.DecodedStateCount = len(states)
+	return states, summary, nil
 }
 
 func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecodedState, now time.Time, filter ingestFilter) error {
@@ -211,6 +252,7 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				return err
 			}
 		}
+		messageBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(state.Messages), 500))}
 		for _, message := range state.Messages {
 			if message.Channel == "" || message.TS == "" {
 				continue
@@ -245,25 +287,38 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 			if message.ParentUserID != "" {
 				referencedUsers[message.ParentUserID] = struct{}{}
 			}
-			if err := upsertDesktopMessage(ctx, st, store.Message{
-				ChannelID:      message.Channel,
-				TS:             message.TS,
-				WorkspaceID:    workspaceID,
-				UserID:         message.User,
-				Subtype:        message.Subtype,
-				ClientMsgID:    message.ClientMsgID,
-				ThreadTS:       message.ThreadTS,
-				ParentUserID:   message.ParentUserID,
-				Text:           text,
-				NormalizedText: normalizeReduxMessage(message),
-				ReplyCount:     message.ReplyCount,
-				LatestReply:    message.LatestReply,
-				EditedTS:       editedTS(message),
-				SourceRank:     3,
-				SourceName:     indexedDBSourceName,
-				RawJSON:        store.MarshalRaw(message),
-				UpdatedAt:      now,
-			}, reduxMentions(message.Text)); err != nil {
+			messageBatch.Messages = append(messageBatch.Messages, store.MessageWrite{
+				Message: store.Message{
+					ChannelID:      message.Channel,
+					TS:             message.TS,
+					WorkspaceID:    workspaceID,
+					UserID:         message.User,
+					Subtype:        message.Subtype,
+					ClientMsgID:    message.ClientMsgID,
+					ThreadTS:       message.ThreadTS,
+					ParentUserID:   message.ParentUserID,
+					Text:           text,
+					NormalizedText: normalizeReduxMessage(message),
+					ReplyCount:     message.ReplyCount,
+					LatestReply:    message.LatestReply,
+					EditedTS:       editedTS(message),
+					SourceRank:     3,
+					SourceName:     indexedDBSourceName,
+					RawJSON:        store.MarshalRaw(message),
+					UpdatedAt:      now,
+				},
+				Mentions:               reduxMentions(message.Text),
+				SkipWorkspaceCollision: true,
+			})
+			if len(messageBatch.Messages) == 500 {
+				if _, err := st.ApplyWriteBatch(ctx, messageBatch); err != nil {
+					return err
+				}
+				messageBatch.Messages = messageBatch.Messages[:0]
+			}
+		}
+		if len(messageBatch.Messages) > 0 {
+			if _, err := st.ApplyWriteBatch(ctx, messageBatch); err != nil {
 				return err
 			}
 		}
@@ -379,48 +434,159 @@ func scanReduxBlobRefs(blobRoot string) ([]reduxBlobRef, error) {
 	return refs, nil
 }
 
-func decodeReduxBlob(blobPath string) (ReduxDecodedState, error) {
+type reduxDecodeError struct {
+	stage string
+	err   error
+}
+
+func (e *reduxDecodeError) Error() string { return e.err.Error() }
+func (e *reduxDecodeError) Unwrap() error { return e.err }
+
+func newReduxDecodeError(stage string, err error) error {
+	return &reduxDecodeError{stage: stage, err: err}
+}
+
+func decodeErrorStage(err error) string {
+	var decodeErr *reduxDecodeError
+	if errors.As(err, &decodeErr) {
+		return decodeErr.stage
+	}
+	return "unknown"
+}
+
+type reduxBlobDecode struct {
+	candidate bool
+	v8Version byte
+	payload   []byte
+	state     ReduxDecodedState
+	err       error
+}
+
+// decodeReduxBlob analyzes a blob file and, for supported candidates, decodes
+// it with Node.
+func decodeReduxBlob(blobPath string) reduxBlobDecode {
+	result := analyzeReduxBlob(blobPath)
+	if !result.candidate || result.err != nil {
+		return result
+	}
+	state, err := runReduxDecoder(result.payload)
+	if err != nil {
+		result.payload = nil
+		result.err = err
+		return result
+	}
+	result.state = state
+	return result
+}
+
+// analyzeReduxBlob classifies a blob file and prepares the V8 payload for
+// supported candidates without invoking Node. Files whose framing is not
+// recognized are not Redux candidates and are ignored by callers.
+func analyzeReduxBlob(blobPath string) reduxBlobDecode {
 	raw, err := os.ReadFile(blobPath) //nolint:gosec // Blob path is discovered inside the Slack IndexedDB directory.
 	if err != nil {
-		return ReduxDecodedState{}, err
+		return reduxBlobDecode{err: newReduxDecodeError("read", err)}
 	}
 
 	decoded := raw
-	if len(raw) >= 3 && raw[0] == 0xff && raw[1] == 0x11 && raw[2] == 0x02 {
+	wrapped := len(raw) >= 3 && raw[0] == 0xff && raw[1] == 0x11 && raw[2] == 0x02
+	if wrapped {
 		decoded, err = snappy.Decode(nil, raw[3:])
 		if err != nil {
-			return ReduxDecodedState{}, err
+			return reduxBlobDecode{candidate: true, err: newReduxDecodeError("snappy", err)}
 		}
 	}
 
-	offset := bytes.Index(decoded, reduxV8Header)
+	offset, version := locateInnerV8Payload(decoded)
 	if offset < 0 {
-		return ReduxDecodedState{}, fmt.Errorf("v8 payload not found in %s", blobPath)
+		// Snappy-wrapped blobs without V8 framing and files without any known
+		// header are unrelated blob content, not Redux candidates.
+		return reduxBlobDecode{}
+	}
+	if version != v8WireFormatV15 && version != v8WireFormatV16 {
+		// Never relabel unknown future versions.
+		return reduxBlobDecode{
+			candidate: true,
+			v8Version: version,
+			err:       newReduxDecodeError("version", fmt.Errorf("unsupported V8 wire format version %d", version)),
+		}
 	}
 
+	payload := append([]byte(nil), decoded[offset:]...)
+	if version == v8WireFormatV16 {
+		// V8 wire format 16 only widens ArrayBuffer length and offset fields
+		// beyond 32 bits. Relabel a temporary copy to 15 so released Node
+		// runtimes can deserialize it; the decoded Redux state is validated
+		// before use, and any mismatch surfaces as a decode failure for this
+		// blob only.
+		payload[1] = v8WireFormatV15
+	}
+
+	return reduxBlobDecode{candidate: true, v8Version: version, payload: payload}
+}
+
+// locateInnerV8Payload finds the inner V8 serialization header in a decoded
+// blob using only anchored or bounded structural recognition. It returns the
+// payload offset and the detected wire format version.
+func locateInnerV8Payload(decoded []byte) (int, byte) {
+	if len(decoded) < 2 || decoded[0] != 0xff {
+		return -1, 0
+	}
+	outer := decoded[1]
+	// Historical split framing: an outer Blink header followed by the inner
+	// V8 header at offset 2. 0xff is never a value tag, so a second version
+	// header at offset 2 is unambiguous.
+	if len(decoded) >= 4 && decoded[2] == 0xff && isKnownBlinkVersion(outer) && isRecognizedWireVersion(decoded[3]) {
+		return 2, decoded[3]
+	}
+	// Current Blink v21 envelope: ff 15 fe, a fixed-size binary header, then
+	// the inner V8 payload anchored at offset 15 in every observed cache.
+	// Check this before the bare header because Blink version 21 (0x15) also
+	// falls in the wire version window.
+	if len(decoded) >= 3 && outer == blinkEnvelopeVersion21 && decoded[2] == blinkEnvelopeTag {
+		if len(decoded) > blinkV21InnerPayloadOffset+1 && decoded[blinkV21InnerPayloadOffset] == 0xff && isRecognizedWireVersion(decoded[blinkV21InnerPayloadOffset+1]) {
+			return blinkV21InnerPayloadOffset, decoded[blinkV21InnerPayloadOffset+1]
+		}
+		return -1, 0
+	}
+	if isRecognizedWireVersion(outer) {
+		return 0, outer
+	}
+	return -1, 0
+}
+
+func isRecognizedWireVersion(version byte) bool {
+	return version >= minWireVersionWindow && version <= maxWireVersionWindow
+}
+
+func isKnownBlinkVersion(version byte) bool {
+	return version >= minWireVersionWindow && version <= maxBlinkEnvelopeVersion
+}
+
+func runReduxDecoder(payload []byte) (ReduxDecodedState, error) {
 	tempFile, err := os.CreateTemp("", "slacrawl-redux-*.bin")
 	if err != nil {
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, newReduxDecodeError("temp", err)
 	}
 	tempPath := tempFile.Name()
 	defer func() { _ = os.Remove(tempPath) }()
-	if _, err := tempFile.Write(decoded[offset:]); err != nil {
+	if _, err := tempFile.Write(payload); err != nil {
 		_ = tempFile.Close()
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, newReduxDecodeError("temp", err)
 	}
 	if err := tempFile.Close(); err != nil {
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, newReduxDecodeError("temp", err)
 	}
 
 	cmd := exec.Command("node", "-e", reduxDecoderScript, tempPath) //nolint:gosec // Node decodes a temporary V8 payload copied from the Slack data directory.
 	output, err := cmd.Output()
 	if err != nil {
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, newReduxDecodeError("node", err)
 	}
 
 	var state ReduxDecodedState
 	if err := json.Unmarshal(output, &state); err != nil {
-		return ReduxDecodedState{}, err
+		return ReduxDecodedState{}, newReduxDecodeError("json", err)
 	}
 	return state, nil
 }

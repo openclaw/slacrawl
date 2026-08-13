@@ -2,7 +2,6 @@ package media
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,16 +18,12 @@ func ListCachedFiles(cacheDir string) ([]CachedFile, error) {
 	if strings.TrimSpace(cacheDir) == "" {
 		return nil, errors.New("cache dir is required")
 	}
-	root := filepath.Clean(filepath.Join(cacheDir, cacheSubdir))
-	info, err := os.Lstat(root)
+	root, err := ResolveRoot(filepath.Clean(filepath.Join(cacheDir, cacheSubdir)))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, fmt.Errorf("unsafe media root %q", root)
 	}
 
 	var files []CachedFile

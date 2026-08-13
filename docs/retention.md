@@ -69,6 +69,12 @@ Consecutive identical message snapshots are suppressed during normal ingest;
 real transitions, including a value changing and later reverting, remain in
 event history.
 
+When a complete message payload no longer contains a previously stored file or
+mention, Slacrawl retains that subordinate row with `deleted_at`,
+`deletion_source`, and `deletion_reason`. An explicit parent-message delete does
+the same. Normal file, mention, digest, and search reads exclude those
+tombstones; a later authoritative payload can resurrect the same stable row.
+
 Workspaces, channels, users, and sync state remain. Executed purges also record
 a per-channel retention floor so ordinary incremental API and MCP syncs do not
 restore deleted history through their repair overlap. New replies to expired
@@ -100,6 +106,9 @@ database operation while it rebuilds the file.
 
 ## Git-Backed Archives
 
-Purge changes the local database only. Publish a new snapshot after purging if
-other readers should receive the retention change. Importing an older snapshot
-can restore records that were removed locally.
+Purge changes the local database only. Publishing a snapshot after purging does
+not delete rows on normal readers because absence from a snapshot is not a
+deletion signal. Use an explicit `update --restore` on a reader when it must
+exactly adopt the published retention set. A historical restore uses
+`update --restore --ref <tag-or-commit>` and can bring back records removed
+locally.

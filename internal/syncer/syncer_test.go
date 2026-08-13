@@ -30,6 +30,20 @@ func TestParseSourceRejectsUnknown(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported source")
 }
 
+func TestParseSourceProvider(t *testing.T) {
+	source, err := ParseSource(" Provider:Archive ")
+	require.NoError(t, err)
+	require.Equal(t, Source("provider:archive"), source)
+	name, ok := ProviderName(source)
+	require.True(t, ok)
+	require.Equal(t, "archive", name)
+
+	for _, input := range []string{"provider:", "provider:bad:name", "provider:bad/name"} {
+		_, err := ParseSource(input)
+		require.ErrorContains(t, err, "unsupported source")
+	}
+}
+
 func TestDesktopOptionsForSourceAllClearsInheritedWorkspace(t *testing.T) {
 	opts := desktopOptionsForSourceAll(Options{Source: SourceAll, WorkspaceID: "T111"})
 	require.Empty(t, opts.WorkspaceID)

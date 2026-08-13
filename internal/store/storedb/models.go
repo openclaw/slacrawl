@@ -54,6 +54,7 @@ type Message struct {
 
 type MessageEvent struct {
 	ID          int64  `json:"id"`
+	EventKey    string `json:"event_key"`
 	ChannelID   string `json:"channel_id"`
 	Ts          string `json:"ts"`
 	EventType   string `json:"event_type"`
@@ -97,6 +98,9 @@ type MessageFile struct {
 	FetchError         string         `json:"fetch_error"`
 	RawJson            string         `json:"raw_json"`
 	UpdatedAt          string         `json:"updated_at"`
+	DeletedAt          sql.NullString `json:"deleted_at"`
+	DeletionSource     sql.NullString `json:"deletion_source"`
+	DeletionReason     sql.NullString `json:"deletion_reason"`
 }
 
 type MessageFt struct {
@@ -105,11 +109,15 @@ type MessageFt struct {
 }
 
 type MessageMention struct {
-	ChannelID   string         `json:"channel_id"`
-	Ts          string         `json:"ts"`
-	MentionType string         `json:"mention_type"`
-	TargetID    string         `json:"target_id"`
-	DisplayText sql.NullString `json:"display_text"`
+	ChannelID      string         `json:"channel_id"`
+	Ts             string         `json:"ts"`
+	MentionType    string         `json:"mention_type"`
+	TargetID       string         `json:"target_id"`
+	DisplayText    sql.NullString `json:"display_text"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	DeletionSource sql.NullString `json:"deletion_source"`
+	DeletionReason sql.NullString `json:"deletion_reason"`
+	UpdatedAt      string         `json:"updated_at"`
 }
 
 type SyncState struct {

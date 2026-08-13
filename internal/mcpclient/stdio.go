@@ -90,8 +90,16 @@ func NewStdio(_ context.Context, opts StdioOptions) (*StdioClient, error) {
 		pending: make(map[int64]chan stdioResult), waitCh: make(chan error, 1),
 	}
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
-	go client.readLoop(stdout)
+	readDone := make(chan struct{})
 	go func() {
+		defer close(readDone)
+		client.readLoop(stdout)
+	}()
+	go func() {
+		// cmd.Wait closes the stdout pipe, so let the read loop drain it
+		// first: a server that writes its final response and exits at once
+		// would otherwise have that response turned into a decode error.
+		<-readDone
 		err := cmd.Wait()
 		processErr := errors.New("MCP stdio process exited")
 		if err != nil {
@@ -322,7 +330,14 @@ func (c *StdioClient) Close() error {
 			if c.cmd.Process != nil {
 				_ = c.cmd.Process.Kill()
 			}
-			c.waitErr = <-c.waitCh
+			// A killed server normally reaches waitCh via stdout EOF, but a
+			// grandchild that inherited the pipe can hold it open forever;
+			// give up after a bound instead of hanging Close.
+			select {
+			case c.waitErr = <-c.waitCh:
+			case <-time.After(5 * time.Second):
+				c.waitErr = errors.New("MCP stdio process did not exit after kill")
+			}
 		}
 	})
 	return c.waitErr

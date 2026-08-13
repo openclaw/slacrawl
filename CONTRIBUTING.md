@@ -18,8 +18,8 @@ Requirements:
 Build and test:
 
 ```bash
-go test ./...
-go build ./cmd/slacrawl
+make build
+make check
 ```
 
 Run the CLI locally:
@@ -50,36 +50,35 @@ go run ./cmd/slacrawl --help
 GoReleaser snapshot builds stay credential-free and cross-platform:
 
 ```bash
-make release-snapshot
+make snapshot
 ```
 
-Official releases must run from a clean, exact signed tag already pushed to
-`origin` on Apple Silicon macOS through the managed release keychain and an
-authenticated local GitHub CLI:
+Official releases run through the manual **Release (unified)** GitHub Actions
+workflow, a thin caller of `openclaw/release-workflows`' reusable Go CLI
+pipeline. The shared workflow owns the annotated version tag, builds the
+GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
+OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only independently verified
+bytes, and opens the next `Unreleased` changelog PR. Slacrawl has no formula in
+`openclaw/homebrew-tap`, so releases do not dispatch a Homebrew handoff.
 
 ```bash
-make release
+gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
 ```
 
-The macOS binaries are signed as `org.openclaw.slacrawl` by OpenClaw
-Foundation Team ID `FWJYW4S8P8`. Missing or mismatched signing credentials fail
-the official release before GoReleaser creates assets. GoReleaser uploads a
-draft release; verify its assets before publishing it. After publishing, send a
-`release-published` repository dispatch from the same authorized local GitHub
-session so the canonical default-branch workflow verifies both native signatures
-before updating the Homebrew tap:
+`make release` and `scripts/release.sh` fail closed and point to that workflow.
+Local commands never create release tags, sign, notarize, or publish. Use
+`make snapshot` for credential-free packaging; `make release-snapshot` remains
+a compatibility alias.
 
-```bash
-tag=v0.7.7
-gh api --method POST repos/openclaw/slacrawl/dispatches \
-  -f event_type=release-published \
-  -f "client_payload[tag_name]=$tag"
-```
+The renamed **Release Validation (legacy, manual only)** workflow remains a
+non-publishing diagnostic; it never creates tags or releases.
+Cloudsmith APT and RPM publication remain separate manual workflows. They
+download their `.deb` and `.rpm` inputs directly from the unified pipeline's
+published GitHub Release assets.
 
-Cloudsmith APT and RPM publication remain separate manual workflows.
-
-Private keychain and 1Password routing belongs only in the ignored local
-`.mac-release.env`; never commit it.
+Release credentials live only in organization-approved GitHub Actions secrets.
+Never place signing or App Store Connect credentials in the repository, local
+release configuration, or developer environment.
 
 ## Coding Guidelines
 
@@ -97,7 +96,7 @@ Private keychain and 1Password routing belongs only in the ignored local
 
 ## Testing Expectations
 
-- Run `go test ./...` before opening a PR.
+- Run `make check` before opening a PR.
 - Add targeted tests when changing parsing, normalization, config loading, store behavior, or CLI output.
 - If a known failing test blocks your branch, call that out clearly in the PR description.
 

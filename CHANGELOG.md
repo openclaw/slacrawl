@@ -1,6 +1,129 @@
 # Changelog
 
-## 0.7.7 - Unreleased
+## Unreleased
+
+### Changes
+
+- Refined the `metadata` control manifest: Slack-accurate branding, scheduler-friendly `sync` argv, added `search`/`watch` capabilities, and moved it to a tested `controlManifest` helper.
+
+## v0.8.3 - 2026-08-07
+
+### Performance
+
+- Batch Slack API, desktop, MCP, and import ingestion into per-page write transactions (~3.4x faster sync writes).
+
+### Maintenance
+
+- Updated CrawlKit to 0.14.6, fixing the archive TUI filter (typing `q` no longer quits and backspace is rune-safe for CJK/emoji queries) and preventing slow refreshes from stacking overlapping refresh goroutines.
+
+## v0.8.2 - 2026-08-06
+
+### Fixes
+
+- Slack Connect shared channels no longer abort workspace syncs: when a channel already belongs to another workspace in the archive, the bot sync skips it with a warning and keeps syncing the remaining channels instead of failing the whole run.
+- Cross-workspace collisions are now skipped for users and messages too, not just channels: an Enterprise Grid user shared between workspaces no longer aborts the sync after every message has already committed, and a shared-channel message no longer terminates `slacrawl tail`.
+- `files fetch` no longer discards every attachment when `--max-bytes`/`sync.max_file_bytes` is set to the maximum int64 value: the over-limit probe used to overflow negative and record each file as a fetched empty file.
+- `purge` and `publish` now work with a media cache whose root is a symlink, a common setup for large attachment caches on a separate volume. The fetch path always wrote through such a symlink while every read path rejected it, so cleanup failed permanently; symlinks inside the cache tree are still refused.
+- `publish` now fails loudly on an unreadable media cache instead of emitting a manifest that claims the archive has no attachments, which silently wiped media for subscribers on their next import.
+- `search` and `messages` no longer emit invalid UTF-8 when a message containing emoji or CJK is truncated, and wide characters now count as their display width rather than their byte length.
+- Table output stays aligned when cells are empty, `null`, boolean, or non-ASCII; column widths were measured on the ANSI-colorized bytes.
+- Cached attachments with fully non-Latin filenames keep their extension, so a published `media/` tree serves them with the right content type.
+- Messages that merely quote mention syntax (`&lt;@U…&gt;` in escaped form) are no longer recorded as real mentions in the archive or the `mentions` command.
+- Ctrl-C and SIGTERM now cancel long-running commands cleanly instead of hard-killing the process mid-sync.
+- `slacrawl tail` survives transient network failures during its periodic repair sweep instead of exiting, its websocket now honors cancellation, and a failing workspace reports its real error instead of an occasional bare `context canceled`.
+- `sync --since` accepts RFC3339 timestamps on every backend as documented; previously only the MCP source normalized them and junk values were passed through silently.
+- `analytics trends --weeks` rejects absurd values that previously attempted multi-gigabyte allocations.
+- MCP stdio responses written just before server exit are no longer occasionally reported as decode errors, and provider subprocesses that die at startup now surface their stderr instead of a bare broken-pipe error.
+
+### Performance
+
+- Thread synchronization no longer scans whole channels per message: a new schema v7 index makes the thread-root lookup O(log n); a 50k-message channel dropped from minutes to milliseconds. Message-event deletes and rendered mention replacement also stopped doing redundant work.
+
+## v0.8.1 - 2026-08-02
+
+### Fixes
+
+- Added a 60-second default Slack API timeout so stalled requests cannot hang the CLI indefinitely. Thanks @SebTardif.
+
+### Documentation
+
+- Rewrote the README around installation and a verified quick start, with detailed command and Git archive references moved to `docs/`.
+
+### Maintenance
+
+- Updated CrawlKit to 0.14.5, SQLite to 1.56.0, and go-colorful to 1.4.1.
+
+## v0.8.0 - 2026-08-02
+
+### Changes
+
+- Added generic external archive providers with an explicit `provider:<name>` sync source, a local JSONL subprocess protocol, scoped resumable checkpoints, bounded validation imports, and source-priority safeguards.
+
+### Fixes
+
+- Made command help independent of local configuration and consistently successful for `--help` and `-h`.
+- Added configurable positive row limits to `users` and `channels` while preserving the existing 100-row default.
+
+### Performance
+
+- Batched unchanged-message checks and aligned search-index row IDs during external archive replays to avoid per-message database round trips and full-index replacement scans.
+
+### Maintenance
+
+- Increased the AWS Crabbox root volume to match the current developer image
+  snapshot size.
+- Provisioned Node.js 24 in Crabbox hydration and made Node-dependent Redux
+  decoder tests declare their runtime prerequisite.
+- Require explicit workspace, channel, and timestamp scope for live local
+  validation instead of embedding workspace-specific defaults.
+- Updated govulncheck to 1.6.0 and deadcode to 0.48.0 across local and CI validation.
+- Pinned external GitHub Actions to exact reviewed commits while retaining the shared release workflow's `@v1` compatibility contract.
+- Standardized the Makefile's build, check, snapshot, and fail-closed release targets across the crawler repositories.
+- Refreshed terminal detection and Unicode display-width dependencies.
+- Updated CrawlKit to 0.14.4, SQLite to 1.55.0, `golang.org/x/net` to 0.57.0, and replaced the retracted libc 1.74.3 with 1.74.4.
+- Updated the stale action to v11 and the GoReleaser action to 7.2.3.
+- Aligned releases with the shared OpenClaw Go CLI workflow and disabled Homebrew handoff until Slacrawl has a tap formula.
+
+## v0.7.11 - 2026-07-26
+
+- Re-release v0.7.10's content through the official signed and notarized release pipeline; v0.7.10's macOS archives were signed but not notarized.
+
+## v0.7.10 - 2026-07-26
+
+### Fixes
+
+- Restored wiretap imports from Slack Desktop caches written with V8 wire format 16 (Snappy + Blink v21 envelope), kept older formats working, and made complete IndexedDB decode failures visible instead of reporting an empty successful sync. Thanks @aliou.
+
+## 0.7.9 - 2026-07-20
+
+### Highlights
+
+- Keep archived-message search reliable for malformed Unicode while refreshing the SQLite runtime dependency chain.
+
+### Fixes
+
+- Prevented malformed Unicode in archived messages from hanging search normalization by updating `golang.org/x/text` to 0.40.0. Thanks @dependabot.
+
+### Maintenance
+
+- Update `modernc.org/libc` to v1.74.3, alongside the current `x/sys`, Kong, TruffleHog, setup-go, and CrawlKit v0.14.3 refreshes already landed on main.
+
+## 0.7.8 - 2026-07-18
+
+### Highlights
+
+- Made Git-shared archives resilient to incomplete snapshots: routine updates now merge safely, while explicit restore remains available when an exact replacement is intended.
+
+### Fixes
+
+- Made routine Git-share imports merge-only so destination rows and newer message, user, and channel tombstones survive incomplete snapshots; exact replacement now requires `update --restore`, and removed file and mention rows retain source-attributed tombstones.
+
+### Maintenance
+
+- Migrated releases to the unified OpenClaw pipeline, adding notarized macOS binaries and checksum-bound Debian and RPM packages.
+- Updated CrawlKit to 0.14.3, including SQLite 1.54.0 and its related runtime dependency refresh.
+
+## 0.7.7 - 2026-07-09
 
 ### Maintenance
 

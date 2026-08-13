@@ -107,14 +107,20 @@ where messages.workspace_id = excluded.workspace_id
 -- name: GetMessageWorkspace :one
 select workspace_id from messages where channel_id = ? and ts = ?;
 
--- name: DeleteMessageMentions :exec
-delete from message_mentions where channel_id = ? and ts = ?;
+-- name: TombstoneMessageMentions :exec
+update message_mentions
+set deleted_at = ?, deletion_source = ?, deletion_reason = 'absent_from_authoritative_message_payload', updated_at = ?
+where channel_id = ? and ts = ?;
 
 -- name: UpsertMessageMention :exec
-insert into message_mentions (channel_id, ts, mention_type, target_id, display_text)
-values (?, ?, ?, ?, ?)
+insert into message_mentions (channel_id, ts, mention_type, target_id, display_text, updated_at)
+values (?, ?, ?, ?, ?, ?)
 on conflict(channel_id, ts, mention_type, target_id) do update set
-  display_text=excluded.display_text;
+  display_text=excluded.display_text,
+  deleted_at=null,
+  deletion_source=null,
+  deletion_reason=null,
+  updated_at=excluded.updated_at;
 
 -- name: ListExistingFileMedia :many
 select file_id, coalesce(media_path, '') as media_path,
@@ -155,6 +161,9 @@ on conflict(channel_id, ts, file_id) do update set
   fetched_at=excluded.fetched_at,
   fetch_status=excluded.fetch_status,
   fetch_error=excluded.fetch_error,
+  deleted_at=null,
+  deletion_source=null,
+  deletion_reason=null,
   raw_json=excluded.raw_json,
   updated_at=excluded.updated_at;
 
@@ -176,12 +185,6 @@ set fetched_at = ?,
     fetch_error = ?,
     updated_at = ?
 where channel_id = ? and ts = ? and file_id = ?;
-
--- name: DeleteMessageFTS :exec
-delete from message_fts where message_key = ?;
-
--- name: InsertMessageFTS :exec
-insert into message_fts (message_key, content) values (?, ?);
 
 -- name: InsertMessageEvent :exec
 insert into message_events (channel_id, ts, event_type, source_name, payload_json, created_at)
@@ -326,6 +329,7 @@ select m.workspace_id, mm.channel_id, mm.ts, mm.mention_type, mm.target_id, coal
 from message_mentions mm
 join messages m on m.channel_id = mm.channel_id and m.ts = mm.ts
 where (sqlc.arg(workspace_id) = '' or m.workspace_id = sqlc.arg(workspace_id))
+  and mm.deleted_at is null
   and (sqlc.arg(target) = '' or mm.target_id = sqlc.arg(target) or mm.display_text like sqlc.arg(target_like))
 order by mm.ts desc
 limit sqlc.arg(limit);

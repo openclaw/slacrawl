@@ -29,7 +29,14 @@ import (
 const (
 	SourceUser = "api-user"
 	SourceBot  = "api-bot"
+
+	// defaultHTTPTimeout bounds Slack API HTTP when NewWithOptions gets a nil client.
+	defaultHTTPTimeout = 60 * time.Second
 )
+
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: defaultHTTPTimeout}
+}
 
 type Diagnostics struct {
 	BotConfigured     bool   `json:"bot_configured"`
@@ -76,11 +83,14 @@ func New(tokens config.Tokens) *Client {
 }
 
 func NewWithOptions(tokens config.Tokens, apiURL string, httpClient *http.Client) *Client {
+	if httpClient == nil {
+		httpClient = defaultHTTPClient()
+	}
 	client := &Client{
 		tokens:     tokens,
 		appToken:   tokens.App,
 		apiURL:     slack.APIURL,
-		httpClient: http.DefaultClient,
+		httpClient: httpClient,
 		includeDMs: tokens.User != "",
 		sleep:      sleepContext,
 		now:        func() time.Time { return time.Now().UTC() },
@@ -88,18 +98,13 @@ func NewWithOptions(tokens config.Tokens, apiURL string, httpClient *http.Client
 	if apiURL != "" {
 		client.apiURL = apiURL
 	}
-	if httpClient != nil {
-		client.httpClient = httpClient
-	}
 
 	buildOptions := func(includeAppToken bool) []slack.Option {
 		var options []slack.Option
 		if apiURL != "" {
 			options = append(options, slack.OptionAPIURL(apiURL))
 		}
-		if httpClient != nil {
-			options = append(options, slack.OptionHTTPClient(httpClient))
-		}
+		options = append(options, slack.OptionHTTPClient(httpClient))
 		if includeAppToken && tokens.App != "" {
 			options = append(options, slack.OptionAppLevelToken(tokens.App))
 		}
@@ -272,7 +277,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 	}
 	for _, user := range users {
-		if err := st.UpsertUser(ctx, toStoreUser(workspaceID, user, now)); err != nil {
+		if _, err := c.skipUserCollision(ctx, st, workspaceID, user, now); err != nil {
 			return err
 		}
 	}
@@ -319,7 +324,7 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 	socketClient := c.socketModeFn(c.bot)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- socketClient.Run()
+		errCh <- socketClient.Run(ctx)
 	}()
 
 	var ticker *time.Ticker
@@ -340,7 +345,18 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 			return ctx.Err()
 		case <-tickerChan(ticker):
 			if err := c.repairWorkspace(ctx, st, workspaceID); err != nil {
-				return err
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// Repair is a periodic reconciliation sweep; a transient
+				// network failure during one tick must not kill a long-running
+				// tail daemon. The next tick retries, and store errors surface
+				// through the event handler path regardless.
+				c.warnLogger().Warn("tail repair sweep failed; will retry next interval",
+					"workspace_id", workspaceID,
+					"err", err,
+				)
+				continue
 			}
 			if err := st.SetSyncState(ctx, "tail", "repair", workspaceID, c.now().Format(time.RFC3339)); err != nil {
 				return err
@@ -356,11 +372,15 @@ func (c *Client) HandleEventsAPIEvent(ctx context.Context, st *store.Store, work
 		msg := messageFromEvent(ev)
 		stored := toStoreMessage(workspaceID, msg, SourceBot, 2, rawMessagePayload(event), now)
 		deleted := msg.SubType == "message_deleted" || msg.DeletedTimestamp != ""
+		var err error
 		if deleted {
-			_, err := st.MarkMessageDeletedWithRetention(ctx, stored, toStoreMentions(msg))
-			return err
+			_, err = st.MarkMessageDeletedWithRetention(ctx, stored, toStoreMentions(msg))
+		} else {
+			_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
 		}
-		_, err := st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
+		if err != nil && c.skipMessageCollision(err, workspaceID, stored.ChannelID, stored.TS) {
+			return nil
+		}
 		return err
 	case *slackevents.ChannelRenameEvent:
 		return st.RenameChannel(ctx, ev.Channel.ID, ev.Channel.Name)
@@ -498,25 +518,47 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
+		threadTSs := make([]string, 0)
+		queuedThreads := map[string]struct{}{}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
 				msg.Channel = channel.ID
 			}
-			stored := toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now)
-			var err error
-			if enforceRetention {
-				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
-			} else {
-				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
+			batch.Messages = append(batch.Messages, store.MessageWrite{
+				Message:                toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now),
+				Mentions:               toStoreMentions(msg),
+				EnforceRetention:       enforceRetention,
+				SkipWorkspaceCollision: true,
+			})
+			if msg.ReplyCount > 0 && userRepliesAvailable {
+				if _, synced := syncedThreads[msg.Timestamp]; !synced {
+					if _, queued := queuedThreads[msg.Timestamp]; !queued {
+						queuedThreads[msg.Timestamp] = struct{}{}
+						threadTSs = append(threadTSs, msg.Timestamp)
+					}
+				}
 			}
+		}
+		collidedTSs := map[string]struct{}{}
+		if len(batch.Messages) > 0 {
+			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
 				return err
 			}
-			if msg.ReplyCount > 0 && userRepliesAvailable {
-				if err := syncThreadOnce(msg.Timestamp); err != nil {
-					return err
-				}
+			for _, skip := range result.CollisionsSkipped {
+				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
+				collidedTSs[skip.TS] = struct{}{}
+			}
+		}
+		for _, threadTS := range threadTSs {
+			// A collided parent belongs to another workspace; its thread does too.
+			if _, collided := collidedTSs[threadTS]; collided {
+				continue
+			}
+			if err := syncThreadOnce(threadTS); err != nil {
+				return err
 			}
 		}
 		if resp.NextCursor == "" {
@@ -539,20 +581,26 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		if err != nil {
 			return err
 		}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
 				msg.Channel = channelID
 			}
-			stored := toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now)
-			var err error
-			if enforceRetention {
-				_, err = st.UpsertMessageWithRetention(ctx, stored, toStoreMentions(msg))
-			} else {
-				err = st.UpsertMessage(ctx, stored, toStoreMentions(msg))
-			}
+			batch.Messages = append(batch.Messages, store.MessageWrite{
+				Message:                toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now),
+				Mentions:               toStoreMentions(msg),
+				EnforceRetention:       enforceRetention,
+				SkipWorkspaceCollision: true,
+			})
+		}
+		if len(batch.Messages) > 0 {
+			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
 				return err
+			}
+			for _, skip := range result.CollisionsSkipped {
+				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
 			}
 		}
 		if resp.NextCursor == "" {
@@ -924,7 +972,9 @@ func toStoreChannel(workspaceID string, channel slack.Channel, now time.Time) st
 	}
 }
 
-func toStoreUser(workspaceID string, user slack.User, now time.Time) store.User {
+// ToStoreUser is the single slack.User -> store.User mapping; the export
+// importer reuses it so a new stored field cannot silently miss one path.
+func ToStoreUser(workspaceID string, user slack.User, now time.Time) store.User {
 	return store.User{
 		ID:          user.ID,
 		WorkspaceID: workspaceID,
@@ -1026,7 +1076,7 @@ func toStoreMentions(msg slack.Message) []store.Mention {
 }
 
 type socketModeRunner interface {
-	Run() error
+	Run(ctx context.Context) error
 	Ack(req socketmode.Request, payload ...interface{})
 	Events() <-chan socketmode.Event
 }
@@ -1035,7 +1085,7 @@ type managedSocketMode struct {
 	client *socketmode.Client
 }
 
-func (m managedSocketMode) Run() error { return m.client.Run() }
+func (m managedSocketMode) Run(ctx context.Context) error { return m.client.RunContext(ctx) }
 func (m managedSocketMode) Ack(req socketmode.Request, payload ...interface{}) {
 	_ = m.client.Ack(req, payload...)
 }
@@ -1146,6 +1196,77 @@ func normalizeChannelName(value string) string {
 	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "#"))
 }
 
+// skipChannelCollision upserts the channel and reports whether it must be
+// skipped because another workspace already owns it. Slack Connect shared
+// channels legitimately appear under multiple workspaces, so a collision must
+// not abort the whole sync — the workspace that recorded the channel first
+// keeps it, and the channel is skipped here with a warning. Any other upsert
+// error is returned for the caller's fatal path.
+func (c *Client) skipChannelCollision(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, now time.Time) (bool, error) {
+	err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now))
+	if err == nil {
+		return false, nil
+	}
+	if store.IsWorkspaceCollision(err, "channel") {
+		c.warnLogger().Warn("skipping channel owned by another workspace",
+			"workspace_id", workspaceID,
+			"channel_id", channel.ID,
+			"channel_name", channel.Name,
+			"err", err,
+		)
+		return true, nil
+	}
+	return false, err
+}
+
+// skipUserCollision upserts the user and reports whether it must be skipped
+// because another workspace already owns it. Enterprise Grid shares user IDs
+// org-wide and Slack Connect surfaces external members, so the same user can be
+// listed by several workspaces. The workspace that recorded the user first
+// keeps it, and later workspaces skip with a warning instead of aborting.
+func (c *Client) skipUserCollision(ctx context.Context, st *store.Store, workspaceID string, user slack.User, now time.Time) (bool, error) {
+	err := st.UpsertUser(ctx, ToStoreUser(workspaceID, user, now))
+	if err == nil {
+		return false, nil
+	}
+	if store.IsWorkspaceCollision(err, "user") {
+		c.warnLogger().Warn("skipping user owned by another workspace",
+			"workspace_id", workspaceID,
+			"user_id", user.ID,
+			"user_name", user.Name,
+			"err", err,
+		)
+		return true, nil
+	}
+	return false, err
+}
+
+// skipMessageCollision reports whether a message upsert error is a
+// cross-workspace collision the caller should skip rather than propagate.
+// A Slack Connect channel is owned by whichever workspace recorded it first, so
+// its messages keep arriving for every other member workspace — during history
+// sync that must not abort the run, and during tail it must not kill the
+// socket-mode loop.
+func (c *Client) skipMessageCollision(err error, workspaceID, channelID, ts string) bool {
+	if !store.IsWorkspaceCollision(err, "message") {
+		return false
+	}
+	c.warnLogger().Warn("skipping message owned by another workspace",
+		"workspace_id", workspaceID,
+		"channel_id", channelID,
+		"ts", ts,
+		"err", err,
+	)
+	return true
+}
+
+func (c *Client) warnLogger() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return slog.Default()
+}
+
 func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
 	if len(channels) == 0 {
 		return nil
@@ -1173,9 +1294,13 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	})
 	if workerCount == 1 {
 		for _, channel := range channels {
-			if err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+			skip, err := c.skipChannelCollision(ctx, st, workspaceID, channel, now)
+			if err != nil {
 				tracker.Finish(err)
 				return err
+			}
+			if skip {
+				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				tracker.Finish(err)
@@ -1196,13 +1321,17 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	worker := func() {
 		defer wg.Done()
 		for channel := range workCh {
-			if err := st.UpsertChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+			skip, err := c.skipChannelCollision(ctx, st, workspaceID, channel, now)
+			if err != nil {
 				select {
 				case errCh <- err:
 				default:
 				}
 				cancel()
 				return
+			}
+			if skip {
+				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
 				select {

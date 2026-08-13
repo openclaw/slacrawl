@@ -5,7 +5,8 @@ project_name: slacrawl
 builds:
   - id: slacrawl
     main: ./cmd/slacrawl
-    binary: slacrawl
+    binary: "{{ .Os }}_{{ .Arch }}/slacrawl"
+    no_unique_dist_dir: true
     env:
       - CGO_ENABLED=0
     goos:
@@ -28,6 +29,7 @@ archives:
     ids:
       - slacrawl
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    strip_binary_directory: true
     files:
       - README.md
       - LICENSE
@@ -56,7 +58,7 @@ nfpms:
     ids:
       - slacrawl
     package_name: slacrawl
-    file_name_template: "{{ .ConventionalFileName }}"
+    file_name_template: '{{ replace .ConventionalFileName "~" "-" }}'
     homepage: https://github.com/openclaw/slacrawl
     maintainer: Vincent Koc <vincent@vincentkoc.com>
     description: Go-based CLI for mirroring Slack workspace data into local SQLite.
@@ -64,10 +66,13 @@ nfpms:
     formats:
       - deb
       - rpm
-    bindir: /usr/bin
+    bindir: /usr/lib/slacrawl
     section: utils
     priority: optional
     contents:
+      - src: "/usr/lib/slacrawl/{{ .Os }}_{{ .Arch }}/slacrawl"
+        dst: /usr/bin/slacrawl
+        type: symlink
       - src: ./README.md
         dst: /usr/share/doc/slacrawl/README.md
       - src: ./LICENSE

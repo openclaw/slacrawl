@@ -106,5 +106,7 @@ slacrawl sql "select entity_id, value from sync_state where source_name = 'deskt
 
 - Rich IndexedDB redux blob decoding uses `node` when available.
 - If `node` is unavailable, desktop sync still runs, but decoded cached channel/user/message coverage will be reduced.
+- IndexedDB redux blobs are decoded per blob across known framings: bare V8 wire format 15/16, Slack Snappy wrapping, historical split Blink/V8 headers, and the current Snappy + Blink v21 envelope. V8 v16 payloads use an explicit v16-to-v15 compatibility adaptation; unknown future versions are reported as unsupported and never relabeled.
+- `doctor` reports IndexedDB blob totals, recognized candidates, decoded counts, detected V8 versions, and decode failures grouped by stage. Desktop sync fails rather than reporting success when every recognized candidate fails to decode.
 - Desktop data is merged at lower precedence than API data.
 - Re-running desktop sync is safe; canonical rows are upserted by Slack-native keys.

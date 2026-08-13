@@ -24,6 +24,7 @@ type Config struct {
 	Version     int          `toml:"version"`
 	WorkspaceID string       `toml:"workspace_id"`
 	Workspaces  []Workspace  `toml:"workspaces"`
+	Providers   []Provider   `toml:"providers"`
 	DBPath      string       `toml:"db_path"`
 	CacheDir    string       `toml:"cache_dir"`
 	LogDir      string       `toml:"log_dir"`
@@ -31,6 +32,15 @@ type Config struct {
 	Sync        SyncConfig   `toml:"sync"`
 	Search      SearchConfig `toml:"search"`
 	Share       ShareConfig  `toml:"share"`
+}
+
+type Provider struct {
+	Name         string   `toml:"name"`
+	Command      string   `toml:"command"`
+	Args         []string `toml:"args"`
+	EnvAllowlist []string `toml:"env_allowlist"`
+	SourceRank   int      `toml:"source_rank"`
+	BatchSize    int      `toml:"batch_size"`
 }
 
 type SlackConfig struct {
@@ -292,11 +302,54 @@ func (c *Config) Normalize() error {
 		}
 		c.Workspaces[i].ID = strings.TrimSpace(c.Workspaces[i].ID)
 	}
+	providerNames := make(map[string]struct{}, len(c.Providers))
+	for i := range c.Providers {
+		provider := &c.Providers[i]
+		provider.Name = strings.ToLower(strings.TrimSpace(provider.Name))
+		if provider.Name == "" {
+			return fmt.Errorf("providers[%d].name is required", i)
+		}
+		if strings.ContainsAny(provider.Name, ":/\\\t\r\n ") {
+			return fmt.Errorf("providers[%d].name %q must not contain whitespace, slashes, or colons", i, provider.Name)
+		}
+		if _, exists := providerNames[provider.Name]; exists {
+			return fmt.Errorf("duplicate provider name %q", provider.Name)
+		}
+		providerNames[provider.Name] = struct{}{}
+		provider.Command = crawlconfig.ExpandHome(strings.TrimSpace(provider.Command))
+		if provider.Command == "" {
+			return fmt.Errorf("providers[%d].command is required", i)
+		}
+		if !filepath.IsAbs(provider.Command) {
+			return fmt.Errorf("providers[%d].command must be an absolute path", i)
+		}
+		provider.Command = filepath.Clean(provider.Command)
+		provider.EnvAllowlist = normalizeStringList(provider.EnvAllowlist)
+		if provider.SourceRank <= 2 {
+			return fmt.Errorf("providers[%d].source_rank must be greater than 2", i)
+		}
+		if provider.BatchSize == 0 {
+			provider.BatchSize = 1_000
+		}
+		if provider.BatchSize < 1 || provider.BatchSize > 100_000 {
+			return fmt.Errorf("providers[%d].batch_size must be between 1 and 100000", i)
+		}
+	}
 	c.WorkspaceID = strings.TrimSpace(c.WorkspaceID)
 	if c.WorkspaceID == "" {
 		c.WorkspaceID = c.DefaultWorkspaceID()
 	}
 	return nil
+}
+
+func (c Config) Provider(name string) (Provider, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, provider := range c.Providers {
+		if provider.Name == name {
+			return provider, true
+		}
+	}
+	return Provider{}, false
 }
 
 func normalizeStringList(values []string) []string {

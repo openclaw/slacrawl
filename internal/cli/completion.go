@@ -173,7 +173,7 @@ _slacrawl()
             COMPREPLY=( $(compgen -W "--repo --db --remote --branch --stale-after --no-auto-update --no-import --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         update)
-            COMPREPLY=( $(compgen -W "--repo --remote --branch --ref --no-media --help -h ${global_flags}" -- "${cur}") )
+			COMPREPLY=( $(compgen -W "--repo --remote --branch --ref --restore --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         sync)
             COMPREPLY=( $(compgen -W "--source --workspace --channels --since --full --latest-only --concurrency --with-media --help -h ${global_flags}" -- "${cur}") )
@@ -217,10 +217,10 @@ _slacrawl()
             COMPREPLY=( $(compgen -W "--workspace --target --limit --help -h ${global_flags}" -- "${cur}") )
             ;;
         users)
-            COMPREPLY=( $(compgen -W "--workspace --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--workspace --limit --help -h ${global_flags}" -- "${cur}") )
             ;;
 		channels)
-			COMPREPLY=( $(compgen -W "--workspace --kind --help -h ${global_flags}" -- "${cur}") )
+			COMPREPLY=( $(compgen -W "--workspace --kind --limit --help -h ${global_flags}" -- "${cur}") )
 			;;
         completion)
             COMPREPLY=( $(compgen -W "bash zsh --help -h ${global_flags}" -- "${cur}") )
@@ -311,7 +311,7 @@ _slacrawl() {
           _arguments '--repo[local clone path]:path:_files' '--db[database path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--stale-after[auto-refresh age threshold]:duration:' '--no-auto-update[disable read-time auto refresh]' '--no-import[skip initial import]' '--no-media[skip restoring cached media]'
           ;;
         update)
-          _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--ref[historical Git ref to import]:ref:' '--no-media[skip restoring cached media]'
+          _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--ref[historical Git ref to import; requires --restore]:ref:' '--restore[exactly replace snapshot tables instead of merging]' '--no-media[skip restoring cached media]'
           ;;
         sync)
           _arguments '--source[sync source]:source:(api bot desktop wiretap mcp connector all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
@@ -348,10 +348,10 @@ _slacrawl() {
           _arguments '--workspace[workspace id]:workspace id:' '--target[target id or label]:target:' '--limit[row limit]:limit:'
           ;;
         users)
-          _arguments '--workspace[workspace id]:workspace id:'
+          _arguments '--workspace[workspace id]:workspace id:' '--limit[row limit]:limit:'
           ;;
 		channels)
-		  _arguments '--workspace[workspace id]:workspace id:' '--kind[channel kind]:kind:(im mpim public_channel private_channel)'
+		  _arguments '--workspace[workspace id]:workspace id:' '--kind[channel kind]:kind:(im mpim public_channel private_channel)' '--limit[row limit]:limit:'
 		  ;;
         completion)
           _values 'shell' bash zsh

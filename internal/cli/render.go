@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 const banner = `
@@ -287,11 +289,14 @@ func renderTable(w *strings.Builder, rows []map[string]any, depth int) {
 	columns := orderedColumns(rows)
 	widths := make(map[string]int, len(columns))
 	for _, col := range columns {
-		widths[col] = len(humanize(col))
+		widths[col] = displayWidth(humanize(col))
 	}
 	for _, row := range rows {
 		for _, col := range columns {
-			if n := len(formatScalar(row[col])); n > widths[col] {
+			// Measure the uncolored text: formatScalar wraps empty, nil and
+			// bool cells in ANSI codes, whose bytes are invisible but would
+			// otherwise pad the column by roughly eight characters.
+			if n := displayWidth(plainScalar(row[col])); n > widths[col] {
 				widths[col] = n
 			}
 		}
@@ -305,7 +310,7 @@ func renderTable(w *strings.Builder, rows []map[string]any, depth int) {
 		header := humanize(col)
 		w.WriteString(prefixIfFirst(prefix, i))
 		w.WriteString(colorize(ansiDim, header))
-		w.WriteString(strings.Repeat(" ", widths[col]-len(header)))
+		w.WriteString(strings.Repeat(" ", widths[col]-displayWidth(header)))
 	}
 	w.WriteByte('\n')
 	for i, col := range columns {
@@ -322,9 +327,8 @@ func renderTable(w *strings.Builder, rows []map[string]any, depth int) {
 				w.WriteString("  ")
 			}
 			w.WriteString(prefixIfFirst(prefix, i))
-			cell := formatScalar(row[col])
-			w.WriteString(cell)
-			w.WriteString(strings.Repeat(" ", widths[col]-len(cell)))
+			w.WriteString(formatScalar(row[col]))
+			w.WriteString(strings.Repeat(" ", widths[col]-displayWidth(plainScalar(row[col]))))
 		}
 		w.WriteByte('\n')
 	}
@@ -1303,21 +1307,44 @@ func ternary(ok bool, a string, b string) string {
 	return b
 }
 
+// trimTo clips value to limit display columns. It counts width rather than
+// bytes so a message containing emoji or CJK is neither cut mid-rune into
+// invalid UTF-8 nor truncated far earlier than intended.
 func trimTo(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
+	if limit <= 0 || displayWidth(value) <= limit {
 		return value
 	}
 	if limit <= 3 {
-		return value[:limit]
+		return truncateToWidth(value, limit)
 	}
-	return value[:limit-3] + "..."
+	return truncateToWidth(value, limit-3) + "..."
+}
+
+func truncateToWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	used := 0
+	for i, r := range value {
+		w := runewidth.RuneWidth(r)
+		if used+w > width {
+			return value[:i]
+		}
+		used += w
+	}
+	return value
+}
+
+func displayWidth(value string) int {
+	return runewidth.StringWidth(value)
 }
 
 func padRight(value string, width int) string {
-	if len(value) >= width {
+	pad := width - displayWidth(value)
+	if pad <= 0 {
 		return value
 	}
-	return value + strings.Repeat(" ", width-len(value))
+	return value + strings.Repeat(" ", pad)
 }
 
 func colorize(code string, value string) string {

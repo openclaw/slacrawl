@@ -700,20 +700,25 @@ func renderSlackToken(target string, label string) string {
 }
 
 func ExtractMentions(text string) []Mention {
-	text = sanitizeDisplayText(text)
+	// Match against the still-escaped text, exactly like normalizeMessageText:
+	// Slack escapes literal <, >, & in message bodies, so a user *talking
+	// about* mention syntax arrives as &lt;@U…&gt;. Unescaping first made that
+	// indistinguishable from a real mention token; only the display label may
+	// be unescaped.
+	text = sanitizeText(text)
 	var mentions []Mention
 	for _, match := range userMentionRe.FindAllStringSubmatch(text, -1) {
 		mentions = append(mentions, Mention{
 			Type:        "user",
 			TargetID:    match[1],
-			DisplayText: display(match[2], match[1]),
+			DisplayText: display(sanitizeDisplayText(match[2]), match[1]),
 		})
 	}
 	for _, match := range channelMentionRe.FindAllStringSubmatch(text, -1) {
 		mentions = append(mentions, Mention{
 			Type:        "channel",
 			TargetID:    match[1],
-			DisplayText: display(match[2], match[1]),
+			DisplayText: display(sanitizeDisplayText(match[2]), match[1]),
 		})
 	}
 	return mentions

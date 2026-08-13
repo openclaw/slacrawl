@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,8 +79,30 @@ type LocalStorageSummary struct {
 }
 
 type IndexedDBSummary struct {
-	ObjectStores      []string `json:"object_stores"`
-	DecodedStateCount int      `json:"decoded_state_count"`
+	ObjectStores       []string       `json:"object_stores"`
+	NodeAvailable      bool           `json:"node_available"`
+	BlobFileCount      int            `json:"blob_file_count"`
+	CandidateCount     int            `json:"candidate_count"`
+	DecodedBlobCount   int            `json:"decoded_blob_count"`
+	DecodedStateCount  int            `json:"decoded_state_count"`
+	DecodeFailureCount int            `json:"decode_failure_count"`
+	DecodeFailures     map[string]int `json:"decode_failures,omitempty"`
+	V8Versions         map[string]int `json:"v8_versions,omitempty"`
+}
+
+func (summary *IndexedDBSummary) recordDecodeFailure(stage string) {
+	if summary.DecodeFailures == nil {
+		summary.DecodeFailures = map[string]int{}
+	}
+	summary.DecodeFailures[stage]++
+	summary.DecodeFailureCount++
+}
+
+func (summary *IndexedDBSummary) recordV8Version(version byte) {
+	if summary.V8Versions == nil {
+		summary.V8Versions = map[string]int{}
+	}
+	summary.V8Versions[strconv.Itoa(int(version))]++
 }
 
 type Snapshot struct {
@@ -253,7 +276,6 @@ func Inspect(path string) (Source, error) {
 	source.Summary = extracted.RootState.Summary
 	source.Local = localSummary(extracted)
 	source.IndexedDB = extracted.IndexedDB
-	source.IndexedDB.DecodedStateCount = len(extracted.ReduxStates)
 	return source, nil
 }
 
@@ -322,11 +344,18 @@ func Extract(path string) (ExtractedData, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return ExtractedData{}, err
 	}
-	reduxStates, err := ExtractIndexedDBStates(path)
+	reduxStates, decodeSummary, err := extractIndexedDBStates(path)
 	if err != nil {
 		return ExtractedData{}, err
 	}
-	indexed.DecodedStateCount = len(reduxStates)
+	indexed.NodeAvailable = decodeSummary.NodeAvailable
+	indexed.BlobFileCount = decodeSummary.BlobFileCount
+	indexed.CandidateCount = decodeSummary.CandidateCount
+	indexed.DecodedBlobCount = decodeSummary.DecodedBlobCount
+	indexed.DecodedStateCount = decodeSummary.DecodedStateCount
+	indexed.DecodeFailureCount = decodeSummary.DecodeFailureCount
+	indexed.DecodeFailures = decodeSummary.DecodeFailures
+	indexed.V8Versions = decodeSummary.V8Versions
 
 	return ExtractedData{
 		RootState:   root,
@@ -360,6 +389,13 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 	extracted, err := Extract(snapshot.Root)
 	if err != nil {
 		return Source{}, err
+	}
+	if extracted.IndexedDB.NodeAvailable && extracted.IndexedDB.CandidateCount > 0 && extracted.IndexedDB.DecodedBlobCount == 0 {
+		return Source{}, fmt.Errorf(
+			"desktop IndexedDB: failed to decode all %d candidate blob(s): %s",
+			extracted.IndexedDB.CandidateCount,
+			formatDecodeFailures(extracted.IndexedDB.DecodeFailures),
+		)
 	}
 	source.Summary = extracted.RootState.Summary
 	source.Local = localSummary(extracted)
@@ -447,6 +483,13 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			UpdatedAt:   now,
 		})
 	}
+	draftBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(extracted.Drafts))}
+	type legacyDraftDeletion struct {
+		workspaceID string
+		channelID   string
+		ts          string
+	}
+	legacyDraftDeletions := make([]legacyDraftDeletion, 0)
 	for _, draft := range extracted.Drafts {
 		if len(draft.Destinations) == 0 {
 			continue
@@ -502,13 +545,26 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 		if message.Text == "" {
 			continue
 		}
-		if err := upsertDesktopMessage(ctx, st, message, nil); err != nil {
+		draftBatch.Messages = append(draftBatch.Messages, store.MessageWrite{
+			Message:                message,
+			SkipWorkspaceCollision: true,
+		})
+		if legacyTS := legacyDraftTS(draft); legacyTS != message.TS {
+			legacyDraftDeletions = append(legacyDraftDeletions, legacyDraftDeletion{
+				workspaceID: workspaceID,
+				channelID:   channelID,
+				ts:          legacyTS,
+			})
+		}
+	}
+	if len(draftBatch.Messages) > 0 {
+		if _, err := st.ApplyWriteBatch(ctx, draftBatch); err != nil {
 			return Source{}, err
 		}
-		if legacyTS := legacyDraftTS(draft); legacyTS != message.TS {
-			if _, err := st.DeleteMessageBySource(ctx, workspaceID, channelID, legacyTS, draftSourceName); err != nil {
-				return Source{}, err
-			}
+	}
+	for _, deletion := range legacyDraftDeletions {
+		if _, err := st.DeleteMessageBySource(ctx, deletion.workspaceID, deletion.channelID, deletion.ts, draftSourceName); err != nil {
+			return Source{}, err
 		}
 	}
 	for _, channel := range channelHints {
@@ -786,17 +842,6 @@ func upsertDesktopUser(ctx context.Context, st *store.Store, user store.User) er
 		return nil
 	}
 	if store.IsWorkspaceCollision(err, "user") {
-		return nil
-	}
-	return err
-}
-
-func upsertDesktopMessage(ctx context.Context, st *store.Store, message store.Message, mentions []store.Mention) error {
-	err := st.UpsertMessage(ctx, message, mentions)
-	if err == nil {
-		return nil
-	}
-	if store.IsWorkspaceCollision(err, "message") {
 		return nil
 	}
 	return err
@@ -1096,6 +1141,22 @@ func ScanIndexedDB(path string) (IndexedDBSummary, error) {
 	}
 	sort.Strings(names)
 	return IndexedDBSummary{ObjectStores: names}, nil
+}
+
+func formatDecodeFailures(failures map[string]int) string {
+	if len(failures) == 0 {
+		return "unknown failure"
+	}
+	stages := make([]string, 0, len(failures))
+	for stage := range failures {
+		stages = append(stages, stage)
+	}
+	sort.Strings(stages)
+	parts := make([]string, 0, len(stages))
+	for _, stage := range stages {
+		parts = append(parts, fmt.Sprintf("%s=%d", stage, failures[stage]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 type indexedDBComparer struct{}

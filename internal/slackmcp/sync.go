@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	SourceName = "mcp"
-	SourceRank = 4
+	SourceName          = "mcp"
+	SourceRank          = 4
+	maxMessageBatchSize = 500
 )
 
 var channelIDRE = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
@@ -117,17 +118,27 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		summary.Channels++
 
 		threadRoots := map[string]struct{}{}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
 		for _, message := range channelResult.Messages {
-			stored, err := upsertMessage(ctx, st, workspaceID, message, enforceRetention, now)
-			if err != nil {
-				return summary, err
-			}
-			if stored {
-				summary.Messages++
+			batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, message, enforceRetention, now))
+			if len(batch.Messages) == maxMessageBatchSize {
+				result, err := st.ApplyWriteBatch(ctx, batch)
+				if err != nil {
+					return summary, err
+				}
+				summary.Messages += result.MessagesWritten
+				batch.Messages = batch.Messages[:0]
 			}
 			if message.ReplyCount > 0 {
 				threadRoots[message.TS] = struct{}{}
 			}
+		}
+		if len(batch.Messages) > 0 {
+			result, err := st.ApplyWriteBatch(ctx, batch)
+			if err != nil {
+				return summary, err
+			}
+			summary.Messages += result.MessagesWritten
 		}
 		if tools.readThread == "" {
 			continue
@@ -180,21 +191,24 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
 		thread.Parent.LatestReply = latestReplyTS(thread.Parent.LatestReply, thread.Replies)
-		if _, err := upsertMessage(ctx, st, workspaceID, *thread.Parent, enforceRetention, now); err != nil {
+		if _, err := st.ApplyWriteBatch(ctx, store.WriteBatch{Messages: []store.MessageWrite{
+			toMessageWrite(workspaceID, *thread.Parent, enforceRetention, now),
+		}}); err != nil {
 			return 0, err
 		}
 	}
-	stored := 0
+	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies))}
 	for _, reply := range thread.Replies {
-		written, err := upsertMessage(ctx, st, workspaceID, reply, enforceRetention, now)
-		if err != nil {
-			return 0, err
-		}
-		if written {
-			stored++
-		}
+		batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, reply, enforceRetention, now))
 	}
-	return stored, nil
+	if len(batch.Messages) == 0 {
+		return 0, nil
+	}
+	result, err := st.ApplyWriteBatch(ctx, batch)
+	if err != nil {
+		return 0, err
+	}
+	return result.MessagesWritten, nil
 }
 
 func resolveChannels(ctx context.Context, client *Client, tools toolset, selectors []string) ([]ChannelRecord, error) {
@@ -334,7 +348,7 @@ func toStoreUser(workspaceID string, user UserRecord, now time.Time) store.User 
 	}
 }
 
-func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, message MessageRecord, enforceRetention bool, now time.Time) (bool, error) {
+func toMessageWrite(workspaceID string, message MessageRecord, enforceRetention bool, now time.Time) store.MessageWrite {
 	threadTS := message.ThreadTS
 	if threadTS == message.TS {
 		threadTS = ""
@@ -373,10 +387,12 @@ func upsertMessage(ctx context.Context, st *store.Store, workspaceID string, mes
 		UpdatedAt:      now,
 		Files:          nil,
 	}
-	if enforceRetention {
-		return st.UpsertMessageByPriorityWithRetention(ctx, stored, storedMentions)
+	return store.MessageWrite{
+		Message:                stored,
+		Mentions:               storedMentions,
+		PreserveHigherPriority: true,
+		EnforceRetention:       enforceRetention,
 	}
-	return st.UpsertMessageByPriority(ctx, stored, storedMentions)
 }
 
 func latestReplyTS(current string, replies []MessageRecord) string {

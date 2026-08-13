@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -208,7 +210,7 @@ func fetchURL(ctx context.Context, opts FetchOptions, file store.FileRow, url st
 	if resp.ContentLength > opts.MaxBytes {
 		return fetchResult{status: "skipped", reason: "too_large"}, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, opts.MaxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit(opts.MaxBytes)))
 	if err != nil {
 		return fetchResult{}, err
 	}
@@ -253,6 +255,17 @@ func fetchURL(ctx context.Context, opts FetchOptions, file store.FileRow, url st
 		}
 	}
 	return fetchResult{mediaPath: mediaPath, sha256: hash, size: int64(len(body))}, nil
+}
+
+// readLimit returns the byte budget for a download: one past the cap so an
+// oversized body is detectable. math.MaxInt64 is the natural "no cap" value, and
+// incrementing it wraps negative, which makes io.LimitReader return EOF at once
+// and every attachment look like a successfully fetched empty file.
+func readLimit(maxBytes int64) int64 {
+	if maxBytes == math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return maxBytes + 1
 }
 
 func httpClientWithRedirectValidation(client *http.Client, withToken bool) *http.Client {
@@ -327,8 +340,14 @@ func mediaTargetNeedsWrite(target, hash string) (bool, error) {
 
 func fileMediaPath(hash, filename, contentType string) string {
 	name := safeFilename(filename)
-	if name == "" {
+	switch {
+	case name == "":
 		name = "file" + extensionForContentType(contentType)
+	case filepath.Ext(name) == "":
+		// safeFilename drops non-ASCII runes, so a fully non-Latin name such as
+		// "写真.png" survives only as "png" and loses its extension. Anything
+		// that types by extension would then mis-serve the cached file.
+		name += extensionForContentType(contentType)
 	}
 	name = truncateFilename(name, 190)
 	return filepath.ToSlash(filepath.Join("files", hash[:2], hash+"-"+name))
@@ -394,28 +413,48 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+// ResolveRoot returns the media root with its own symlinks resolved. Parking a
+// large attachment cache on another volume behind a symlink is a supported
+// setup, and the fetch path has always written through one, so the read paths
+// must not reject it — otherwise purge and publish wedge on a cache that
+// slacrawl itself keeps filling. Symlinks *inside* the tree stay rejected by
+// the per-component checks, which is where an escape could actually come from.
+func ResolveRoot(root string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	resolved = filepath.Clean(resolved)
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("unsafe media root %q", root)
+	}
+	return resolved, nil
+}
+
 func LocalPath(cacheDir, mediaPath string) (string, error) {
-	root := filepath.Clean(filepath.Join(cacheDir, cacheSubdir))
-	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(mediaPath)))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid media path %q", mediaPath)
-	}
-	full := filepath.Clean(filepath.Join(root, clean))
-	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("media path escapes cache: %q", mediaPath)
-	}
-	return full, nil
+	return containedJoin(cacheDir, mediaPath, "cache")
 }
 
 func RepoPath(repoPath, mediaPath string) (string, error) {
-	root := filepath.Clean(filepath.Join(repoPath, cacheSubdir))
+	return containedJoin(repoPath, mediaPath, "repo")
+}
+
+// containedJoin is the single lexical-containment check for media paths: the
+// joined result must stay under <base>/media. Both the cache and the share
+// repo enforce the same invariant, so they share one implementation.
+func containedJoin(base, mediaPath, label string) (string, error) {
+	root := filepath.Clean(filepath.Join(base, cacheSubdir))
 	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(mediaPath)))
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("invalid media path %q", mediaPath)
 	}
 	full := filepath.Clean(filepath.Join(root, clean))
 	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("media path escapes repo: %q", mediaPath)
+		return "", fmt.Errorf("media path escapes %s: %q", label, mediaPath)
 	}
 	return full, nil
 }
@@ -425,5 +464,11 @@ func clampError(message string) string {
 	if len(message) <= 512 {
 		return message
 	}
-	return message[:512]
+	// Cut on a rune boundary so a non-ASCII error does not leave invalid UTF-8
+	// in message_files.fetch_error, which surfaces as U+FFFD downstream.
+	clamped := message[:512]
+	for len(clamped) > 0 && !utf8.ValidString(clamped) {
+		clamped = clamped[:len(clamped)-1]
+	}
+	return clamped
 }

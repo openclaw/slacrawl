@@ -131,6 +131,16 @@ func TestAnalyticsQuietCommand(t *testing.T) {
 	require.False(t, ids["C3"])
 }
 
+func TestAnalyticsTrendsRejectsAbsurdWeeks(t *testing.T) {
+	ctx := context.Background()
+	app, configPath, _, _ := setupAnalyticsApp(t)
+
+	// Each channel row materializes one bucket per week, so an unbounded
+	// count was a multi-gigabyte allocation, not a long report.
+	err := app.Run(ctx, []string{"--config", configPath, "analytics", "trends", "--weeks", "2000000000"})
+	require.ErrorContains(t, err, "--weeks must be 520 or fewer")
+}
+
 func TestAnalyticsTrendsCommand(t *testing.T) {
 	ctx := context.Background()
 	app, configPath, dbPath, stdout := setupAnalyticsApp(t)

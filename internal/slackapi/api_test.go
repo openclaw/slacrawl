@@ -884,7 +884,7 @@ type fakeSocketMode struct {
 	acks   int
 }
 
-func (f *fakeSocketMode) Run() error { return nil }
+func (f *fakeSocketMode) Run(context.Context) error { return nil }
 func (f *fakeSocketMode) Ack(req socketmode.Request, payload ...interface{}) {
 	f.acks++
 }
@@ -1021,6 +1021,32 @@ func newSkipChannelSlackServer(t *testing.T) *mockSlackServer {
 			}
 		case "/users.list":
 			_, _ = w.Write([]byte(`{"ok":true,"members":[],"response_metadata":{"next_cursor":""}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return mock
+}
+
+func newSharedUserSlackServer(t *testing.T) *mockSlackServer {
+	t.Helper()
+	mock := &mockSlackServer{counts: map[string]int{}, lastOld: map[string]string{}}
+	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth.test":
+			_, _ = w.Write([]byte(`{"ok":true,"team":"Test Team","team_id":"T123","user":"bot","user_id":"Ubot","bot_id":"B123"}`))
+		case "/conversations.list":
+			_, _ = w.Write([]byte(`{"ok":true,"channels":[
+				{"id":"C222","name":"general","is_channel":true,"is_private":false,"is_archived":false,"is_shared":false,"is_general":true,"topic":{"value":"topic"},"purpose":{"value":"purpose"}}
+			],"response_metadata":{"next_cursor":""}}`))
+		case "/conversations.history":
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","channel":"C222","user":"U123","text":"accessible message","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":""}}`))
+		case "/users.list":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[
+				{"id":"Ushared","name":"shared","real_name":"Shared User"},
+				{"id":"Ulocal","name":"local","real_name":"Local User"}
+			],"response_metadata":{"next_cursor":""}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -1354,14 +1380,16 @@ func TestHandleEventsAPIEventMarksOriginalMessageDeleted(t *testing.T) {
 	require.Equal(t, "gone [deleted]", rows[0]["normalized_text"])
 	files, err := st.Files(ctx, store.FileListOptions{FileID: "F123"})
 	require.NoError(t, err)
-	require.Len(t, files, 1)
-	require.Equal(t, "files/ab/hash-incident.txt", files[0].MediaPath)
+	require.Empty(t, files)
+	fileTombstones, err := st.QueryReadOnly(ctx, `select file_id, deletion_source, deletion_reason from message_files where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"file_id": "F123", "deletion_source": "api-bot", "deletion_reason": "parent_message_deleted"}}, fileTombstones)
 	matches, err := st.Search(ctx, "T123", "deleted", 10)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 	matches, err = st.Search(ctx, "T123", "archived", 10)
 	require.NoError(t, err)
-	require.Len(t, matches, 1)
+	require.Empty(t, matches)
 }
 
 func TestHandleEventsAPIEventIndexesMentionsForDeletedTombstone(t *testing.T) {
@@ -1390,9 +1418,13 @@ func TestHandleEventsAPIEventIndexesMentionsForDeletedTombstone(t *testing.T) {
 
 	mentions, err := st.Mentions(ctx, "T123", "U234", 10)
 	require.NoError(t, err)
-	require.Len(t, mentions, 1)
-	require.Equal(t, "1710000000.000100", mentions[0].TS)
-	require.Equal(t, "sam", mentions[0].DisplayText)
+	require.Empty(t, mentions)
+	tombstones, err := st.QueryReadOnly(ctx, `select ts, target_id, display_text, deletion_source, deletion_reason from message_mentions where deleted_at is not null`)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{
+		"ts": "1710000000.000100", "target_id": "U234", "display_text": "sam",
+		"deletion_source": "api-bot", "deletion_reason": "parent_message_deleted",
+	}}, tombstones)
 }
 
 func TestHandleEventsAPIEventIgnoresUnknown(t *testing.T) {
@@ -1618,6 +1650,114 @@ func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+func TestSyncSkipsChannelOwnedByAnotherWorkspace(t *testing.T) {
+	server := newSkipChannelSlackServer(t)
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{
+		Bot: "xoxb-test",
+	}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	now := time.Now().UTC()
+	// Slack Connect shared channels surface in multiple workspaces. Seed the
+	// channel as owned by a different workspace, the state a multi-workspace
+	// archive can legitimately reach; the sync for T123 must not abort.
+	require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{ID: "Tother", Name: "other", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertChannel(context.Background(), store.Channel{ID: "C111", WorkspaceID: "Tother", Name: "private-ish", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+
+	err := client.Sync(context.Background(), st, SyncOptions{})
+	require.NoError(t, err, "one cross-workspace channel must not abort the sync")
+
+	rows, err := st.Messages(context.Background(), "", "C222", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "other channels must still sync")
+	require.Equal(t, "accessible message", rows[0].Text)
+
+	owner, err := st.ChannelWorkspaceID(context.Background(), "C111")
+	require.NoError(t, err)
+	require.Equal(t, "Tother", owner, "the original workspace keeps the shared channel")
+}
+
+func TestSyncSkipsUserOwnedByAnotherWorkspace(t *testing.T) {
+	server := newSharedUserSlackServer(t)
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{
+		Bot: "xoxb-test",
+	}, server.URL()+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	// Enterprise Grid shares user IDs org-wide, so users.list for T123 can
+	// return a member another workspace already recorded. The sync must skip
+	// that row rather than abort after every message has already committed.
+	require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "Tother", Name: "other", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertUser(ctx, store.User{ID: "Ushared", WorkspaceID: "Tother", Name: "shared", RawJSON: "{}", UpdatedAt: now}))
+
+	require.NoError(t, client.Sync(ctx, st, SyncOptions{}), "one cross-workspace user must not abort the sync")
+
+	rows, err := st.Messages(ctx, "", "C222", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	// The checkpoint lives after the user loop, so an abort there silently
+	// discarded the whole run's progress.
+	state, err := st.GetSyncState(ctx, SourceBot, "workspace", "T123")
+	require.NoError(t, err)
+	require.NotEmpty(t, state, "the bot sync checkpoint must still be recorded")
+}
+
+func TestHandleEventsAPIEventSkipsMessageOwnedByAnotherWorkspace(t *testing.T) {
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	ctx := context.Background()
+	now := time.Date(2026, 3, 8, 3, 0, 0, 0, time.UTC)
+	// A Slack Connect channel stays owned by whichever workspace recorded it
+	// first, so tail for the other workspace keeps receiving its messages.
+	// That must not terminate the socket-mode loop.
+	require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "Tother", Name: "other", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C111", WorkspaceID: "Tother", Name: "shared", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{
+		ChannelID: "C111", TS: "1710000000.000100", WorkspaceID: "Tother",
+		UserID: "U123", Text: "owned elsewhere", SourceName: SourceBot, SourceRank: 2,
+		RawJSON: "{}", UpdatedAt: now,
+	}, nil))
+	require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "T123", Name: "team", RawJSON: "{}", UpdatedAt: now}))
+
+	client := New(config.Tokens{Bot: "xoxb-test", App: "xapp-test"})
+	client.now = func() time.Time { return now }
+
+	event, err := slackevents.ParseEvent([]byte(`{
+	  "token":"ignored",
+	  "team_id":"T123",
+	  "api_app_id":"A123",
+	  "type":"event_callback",
+	  "event":{
+	    "type":"message",
+	    "channel":"C111",
+	    "user":"U123",
+	    "text":"shared channel reply",
+	    "ts":"1710000000.000100",
+	    "event_ts":"1710000000.000100"
+	  }
+	}`), slackevents.OptionNoVerifyToken())
+	require.NoError(t, err)
+	require.NoError(t, client.HandleEventsAPIEvent(ctx, st, "T123", event), "a cross-workspace message must not kill tail")
+
+	owner, err := st.ChannelWorkspaceID(ctx, "C111")
+	require.NoError(t, err)
+	require.Equal(t, "Tother", owner, "the original workspace keeps the shared channel")
+}
+
 func TestSyncSkipsExcludedChannels(t *testing.T) {
 	server := newExcludeChannelSlackServer(t)
 	defer server.Close()
@@ -1688,4 +1828,24 @@ func testProgressLogger(out *bytes.Buffer) *slog.Logger {
 			return attr
 		},
 	}))
+}
+
+func TestNewWithOptionsDefaultsTimedHTTPClient(t *testing.T) {
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, "", nil)
+	if client.httpClient == nil {
+		t.Fatal("httpClient is nil")
+	}
+	if client.httpClient == http.DefaultClient {
+		t.Fatal("httpClient must not be http.DefaultClient")
+	}
+	if client.httpClient.Timeout != defaultHTTPTimeout {
+		t.Fatalf("httpClient.Timeout = %s, want %s", client.httpClient.Timeout, defaultHTTPTimeout)
+	}
+}
+
+func TestNewUsesDefaultHTTPClient(t *testing.T) {
+	client := New(config.Tokens{Bot: "xoxb-test"})
+	if client.httpClient.Timeout != defaultHTTPTimeout {
+		t.Fatalf("New() httpClient.Timeout = %s, want %s", client.httpClient.Timeout, defaultHTTPTimeout)
+	}
 }
