@@ -48,6 +48,11 @@ slacrawl sync --source mcp --workspace T01234567
 slacrawl sync --source wiretap
 ```
 
+Trusted parent processes can pass short-lived MCP credentials without argv,
+environment variables, or named files. See
+[MCP Connector Source](configuration.md#mcp-connector-source) for the
+`--mcp-auth-fd`, `--mcp-url`, and `--mcp-channel-types` workflow.
+
 Import a workspace export with an explicit workspace ID:
 
 ```sh

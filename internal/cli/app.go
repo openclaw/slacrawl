@@ -498,6 +498,9 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	full := fs.Bool("full", false, "full sync")
 	latestOnly := fs.Bool("latest-only", false, "skip first-time historical backfills")
 	limit := fs.Int("limit", 0, "maximum provider messages (validation imports only)")
+	mcpAuthFD := fs.Int("mcp-auth-fd", -1, "inherited one-shot MCP auth file descriptor")
+	mcpURL := fs.String("mcp-url", "", "override the configured HTTP MCP endpoint")
+	mcpChannelTypes := fs.String("mcp-channel-types", "", "override MCP channel types")
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
 	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during sync")
@@ -509,6 +512,19 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	}
 	if *limit < 0 {
 		return errors.New("limit cannot be negative")
+	}
+	if *mcpAuthFD >= 0 {
+		if *mcpAuthFD < 3 || *mcpAuthFD > 1024 {
+			return errors.New("mcp-auth-fd must be an inherited descriptor between 3 and 1024")
+		}
+		cfg.Slack.MCP.AuthPath = fmt.Sprintf("fd:%d", *mcpAuthFD)
+	}
+	if strings.TrimSpace(*mcpURL) != "" {
+		cfg.Slack.MCP.Transport = "http"
+		cfg.Slack.MCP.BaseURL = strings.TrimSpace(*mcpURL)
+	}
+	if strings.TrimSpace(*mcpChannelTypes) != "" {
+		cfg.Slack.MCP.ChannelTypes = strings.TrimSpace(*mcpChannelTypes)
 	}
 
 	resolvedSource, err := syncer.ParseSource(*source)

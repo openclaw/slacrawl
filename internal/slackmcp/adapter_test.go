@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -316,6 +317,22 @@ func TestResolveAuthPrefersEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "env-token", auth.AccessToken)
 	require.Equal(t, "acct-123", auth.AccountID)
+}
+
+func TestResolveAuthDescriptorOverridesAmbientEnvironmentAndIsConsumed(t *testing.T) {
+	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "ambient-token")
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	_, err = writer.Write([]byte(`{"tokens":{"access_token":"one-shot-token","account_id":"test-account"}}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	auth, err := resolveAuth(config.MCPConfig{AuthPath: fmt.Sprintf("fd:%d", reader.Fd())})
+	require.NoError(t, err)
+	require.Equal(t, "one-shot-token", auth.AccessToken)
+	require.Equal(t, "test-account", auth.AccountID)
+	_, err = reader.Read(make([]byte, 1))
+	require.Error(t, err, "the one-shot descriptor should be closed after consumption")
 }
 
 func TestResolveSlackToolset(t *testing.T) {

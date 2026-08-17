@@ -176,7 +176,7 @@ _slacrawl()
 			COMPREPLY=( $(compgen -W "--repo --remote --branch --ref --restore --no-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         sync)
-            COMPREPLY=( $(compgen -W "--source --workspace --channels --since --full --latest-only --concurrency --with-media --help -h ${global_flags}" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--source --workspace --channels --since --full --latest-only --mcp-auth-fd --mcp-url --mcp-channel-types --concurrency --with-media --help -h ${global_flags}" -- "${cur}") )
             ;;
         import)
             COMPREPLY=( $(compgen -W "--workspace --dry-run --force --format --help -h ${global_flags}" -- "${cur}") )
@@ -314,7 +314,7 @@ _slacrawl() {
           _arguments '--repo[local clone path]:path:_files' '--remote[git remote]:remote:' '--branch[git branch]:branch:' '--ref[historical Git ref to import; requires --restore]:ref:' '--restore[exactly replace snapshot tables instead of merging]' '--no-media[skip restoring cached media]'
           ;;
         sync)
-          _arguments '--source[sync source]:source:(api bot desktop wiretap mcp connector all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
+          _arguments '--source[sync source]:source:(api bot desktop wiretap mcp connector all)' '--workspace[workspace id]:workspace id:' '--channels[channel ids]:channels:' '--since[start timestamp]:timestamp:' '--full[run full sync]' '--latest-only[skip first-time historical backfills]' '--mcp-auth-fd[inherited one-shot MCP auth descriptor]:descriptor:' '--mcp-url[override configured HTTP MCP endpoint]:url:' '--mcp-channel-types[override MCP channel types]:types:' '--concurrency[worker count]:count:' '--with-media[fetch file media after sync]'
           ;;
         import)
           _arguments '--workspace[workspace id]:workspace id:' '--dry-run[walk and count without writing]' '--force[overwrite existing slack-export rows at the same rank]' '--format[output format]:format:(text json log)'
