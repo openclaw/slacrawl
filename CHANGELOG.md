@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v0.8.5 - 2026-08-14
 
 ### Maintenance
