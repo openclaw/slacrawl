@@ -162,9 +162,31 @@ auth_path = "~/.codex/auth.json"
 
 HTTP authentication order:
 
-1. The configured `token_env` and optional `account_id_env`.
-2. `CODEX_APPS_ACCESS_TOKEN` or `CODEX_CONNECTORS_TOKEN`.
-3. The configured `auth_path`, using Codex's `tokens.access_token` and optional `tokens.account_id` fields.
+1. An inherited descriptor selected by `sync --mcp-auth-fd`; when present,
+   this explicit one-shot credential wins over ambient variables.
+2. The configured `token_env` and optional `account_id_env`.
+3. `CODEX_APPS_ACCESS_TOKEN` or `CODEX_CONNECTORS_TOKEN`.
+4. The configured `auth_path`, using Codex's `tokens.access_token` and optional
+   `tokens.account_id` fields.
+
+`--mcp-auth-fd` is intended for a trusted parent process. It consumes and
+closes an inherited descriptor containing the same JSON shape as `auth_path`,
+with a 64 KiB limit. This keeps a short-lived OAuth token out of argv,
+environment variables, and named files. The same invocation can use
+`--mcp-url` and `--mcp-channel-types` to override the MCP endpoint and visible
+channel classes without rewriting the persistent archive config:
+
+```bash
+slacrawl sync --source mcp --workspace T01234567 \
+  --mcp-url https://mcp.slack.com/mcp \
+  --mcp-channel-types public_channel,private_channel \
+  --mcp-auth-fd 3 --with-media=false
+```
+
+This command still uses normal Slacrawl upserts and cursors. Repeated runs
+deduplicate by Slack-native channel/message identity, overlap the newest
+per-channel cursor by one hour, and revisit stored thread roots. Excluding
+`im,mpim` from `--mcp-channel-types` prevents direct-message ingestion.
 
 `max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. Explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
 

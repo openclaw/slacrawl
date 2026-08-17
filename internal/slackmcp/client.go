@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/openclaw/slacrawl/internal/config"
@@ -351,7 +353,18 @@ type authInfo struct {
 	AccountID   string
 }
 
+const maxAuthFileBytes = 64 * 1024
+
 func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
+	// An inherited descriptor is an explicit one-shot credential handoff. It
+	// must win over ambient Codex/connector variables inherited by the parent.
+	if strings.HasPrefix(strings.TrimSpace(cfg.AuthPath), "fd:") {
+		raw, err := readAuth(cfg.AuthPath)
+		if err != nil {
+			return authInfo{}, fmt.Errorf("read MCP auth descriptor: %w", err)
+		}
+		return decodeAuth(raw, "descriptor")
+	}
 	tokenEnv := cfg.TokenEnv
 	if tokenEnv == "" {
 		tokenEnv = "CODEX_APPS_ACCESS_TOKEN"
@@ -372,10 +385,14 @@ func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
 	if strings.TrimSpace(cfg.AuthPath) == "" {
 		return authInfo{}, fmt.Errorf("MCP token environment variable %s is unset and auth_path is empty", tokenEnv)
 	}
-	raw, err := os.ReadFile(cfg.AuthPath)
+	raw, err := readAuth(cfg.AuthPath)
 	if err != nil {
 		return authInfo{}, fmt.Errorf("read MCP auth file %s: %w", cfg.AuthPath, err)
 	}
+	return decodeAuth(raw, cfg.AuthPath)
+}
+
+func decodeAuth(raw []byte, source string) (authInfo, error) {
 	var payload struct {
 		Tokens *struct {
 			AccessToken string `json:"access_token"`
@@ -383,12 +400,35 @@ func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
 		} `json:"tokens"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return authInfo{}, fmt.Errorf("parse MCP auth file %s: %w", cfg.AuthPath, err)
+		return authInfo{}, fmt.Errorf("parse MCP auth %s: %w", source, err)
 	}
 	if payload.Tokens == nil || strings.TrimSpace(payload.Tokens.AccessToken) == "" {
-		return authInfo{}, fmt.Errorf("MCP auth file %s does not contain tokens.access_token", cfg.AuthPath)
+		return authInfo{}, fmt.Errorf("MCP auth %s does not contain tokens.access_token", source)
 	}
 	return authInfo{AccessToken: strings.TrimSpace(payload.Tokens.AccessToken), AccountID: strings.TrimSpace(payload.Tokens.AccountID)}, nil
+}
+
+func readAuth(path string) ([]byte, error) {
+	if value, ok := strings.CutPrefix(strings.TrimSpace(path), "fd:"); ok {
+		descriptor, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || descriptor < 3 || descriptor > 1024 {
+			return nil, errors.New("invalid MCP auth file descriptor")
+		}
+		file := os.NewFile(uintptr(descriptor), "mcp-auth")
+		if file == nil {
+			return nil, errors.New("invalid MCP auth file descriptor")
+		}
+		defer func() { _ = file.Close() }()
+		raw, err := io.ReadAll(io.LimitReader(file, maxAuthFileBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) > maxAuthFileBytes {
+			return nil, errors.New("MCP auth payload is too large")
+		}
+		return raw, nil
+	}
+	return os.ReadFile(path)
 }
 
 func filterSlackTools(tools []mcpclient.Tool, connectorID string) ([]mcpclient.Tool, error) {

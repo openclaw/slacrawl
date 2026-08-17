@@ -62,7 +62,7 @@ Every source feeds the same SQLite archive and search index.
 | --- | --- | --- |
 | Slack API | `slacrawl sync --source bot` | Token-backed channel history, users, threads, and incremental refreshes |
 | Slack Desktop | `slacrawl sync --source wiretap` | Read-only recovery from local macOS or Linux desktop caches |
-| MCP connector | `slacrawl sync --source mcp --workspace T01234567` | Connector-backed history without a direct Slack API integration |
+| MCP connector | `slacrawl sync --source mcp --workspace T01234567` | Connector-backed history; trusted parents can use `--mcp-auth-fd` for one-shot credentials |
 | External provider | `slacrawl sync --source provider:archive --workspace T01234567` | A trusted local JSONL adapter for another archive |
 | Slack export | `slacrawl import <path> --workspace T01234567` | ZIP or directory exports |
 

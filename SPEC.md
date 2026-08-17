@@ -164,6 +164,9 @@ Expected flags:
 - `--full`
 - `--latest-only`
 - `--limit <messages>` for bounded external-provider validation imports
+- `--mcp-auth-fd <descriptor>` for one-shot credentials from a trusted parent
+- `--mcp-url <url>` to override the configured HTTP MCP endpoint
+- `--mcp-channel-types <csv>` to override configured MCP channel classes
 - `--concurrency <n>`
 - `--auto-join=<bool>`
 

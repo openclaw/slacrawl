@@ -658,6 +658,22 @@ func TestCommandHelpAfterCompleteOptionsDoesNotLoadConfig(t *testing.T) {
 	require.Empty(t, stderr.String())
 }
 
+func TestSyncRejectsInvalidMCPAuthDescriptor(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.toml")
+	cfg := config.Default()
+	cfg.DBPath = filepath.Join(tmp, "slacrawl.db")
+	require.NoError(t, cfg.Save(configPath))
+
+	app := &App{Stdout: io.Discard, Stderr: io.Discard}
+	err := app.Run(context.Background(), []string{
+		"--config", configPath,
+		"sync", "--source", "mcp", "--workspace", "T1", "--mcp-auth-fd", "2",
+	})
+
+	require.ErrorContains(t, err, "mcp-auth-fd must be an inherited descriptor")
+}
+
 func TestCommandHelpRespectsFlagParserBoundaries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -892,6 +908,7 @@ func TestCompletionBashOutput(t *testing.T) {
 	require.Contains(t, out, "--keep-message-events")
 	require.Contains(t, out, "--workspace --limit --help")
 	require.Contains(t, out, "--workspace --kind --limit --help")
+	require.Contains(t, out, "--mcp-auth-fd --mcp-url --mcp-channel-types")
 }
 
 func TestCompletionZshOutput(t *testing.T) {
@@ -924,6 +941,7 @@ func TestCompletionZshOutput(t *testing.T) {
 	require.Contains(t, out, "--restore[exactly replace snapshot tables instead of merging]")
 	require.Contains(t, out, "--workspace[workspace id]")
 	require.Contains(t, out, "'--limit[row limit]:limit:'")
+	require.Contains(t, out, "--mcp-auth-fd[inherited one-shot MCP auth descriptor]")
 }
 
 func TestReportIncludesArchiveAndShareState(t *testing.T) {
