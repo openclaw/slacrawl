@@ -423,6 +423,7 @@ func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack
 	var (
 		cursor   string
 		channels []slack.Channel
+		seen     = map[string]bool{}
 	)
 	for {
 		page, nextCursor, err := c.getConversations(ctx, &slack.GetConversationsParameters{
@@ -439,6 +440,10 @@ func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack
 		if nextCursor == "" {
 			return channels, nil
 		}
+		if seen[nextCursor] {
+			return nil, fmt.Errorf("conversations.list repeated cursor %q", nextCursor)
+		}
+		seen[nextCursor] = true
 		cursor = nextCursor
 	}
 }
@@ -487,6 +492,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	}
 
 	cursor := ""
+	seen := map[string]bool{}
 	joined := false
 	for {
 		resp, err := c.getConversationHistory(ctx, source.token, &slack.GetConversationHistoryParameters{
@@ -564,6 +570,10 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if resp.NextCursor == "" {
 			break
 		}
+		if seen[resp.NextCursor] {
+			return fmt.Errorf("conversations.history repeated cursor %q", resp.NextCursor)
+		}
+		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
 	}
 	return nil
@@ -571,6 +581,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 
 func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time) error {
 	cursor := ""
+	seen := map[string]bool{}
 	for {
 		resp, err := c.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{
 			ChannelID: channelID,
@@ -606,6 +617,10 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		if resp.NextCursor == "" {
 			return nil
 		}
+		if seen[resp.NextCursor] {
+			return fmt.Errorf("conversations.replies repeated cursor %q", resp.NextCursor)
+		}
+		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
 	}
 }

@@ -1849,3 +1849,85 @@ func TestNewUsesDefaultHTTPClient(t *testing.T) {
 		t.Fatalf("New() httpClient.Timeout = %s, want %s", client.httpClient.Timeout, defaultHTTPTimeout)
 	}
 }
+
+func TestFetchChannelsRejectsRepeatedCursor(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/conversations.list", r.URL.Path)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C123","name":"general","is_channel":true}],"response_metadata":{"next_cursor":"stuck"}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := client.fetchChannels(ctx, "T123")
+	require.ErrorContains(t, err, `conversations.list repeated cursor "stuck"`)
+	require.Equal(t, 2, calls)
+}
+
+func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/conversations.history", r.URL.Path)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"hi","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"stuck"}}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := time.Date(2026, 3, 8, 1, 2, 3, 0, time.UTC)
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now,
+	}))
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	err := client.syncChannelMessagesWithSource(
+		ctx,
+		st,
+		"T123",
+		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
+		"",
+		false,
+		now,
+		false,
+		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+	)
+	require.ErrorContains(t, err, `conversations.history repeated cursor "stuck"`)
+	require.Equal(t, 2, calls)
+}
+
+func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/conversations.replies", r.URL.Path)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"has_more":true,"messages":[{"type":"message","user":"U123","text":"reply","ts":"1710000001.000200","thread_ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"stuck"}}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	now := time.Date(2026, 3, 8, 1, 2, 3, 0, time.UTC)
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{
+		ID: "C123", WorkspaceID: "T123", Name: "general", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now,
+	}))
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now)
+	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
+	require.Equal(t, 2, calls)
+}

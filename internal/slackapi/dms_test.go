@@ -75,6 +75,26 @@ func TestFetchDMsHandlesPagination(t *testing.T) {
 	require.Equal(t, 2, calls)
 }
 
+func TestFetchDMsRejectsRepeatedCursor(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/conversations.list", r.URL.Path)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"D1","is_im":true,"user":"U1"}],"response_metadata":{"next_cursor":"stuck"}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{User: "xoxp-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := client.fetchDMs(ctx, "T123")
+	require.ErrorContains(t, err, `conversations.list repeated cursor "stuck"`)
+	require.Equal(t, 2, calls)
+}
+
 func TestFetchDMsRetriesOnRateLimit(t *testing.T) {
 	var (
 		mu    sync.Mutex

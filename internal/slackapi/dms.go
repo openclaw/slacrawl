@@ -2,6 +2,7 @@ package slackapi
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ func (c *Client) fetchDMs(ctx context.Context, workspaceID string) ([]slack.Chan
 	var (
 		cursor string
 		out    []slack.Channel
+		seen   = map[string]bool{}
 	)
 	for {
 		type result struct {
@@ -44,6 +46,10 @@ func (c *Client) fetchDMs(ctx context.Context, workspaceID string) ([]slack.Chan
 		if page.nextCursor == "" {
 			return out, nil
 		}
+		if seen[page.nextCursor] {
+			return nil, fmt.Errorf("conversations.list repeated cursor %q", page.nextCursor)
+		}
+		seen[page.nextCursor] = true
 		cursor = page.nextCursor
 	}
 }
