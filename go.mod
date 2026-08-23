@@ -5,7 +5,7 @@ go 1.26.6
 require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/golang/snappy v1.0.0
-	github.com/mattn/go-runewidth v0.0.27
+	github.com/mattn/go-runewidth v0.0.28
 	github.com/openclaw/crawlkit v0.14.7
 	github.com/slack-go/slack v0.29.0
 	github.com/stretchr/testify v1.12.0
