@@ -12,7 +12,7 @@ Thanks for contributing. This project is still early, so the main goal is to kee
 
 Requirements:
 
-- Go `1.26.6+`
+- Go `1.27.0+`
 - SQLite with FTS5 support
 
 Build and test:

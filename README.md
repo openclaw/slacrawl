@@ -23,7 +23,7 @@ brew install openclaw/tap/slacrawl
 
 The tap can trail the newest release. [GitHub Releases](https://github.com/openclaw/slacrawl/releases/latest) provides signed and notarized macOS archives, Linux archives, and Debian/RPM packages for AMD64 and ARM64.
 
-To build the latest source, install Go 1.26.6 or newer, then run:
+To build the latest source, install Go 1.27.0 or newer, then run:
 
 ```sh
 git clone https://github.com/openclaw/slacrawl.git

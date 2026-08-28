@@ -1,14 +1,14 @@
 module github.com/openclaw/slacrawl
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/golang/snappy v1.0.0
-	github.com/mattn/go-runewidth v0.0.27
+	github.com/mattn/go-runewidth v0.0.28
 	github.com/openclaw/crawlkit v0.14.7
 	github.com/slack-go/slack v0.29.0
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	github.com/syndtr/goleveldb v1.0.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
@@ -40,10 +40,10 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.75.3 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.0 // indirect
-	modernc.org/sqlite v1.56.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
+	modernc.org/sqlite v1.57.0 // indirect
 )
