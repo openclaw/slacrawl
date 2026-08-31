@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --upgrade pip
-          python3 -m pip install cloudsmith-cli==1.11.1
+          python3 -m pip install cloudsmith-cli==1.26.0
 
       - name: Publish to Cloudsmith APT repository
         env:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- Limit release-check HTTP requests to 30 seconds through CrawlKit 0.14.8 so an unresponsive server cannot hang `check-update` indefinitely.
+
 ## v0.8.6 - 2026-08-31
 
 ### Fixes

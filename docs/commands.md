@@ -140,6 +140,7 @@ The global output flags are:
 Color also turns off when stdout is not a TTY or `NO_COLOR=1` is set. `metadata --json`, `status --json`, and `doctor --json` expose control and status payloads for automation.
 
 Interactive release checks are cached daily. Set `SLACRAWL_NO_UPDATE_CHECK=1` or `CRAWLKIT_NO_UPDATE_CHECK=1` to suppress them.
+Release-check HTTP requests time out after 30 seconds.
 
 ## Shell completion
 
