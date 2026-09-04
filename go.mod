@@ -2,10 +2,12 @@ module github.com/openclaw/slacrawl
 
 go 1.27.0
 
+toolchain go1.27.1
+
 require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/golang/snappy v1.0.0
-	github.com/mattn/go-runewidth v0.0.28
+	github.com/mattn/go-runewidth v0.0.29
 	github.com/openclaw/crawlkit v0.14.8
 	github.com/slack-go/slack v0.29.0
 	github.com/stretchr/testify v1.12.1
@@ -45,5 +47,5 @@ require (
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.57.0 // indirect
+	modernc.org/sqlite v1.58.0 // indirect
 )

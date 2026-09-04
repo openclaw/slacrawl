@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Updated the preferred Go build toolchain and container to 1.27.1, SQLite driver to 1.58.0, terminal width handling to go-runewidth 0.0.29, and TruffleHog to 3.97.4; the minimum Go version remains 1.27.0.
+
 ### Fixes
 
 - Limit release-check HTTP requests to 30 seconds through CrawlKit 0.14.8 so an unresponsive server cannot hang `check-update` indefinitely.
