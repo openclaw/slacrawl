@@ -4,7 +4,7 @@
 
 ### Maintenance
 
-- Updated the preferred Go build toolchain and container to 1.27.1, SQLite driver to 1.58.0, terminal width handling to go-runewidth 0.0.29, and TruffleHog to 3.97.4; the minimum Go version remains 1.27.0.
+- Updated the preferred Go build toolchain and container to 1.27.1, Dockerfile frontend to 1.27, SQLite driver to 1.58.0, terminal width handling to go-runewidth 0.0.29, and TruffleHog to 3.97.4; the minimum Go version remains 1.27.0.
 
 ### Fixes
 
