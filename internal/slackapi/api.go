@@ -945,9 +945,37 @@ func rawPayloadFromMessageJSON(rawMessage json.RawMessage) any {
 }
 
 func (c *Client) getUsers(ctx context.Context, client *slack.Client) ([]slack.User, error) {
-	return retry(ctx, c.sleep, 3, func() ([]slack.User, error) {
-		return client.GetUsersContext(ctx)
-	})
+	var (
+		cursor string
+		users  []slack.User
+		seen   = map[string]bool{}
+	)
+	for {
+		type result struct {
+			users      []slack.User
+			nextCursor string
+		}
+		page, err := retry(ctx, c.sleep, 3, func() (result, error) {
+			pager := client.GetUsersPaginated(slack.GetUsersOptionLimit(200), slack.GetUsersOptionCursor(cursor))
+			next, callErr := pager.Next(ctx)
+			if callErr != nil {
+				return result{}, callErr
+			}
+			return result{users: next.Users, nextCursor: next.Cursor}, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, page.users...)
+		if page.nextCursor == "" {
+			return users, nil
+		}
+		if seen[page.nextCursor] {
+			return nil, fmt.Errorf("users.list repeated cursor %q", page.nextCursor)
+		}
+		seen[page.nextCursor] = true
+		cursor = page.nextCursor
+	}
 }
 
 func (c *Client) joinConversation(ctx context.Context, channelID string) error {

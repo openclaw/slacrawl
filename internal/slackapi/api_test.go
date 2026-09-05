@@ -1931,3 +1931,108 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 }
+
+func TestGetUsersRejectsRepeatedCursor(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/users.list", r.URL.Path)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U123","name":"alice"}],"response_metadata":{"next_cursor":"stuck"}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := client.getUsers(ctx, client.bot)
+	require.ErrorContains(t, err, `users.list repeated cursor "stuck"`)
+	require.Equal(t, 2, calls)
+	t.Logf("getUsers stuck next_cursor: %v", err)
+}
+
+func TestGetUsersWalksDistinctCursors(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/users.list", r.URL.Path)
+		calls++
+		cursor := mustFormValues(r).Get("cursor")
+		w.Header().Set("Content-Type", "application/json")
+		switch cursor {
+		case "":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U1","name":"alice"}],"response_metadata":{"next_cursor":"page2"}}`))
+		case "page2":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U2","name":"bob"}],"response_metadata":{"next_cursor":""}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+
+	users, err := client.getUsers(context.Background(), client.bot)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	require.Equal(t, "U1", users[0].ID)
+	require.Equal(t, "U2", users[1].ID)
+	require.Equal(t, 2, calls)
+}
+
+func TestGetUsersRejectsCursorCycle(t *testing.T) {
+	var cursors []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cursor := mustFormValues(r).Get("cursor")
+		cursors = append(cursors, cursor)
+		next := "page-a"
+		if cursor == "page-a" {
+			next = "page-b"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"ok":true,"members":[],"response_metadata":{"next_cursor":%q}}`, next)
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	users, err := client.getUsers(ctx, client.bot)
+	require.ErrorContains(t, err, `users.list repeated cursor "page-a"`)
+	require.Nil(t, users)
+	require.Equal(t, []string{"", "page-a", "page-b"}, cursors)
+}
+
+func TestGetUsersRetriesOnlyRateLimitedPage(t *testing.T) {
+	var cursors []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cursor := mustFormValues(r).Get("cursor")
+		cursors = append(cursors, cursor)
+		if len(cursors) == 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if cursor == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U1"}],"response_metadata":{"next_cursor":"page2"}}`))
+		} else {
+			_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U2"}],"response_metadata":{"next_cursor":""}}`))
+		}
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
+	var delays []time.Duration
+	client.sleep = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+	users, err := client.getUsers(context.Background(), client.bot)
+	require.NoError(t, err)
+	require.Equal(t, []slack.User{{ID: "U1"}, {ID: "U2"}}, users)
+	require.Equal(t, []string{"", "page2", "page2"}, cursors)
+	require.Equal(t, []time.Duration{time.Second}, delays)
+}

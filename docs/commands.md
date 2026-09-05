@@ -48,7 +48,7 @@ slacrawl sync --source mcp --workspace T01234567
 slacrawl sync --source wiretap
 ```
 
-Slack API pagination stops with a `repeated cursor` error if a response revisits a page cursor, preventing a stuck sync. Pages already stored remain available for the next incremental sync.
+Slack API pagination, including the member directory (`users.list`), stops with a `repeated cursor` error if a response revisits a page cursor, preventing a stuck sync. Pages already stored remain available for the next incremental sync.
 
 Import a workspace export with an explicit workspace ID:
 
