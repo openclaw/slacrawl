@@ -15,6 +15,8 @@ Requirements:
 - Go `1.27.0+`
 - SQLite with FTS5 support
 
+The module selects Go `1.27.1` as its preferred build toolchain, matching CI and the container build. Go's automatic toolchain selection downloads it when needed; the supported minimum remains `1.27.0`.
+
 Build and test:
 
 ```bash

@@ -7,6 +7,11 @@
 - Stop member-directory sync with a clear error when Slack repeats a `users.list` page cursor instead of requesting pages indefinitely. Thanks @SebTardif! (#169)
 - Limit release-check HTTP requests to 30 seconds through CrawlKit 0.14.8 so an unresponsive server cannot hang `check-update` indefinitely.
 
+### Maintenance
+
+- Updated the preferred Go build toolchain and container to 1.27.1, Dockerfile frontend to 1.27, CrawlKit to 0.14.9, SQLite driver to 1.58.0, terminal width handling to go-runewidth 0.0.29, and TruffleHog to 3.97.4; the minimum Go version remains 1.27.0.
+- Updated the Cloudsmith publishing CLI to 1.26.0.
+
 ## v0.8.6 - 2026-08-31
 
 ### Fixes
