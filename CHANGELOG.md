@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.8.7 - 2026-09-05
+
+**Highlights:** Stop Slack member-directory sync from hanging when `users.list` repeats a page cursor.
 
 ### Fixes
 
