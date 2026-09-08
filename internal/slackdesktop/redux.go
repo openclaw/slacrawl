@@ -314,6 +314,7 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 					UpdatedAt:      now,
 				},
 				Mentions:               reduxMentions(message.Text),
+				PreserveHigherPriority: true,
 				SkipWorkspaceCollision: true,
 			})
 			if len(messageBatch.Messages) == 500 {

@@ -22,8 +22,8 @@ const testConnectorID = "asdk_app_test"
 func TestSyncStoresMCPConnectorData(t *testing.T) {
 	server := newTestGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
-	t.Setenv("CODEX_APPS_ACCOUNT_ID", "acct-123")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_ACCOUNT", "acct-123")
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)
@@ -35,8 +35,8 @@ func TestSyncStoresMCPConnectorData(t *testing.T) {
 			Enabled:         true,
 			BaseURL:         server.URL,
 			AuthPath:        "/unused",
-			TokenEnv:        "CODEX_APPS_ACCESS_TOKEN",
-			AccountIDEnv:    "CODEX_APPS_ACCOUNT_ID",
+			TokenEnv:        "TEST_MCP_TOKEN",
+			AccountIDEnv:    "TEST_MCP_ACCOUNT",
 			ConnectorID:     testConnectorID,
 			ChannelTypes:    "public_channel,private_channel",
 			PageSize:        100,
@@ -74,7 +74,7 @@ from messages order by ts
 func TestSyncStoresReferenceSlackMCPData(t *testing.T) {
 	server := newReferenceGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ from messages order by ts
 func TestIncrementalSyncReconcilesStoredThreadRoots(t *testing.T) {
 	server, threadCalls := newIncrementalThreadGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
 
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
@@ -132,7 +132,7 @@ func TestIncrementalSyncReconcilesStoredThreadRoots(t *testing.T) {
 func TestSyncPreservesThreadMetadataWhenThreadPayloadHasNoReplies(t *testing.T) {
 	server := newParentOnlyThreadGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
 
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
@@ -164,8 +164,8 @@ func syncTwice(ctx context.Context, st *store.Store, opts Options) error {
 func TestSyncPreservesRicherExistingRecords(t *testing.T) {
 	server := newTestGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
-	t.Setenv("CODEX_APPS_ACCOUNT_ID", "acct-123")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_ACCOUNT", "acct-123")
 
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
@@ -221,7 +221,7 @@ func TestFilterChannelsByIDAndName(t *testing.T) {
 func TestSyncExplicitChannelAvoidsGlobalEnumeration(t *testing.T) {
 	server := newTargetedGatewayServer(t)
 	defer server.Close()
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "test-token")
+	t.Setenv("TEST_MCP_TOKEN", "test-token")
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestSyncExplicitChannelAvoidsGlobalEnumeration(t *testing.T) {
 		Channels:    []string{"C123"},
 		Config: config.MCPConfig{
 			BaseURL:         server.URL,
-			TokenEnv:        "CODEX_APPS_ACCESS_TOKEN",
+			TokenEnv:        "TEST_MCP_TOKEN",
 			ConnectorID:     testConnectorID,
 			ChannelTypes:    "public_channel,private_channel",
 			PageSize:        100,
@@ -310,9 +310,9 @@ func TestWalkPagesRejectsTruncation(t *testing.T) {
 }
 
 func TestResolveAuthPrefersEnvironment(t *testing.T) {
-	t.Setenv("CODEX_APPS_ACCESS_TOKEN", "env-token")
-	t.Setenv("CODEX_APPS_ACCOUNT_ID", "acct-123")
-	auth, err := resolveAuth(config.MCPConfig{TokenEnv: "CODEX_APPS_ACCESS_TOKEN", AccountIDEnv: "CODEX_APPS_ACCOUNT_ID", AuthPath: "/unused"})
+	t.Setenv("TEST_MCP_TOKEN", "env-token")
+	t.Setenv("TEST_MCP_ACCOUNT", "acct-123")
+	auth, err := resolveAuth(config.MCPConfig{TokenEnv: "TEST_MCP_TOKEN", AccountIDEnv: "TEST_MCP_ACCOUNT", AuthPath: "/unused"})
 	require.NoError(t, err)
 	require.Equal(t, "env-token", auth.AccessToken)
 	require.Equal(t, "acct-123", auth.AccountID)
@@ -337,7 +337,7 @@ func TestResolveSlackToolset(t *testing.T) {
 func testMCPConfig(baseURL string) config.MCPConfig {
 	return config.MCPConfig{
 		Enabled: true, BaseURL: baseURL, AuthPath: "/unused",
-		TokenEnv: "CODEX_APPS_ACCESS_TOKEN", AccountIDEnv: "CODEX_APPS_ACCOUNT_ID",
+		TokenEnv: "TEST_MCP_TOKEN", AccountIDEnv: "TEST_MCP_ACCOUNT",
 		ConnectorID: testConnectorID, ChannelTypes: "public_channel,private_channel",
 		PageSize: 100, SearchLimit: 100, MaxPages: 10, ProtocolVersion: "2025-03-26",
 	}

@@ -166,6 +166,14 @@ HTTP authentication order:
 2. `CODEX_APPS_ACCESS_TOKEN` or `CODEX_CONNECTORS_TOKEN`.
 3. The configured `auth_path`, using Codex's `tokens.access_token` and optional `tokens.account_id` fields.
 
+Automatic Codex credentials are restricted to the HTTPS `chatgpt.com` origin,
+including redirects. A custom HTTP MCP origin requires a dedicated `token_env`
+other than the Codex fallback variables. It never falls back to Codex env/file
+credentials when that dedicated variable is missing. The default Codex account
+ID is not sent to custom origins; configure a dedicated `account_id_env` when
+the custom server needs one. Explicit custom-server tokens and stdio remain
+supported.
+
 `max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. Explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
 
 The connector's channel search response may omit privacy metadata. Those channels are stored with kind `mcp_channel` rather than being assumed public; they remain locally searchable but are not treated as public channels by archive export logic.

@@ -2,6 +2,7 @@ package slackapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -466,6 +467,15 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	if !enforceRetention {
 		retentionFloor = ""
 	}
+	coverage, err := loadHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope)
+	if err != nil {
+		return err
+	}
+	coverage.Pending = &oldest
+	if err := saveHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope, coverage); err != nil {
+		return err
+	}
+	horizon := fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
 	inclusive := retentionFloor != "" && oldest == retentionFloor
 	syncedThreads := map[string]struct{}{}
 	syncThreadOnce := func(threadTS string) error {
@@ -500,6 +510,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			Cursor:    cursor,
 			Limit:     200,
 			Oldest:    oldest,
+			Latest:    horizon,
 			Inclusive: inclusive,
 		})
 		if err != nil {
@@ -576,7 +587,10 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
 	}
-	return nil
+	coverage.Latest = horizon
+	coverage.Complete = true
+	coverage.Pending = nil
+	return saveHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope, coverage)
 }
 
 func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time) error {
@@ -654,24 +668,14 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 	if err != nil {
 		return err
 	}
-	cursors, err := st.ChannelSyncCursors(ctx, workspaceID)
-	if err != nil {
-		return err
-	}
-	latestByChannel := make(map[string]store.ChannelSyncCursor, len(cursors))
-	for _, cursor := range cursors {
-		latestByChannel[cursor.ID] = cursor
-	}
 	now := c.now()
 	threadRepliesSkipped := newThreadSkipTracker()
-	for _, channel := range channels {
-		cursor := latestByChannel[channel.ID]
-		repairSince := cursor.ApplyRetentionFloor(repairOldest(cursor.LatestTS, time.Hour))
-		if err := c.syncChannels(ctx, st, workspaceID, []slack.Channel{channel}, SyncOptions{
-			Since: repairSince, enforceRetention: true,
-		}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
-			return err
-		}
+	// Periodic repair shares ordinary coverage; a moving explicit-since scope
+	// would strand its pending interval after a partially committed attempt.
+	if err := c.syncChannels(ctx, st, workspaceID, channels, SyncOptions{
+		enforceRetention: true,
+	}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
+		return err
 	}
 	if threadRepliesSkipped.Skipped() {
 		return st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial")
@@ -1193,6 +1197,7 @@ type channelSyncSource struct {
 	allowJoin        bool
 	skipMissingScope bool
 	threadSkip       *threadSkipTracker
+	coverageScope    string
 }
 
 func (c *Client) syncChannels(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, threadSkip *threadSkipTracker) error {
@@ -1314,7 +1319,8 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	if len(channels) == 0 {
 		return nil
 	}
-	channels, oldestByChannel, err := c.channelSyncPlan(ctx, st, workspaceID, channels, opts)
+	source.coverageScope = opts.Since
+	channels, oldestByChannel, err := c.channelSyncPlan(ctx, st, workspaceID, channels, opts, source.sourceName)
 	if err != nil {
 		return err
 	}
@@ -1428,7 +1434,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	}
 }
 
-func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions) ([]slack.Channel, map[string]string, error) {
+func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, sources ...string) ([]slack.Channel, map[string]string, error) {
 	out := make(map[string]string, len(channels))
 	if opts.Since != "" {
 		for _, channel := range channels {
@@ -1449,6 +1455,10 @@ func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspace
 		latestByChannel[cursor.ID] = cursor
 	}
 	selected := make([]slack.Channel, 0, len(channels))
+	source := SourceBot
+	if len(sources) > 0 && sources[0] != "" {
+		source = sources[0]
+	}
 	for _, channel := range channels {
 		cursor, ok := latestByChannel[channel.ID]
 		if !ok {
@@ -1466,9 +1476,55 @@ func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspace
 			continue
 		}
 		selected = append(selected, channel)
-		out[channel.ID] = cursor.ApplyRetentionFloor(repairOldest(cursor.LatestTS, time.Hour))
+		coverage, err := loadHistoryCoverage(ctx, st, source, workspaceID, channel.ID, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		oldest := ""
+		if coverage.Pending != nil {
+			oldest = *coverage.Pending
+		} else if coverage.Complete {
+			oldest = repairOldest(coverage.Latest, time.Hour)
+		}
+		out[channel.ID] = cursor.ApplyRetentionFloor(oldest)
 	}
 	return selected, out, nil
+}
+
+// A saved message is an observation, not evidence that all older pages were
+// read. Keep the in-flight interval until the complete request chain succeeds.
+type historyCoverage struct {
+	Complete bool    `json:"complete"`
+	Latest   string  `json:"latest"` // Completed request horizon, including empty history.
+	Pending  *string `json:"pending,omitempty"`
+}
+
+func historyCoverageKey(workspaceID, channelID, since string) string {
+	key, _ := json.Marshal([]string{workspaceID, channelID, since})
+	return string(key)
+}
+
+func loadHistoryCoverage(ctx context.Context, st *store.Store, source, workspaceID, channelID, since string) (historyCoverage, error) {
+	raw, err := st.GetSyncState(ctx, source, "history_coverage_v1", historyCoverageKey(workspaceID, channelID, since))
+	if errors.Is(err, sql.ErrNoRows) {
+		return historyCoverage{}, nil
+	}
+	if err != nil {
+		return historyCoverage{}, err
+	}
+	var coverage historyCoverage
+	if err := json.Unmarshal([]byte(raw), &coverage); err != nil {
+		return historyCoverage{}, fmt.Errorf("invalid API history coverage checkpoint: %w", err)
+	}
+	return coverage, nil
+}
+
+func saveHistoryCoverage(ctx context.Context, st *store.Store, source, workspaceID, channelID, since string, coverage historyCoverage) error {
+	raw, err := json.Marshal(coverage)
+	if err != nil {
+		return err
+	}
+	return st.SetSyncState(ctx, source, "history_coverage_v1", historyCoverageKey(workspaceID, channelID, since), string(raw))
 }
 
 func isChannelHistorySkipped(err error) bool {

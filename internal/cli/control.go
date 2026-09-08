@@ -30,7 +30,7 @@ func controlManifest(configPath string) control.Manifest {
 	}
 	manifest.Commands = map[string]control.Command{
 		"doctor":      {Title: "Doctor", Argv: []string{"slacrawl", "--json", "doctor"}, JSON: true},
-		"status":      {Title: "Status", Argv: []string{"slacrawl", "--json", "status"}, JSON: true},
+		"status":      {Title: "Status", Argv: []string{"slacrawl", "status", "--json"}, JSON: true},
 		"sync":        {Title: "Sync", Argv: []string{"slacrawl", "--json", "sync", "--source", "all", "--latest-only"}, JSON: true, Mutates: true},
 		"search":      {Title: "Search", Argv: []string{"slacrawl", "--json", "search"}, JSON: true},
 		"tap":         {Title: "Import desktop cache", Argv: []string{"slacrawl", "--json", "sync", "--source", "desktop"}, JSON: true, Mutates: true},

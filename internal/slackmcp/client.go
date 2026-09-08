@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -76,13 +77,14 @@ func New(ctx context.Context, cfg config.MCPConfig, httpClient *http.Client) (*C
 			return nil, authErr
 		}
 		mcp, err = mcpclient.New(mcpclient.Options{
-			Endpoint:        cfg.BaseURL,
-			AccessToken:     auth.AccessToken,
-			AccountID:       auth.AccountID,
-			ProtocolVersion: cfg.ProtocolVersion,
-			ClientName:      "slacrawl",
-			ClientVersion:   "dev",
-			HTTPClient:      httpClient,
+			Endpoint:           cfg.BaseURL,
+			AccessToken:        auth.AccessToken,
+			AccountID:          auth.AccountID,
+			ProtocolVersion:    cfg.ProtocolVersion,
+			ClientName:         "slacrawl",
+			ClientVersion:      "dev",
+			HTTPClient:         httpClient,
+			RestrictAuthOrigin: auth.Automatic,
 		})
 	case "stdio":
 		mcp, err = mcpclient.NewStdio(ctx, mcpclient.StdioOptions{
@@ -349,9 +351,20 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 type authInfo struct {
 	AccessToken string
 	AccountID   string
+	Automatic   bool
+}
+
+func supportedAuthOrigin(endpoint string) bool {
+	if strings.TrimSpace(endpoint) == "" {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	return err == nil && u.Scheme == "https" && u.User == nil &&
+		strings.EqualFold(u.Hostname(), "chatgpt.com") && (u.Port() == "" || u.Port() == "443")
 }
 
 func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
+	supported := supportedAuthOrigin(cfg.BaseURL)
 	tokenEnv := cfg.TokenEnv
 	if tokenEnv == "" {
 		tokenEnv = "CODEX_APPS_ACCESS_TOKEN"
@@ -360,14 +373,29 @@ func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
 	if accountEnv == "" {
 		accountEnv = "CODEX_APPS_ACCOUNT_ID"
 	}
-	if token := strings.TrimSpace(os.Getenv(tokenEnv)); token != "" {
-		return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv))}, nil
+	dedicated := tokenEnv != "CODEX_APPS_ACCESS_TOKEN" && tokenEnv != "CODEX_CONNECTORS_TOKEN"
+	if dedicated {
+		if token := strings.TrimSpace(os.Getenv(tokenEnv)); token != "" {
+			account := ""
+			if supported || accountEnv != "CODEX_APPS_ACCOUNT_ID" {
+				account = strings.TrimSpace(os.Getenv(accountEnv))
+			}
+			return authInfo{AccessToken: token, AccountID: account}, nil
+		}
+	}
+	if !supported {
+		return authInfo{}, errors.New("custom MCP origins require a configured dedicated token environment variable; automatic Codex authentication requires the HTTPS ChatGPT gateway")
+	}
+	if !dedicated {
+		if token := strings.TrimSpace(os.Getenv(tokenEnv)); token != "" {
+			return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv)), Automatic: true}, nil
+		}
 	}
 	if token := strings.TrimSpace(os.Getenv("CODEX_APPS_ACCESS_TOKEN")); token != "" {
-		return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv))}, nil
+		return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv)), Automatic: true}, nil
 	}
 	if token := strings.TrimSpace(os.Getenv("CODEX_CONNECTORS_TOKEN")); token != "" {
-		return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv))}, nil
+		return authInfo{AccessToken: token, AccountID: strings.TrimSpace(os.Getenv(accountEnv)), Automatic: true}, nil
 	}
 	if strings.TrimSpace(cfg.AuthPath) == "" {
 		return authInfo{}, fmt.Errorf("MCP token environment variable %s is unset and auth_path is empty", tokenEnv)
@@ -388,7 +416,7 @@ func resolveAuth(cfg config.MCPConfig) (authInfo, error) {
 	if payload.Tokens == nil || strings.TrimSpace(payload.Tokens.AccessToken) == "" {
 		return authInfo{}, fmt.Errorf("MCP auth file %s does not contain tokens.access_token", cfg.AuthPath)
 	}
-	return authInfo{AccessToken: strings.TrimSpace(payload.Tokens.AccessToken), AccountID: strings.TrimSpace(payload.Tokens.AccountID)}, nil
+	return authInfo{AccessToken: strings.TrimSpace(payload.Tokens.AccessToken), AccountID: strings.TrimSpace(payload.Tokens.AccountID), Automatic: true}, nil
 }
 
 func filterSlackTools(tools []mcpclient.Tool, connectorID string) ([]mcpclient.Tool, error) {
