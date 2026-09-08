@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.15.0 while retaining the Go 1.27.0 minimum and preferred Go 1.27.1 toolchain.
 - Retry unfinished API history intervals after partial failures instead of advancing from the newest saved message; legacy and desktop-only histories establish coverage with a retention-bounded backfill.
 - Bind automatic MCP Codex credentials to the HTTPS ChatGPT origin and reject credential-bearing redirects outside that origin; dedicated custom-server tokens remain supported.
 
