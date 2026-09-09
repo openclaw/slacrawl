@@ -2,6 +2,10 @@
 
 `slacrawl` is configured with TOML at `~/.slacrawl/config.toml` by default.
 
+Starting with Slacrawl v0.9.0, config-saving commands use owner-only permissions
+(`0600`) on POSIX systems, including when saving existing configs. Saving removes
+group/other read access; shared-account configurations must plan for owner access.
+
 Config path resolution, runtime directories, status payloads, and token
 diagnostic formatting are normalized through `crawlkit`. Slack token scopes,
 workspace selection, API/Desktop source behavior, and schema compatibility stay
@@ -80,8 +84,9 @@ stale_after = "15m"
 
 ## Archive Schema Upgrades
 
-The first writable open of a pre-v8 database upgrades its SQLite schema version
-to 8 in a transaction. This is separate from the TOML configuration version.
+Starting with Slacrawl v0.9.0, the first writable open of a pre-v8 database upgrades
+its SQLite schema version to 8 in a transaction. This is separate from the TOML
+configuration version.
 Read-only inspection with automatic share updates disabled can inspect a valid
 v7 archive without migrating it; `init` only writes configuration. A command such
 as `sync` opens the archive writable and can migrate it even if it subsequently
@@ -99,6 +104,8 @@ requests from the existing retention floor. Without a floor, it can scan all
 accessible history, with corresponding API cost and rate-limit delays. A newer
 saved message does not prove that older history was read. Successful scans earn
 local completion checkpoints; interrupted scans retain their pending interval.
+`--latest-only` selects previously observed channels; it does not bound the
+history interval or request count.
 
 Git-share snapshots retain manifest version 1 and their existing table format,
 but these API coverage checkpoints are local-only and are not exported. Imports
@@ -107,14 +114,18 @@ merge preserves the destination's own checkpoints, while explicit restore clears
 coverage and leaves it unknown. Data-only snapshots do not back up API completion
 state.
 
-Before upgrading, stop every old process accessing the database and retain a
-consistent pre-upgrade backup. Use SQLite-consistent backup procedures or a
-properly stopped archive; copying only a live database's main file can omit WAL
-data. Old binaries reject schema v8 on a new open, but that check does not stop
-already-open clients. Do not mix old and new running processes.
+Before the first writable open, stop every old process accessing the database.
+Complete a consistent pre-upgrade backup using SQLite's
+[Online Backup API](https://sqlite.org/backup.html) and verify that the backup
+opens independently with the expected schema and data. Retain the old binary and
+configuration alongside the database backup. Copying only a live database's main
+file can omit WAL data. Old binaries reject schema v8 on a new open, but that
+check does not stop already-open clients. Do not mix old and new running processes.
 
 Recovery with an older binary requires restoring the consistent pre-upgrade
-backup after stopping the upgraded processes. Do not lower `user_version` or
+database backup and configuration after stopping the upgraded processes. Account
+for writes since that backup: restoring it discards those writes unless a
+separately reviewed recovery preserves them. Do not lower `user_version` or
 attempt an in-place downgrade. A data-only snapshot readable by an older binary
 does not make old-version syncing or opening an upgraded database safe.
 
