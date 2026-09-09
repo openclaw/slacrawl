@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1070,6 +1071,97 @@ func TestSubscribePersistsNoMedia(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg.Share.Media)
 	require.False(t, *cfg.Share.Media)
+}
+
+func TestSubscribeNoImportSavesOwnerOnlyConfig(t *testing.T) {
+	for _, existing := range []bool{true, false} {
+		name := "absent"
+		if existing {
+			name = "existing-private"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			home := filepath.Join(dir, "home")
+			require.NoError(t, os.MkdirAll(home, 0o700))
+			for key, value := range map[string]string{
+				"HOME":            home,
+				"USERPROFILE":     home,
+				"HOMEDRIVE":       filepath.VolumeName(home),
+				"HOMEPATH":        strings.TrimPrefix(home, filepath.VolumeName(home)),
+				"APPDATA":         filepath.Join(home, "appdata"),
+				"LOCALAPPDATA":    filepath.Join(home, "localappdata"),
+				"XDG_CONFIG_HOME": filepath.Join(home, "config"),
+				"XDG_CACHE_HOME":  filepath.Join(home, "cache"),
+				"XDG_DATA_HOME":   filepath.Join(home, "data"),
+				"XDG_STATE_HOME":  filepath.Join(home, "state"),
+				"TMPDIR":          home,
+				"TMP":             home,
+				"TEMP":            home,
+			} {
+				t.Setenv(key, value)
+			}
+			configPath := filepath.Join(dir, "reader.toml")
+			dbPath := filepath.Join(dir, "reader.db")
+			repoPath := filepath.Join(dir, "reader-share")
+			remote := filepath.Join(dir, "nonexistent-remote.git")
+			require.NoFileExists(t, configPath)
+			if existing {
+				cfg := config.Default()
+				cfg.Slack.Desktop.Enabled = false
+				cfg.Slack.Desktop.Path = filepath.Join(home, "unused-desktop")
+				cfg.WorkspaceID = "TSAVED"
+				require.NoError(t, cfg.Save(configPath))
+				if runtime.GOOS != "windows" {
+					require.NoError(t, os.Chmod(configPath, 0o600))
+					info, err := os.Stat(configPath)
+					require.NoError(t, err)
+					require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			var stdout bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stdout}
+			require.NoError(t, app.Run(ctx, []string{
+				"--config", configPath, "--json", "subscribe", "--no-import",
+				"--repo", repoPath, "--db", dbPath, "--branch", "archive",
+				"--stale-after", "2h", "--no-auto-update", "--no-media", remote,
+			}))
+
+			cfg, err := config.Load(configPath)
+			require.NoError(t, err)
+			require.Equal(t, dbPath, cfg.DBPath)
+			require.Equal(t, repoPath, cfg.Share.RepoPath)
+			require.Equal(t, remote, cfg.Share.Remote)
+			require.Equal(t, "archive", cfg.Share.Branch)
+			require.Equal(t, "2h", cfg.Share.StaleAfter)
+			require.False(t, cfg.Share.AutoUpdate)
+			require.NotNil(t, cfg.Share.Media)
+			require.False(t, *cfg.Share.Media)
+			require.False(t, cfg.Slack.Bot.Enabled)
+			require.False(t, cfg.Slack.App.Enabled)
+			require.False(t, cfg.Slack.User.Enabled)
+			require.False(t, cfg.Slack.Desktop.Enabled)
+			require.Empty(t, cfg.Slack.Desktop.Path)
+			if existing {
+				require.Equal(t, "TSAVED", cfg.WorkspaceID)
+			}
+			var result map[string]string
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+			require.Equal(t, map[string]string{
+				"config_path": configPath, "repo_path": repoPath, "remote": remote,
+			}, result)
+			require.NoFileExists(t, dbPath)
+			require.NoDirExists(t, repoPath)
+			require.NoDirExists(t, remote)
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(configPath)
+				require.NoError(t, err)
+				require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			}
+		})
+	}
 }
 
 func TestFilesListAndFetch(t *testing.T) {
