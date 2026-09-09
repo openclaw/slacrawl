@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/openclaw/slacrawl/internal/config"
+	"github.com/openclaw/slacrawl/internal/share"
 	"github.com/openclaw/slacrawl/internal/store"
 	"github.com/slack-go/slack"
 	"github.com/stretchr/testify/require"
@@ -196,4 +198,98 @@ func TestRepairWorkspaceRetriesPendingHistory(t *testing.T) {
 	rows, err := st.SearchMessages(ctx, store.SearchOptions{Query: "recovered", Mode: store.SearchModeRawFTS, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
+}
+
+func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
+	for _, mode := range []string{"migration", "restore"} {
+		for _, sourceName := range []string{SourceBot, SourceUser} {
+			for _, floor := range []string{"", "1700000000.000000"} {
+				t.Run(mode+"/"+sourceName+"/floor="+floor, func(t *testing.T) {
+					ctx := context.Background()
+					dbPath := filepath.Join(t.TempDir(), "archive.db")
+					st, err := store.Open(dbPath)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, st.Close()) })
+					now := time.Unix(1710000200, 0).UTC()
+					channel := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}}
+					require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", UpdatedAt: now}))
+					require.NoError(t, st.UpsertMessage(ctx, store.Message{
+						ChannelID: "C123", WorkspaceID: "T123", TS: "1710000100.000000",
+						Text: "newer observation", NormalizedText: "newer observation", SourceRank: 2,
+						SourceName: sourceName, RawJSON: "{}", UpdatedAt: now,
+					}, nil))
+					if floor != "" {
+						require.NoError(t, st.SetSyncState(ctx, "retention", "channel_floor", "T123|C123", floor))
+						require.NoError(t, st.SetSyncState(ctx, "retention", "channel_seed", "T123|C123", "1"))
+					}
+					require.NoError(t, saveHistoryCoverage(ctx, st, sourceName, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000100.000000"}))
+					requests, fail := 0, true
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						requests++
+						require.Equal(t, "/conversations.history", r.URL.Path)
+						require.NoError(t, r.ParseForm())
+						require.Equal(t, floor, r.Form.Get("oldest"))
+						w.Header().Set("Content-Type", "application/json")
+						if fail {
+							_, _ = w.Write([]byte(`{"ok":false,"error":"synthetic_failure"}`))
+						} else {
+							_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
+						}
+					}))
+					defer server.Close()
+					if mode == "migration" {
+						// v7 and v8 have identical DDL; this is a synthetic pre-upgrade checkpoint.
+						_, err = st.DB().Exec(`pragma user_version = 7`)
+						require.NoError(t, err)
+						require.NoError(t, st.Close())
+						st, err = store.Open(dbPath)
+						require.NoError(t, err)
+					} else {
+						opts := share.Options{RepoPath: filepath.Join(t.TempDir(), "snapshot")}
+						_, err := share.Export(ctx, st, opts)
+						require.NoError(t, err)
+						_, err = share.Restore(ctx, st, opts)
+						require.NoError(t, err)
+					}
+					require.Zero(t, requests, "opening or restoring must not contact the provider")
+					coverage, err := loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					require.NoError(t, err)
+					require.Equal(t, historyCoverage{}, coverage)
+					client := NewWithOptions(config.Tokens{Bot: "fixture", User: "fixture"}, server.URL+"/", server.Client())
+					_, plan, err := client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{}, sourceName)
+					require.NoError(t, err)
+					require.Equal(t, floor, plan["C123"], "newest saved message is not coverage")
+					historyClient := client.bot
+					if sourceName == SourceUser {
+						historyClient = client.user
+					}
+					source := channelSyncSource{historyClient: historyClient, token: "fixture", sourceName: sourceName, sourceRank: 2}
+					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan["C123"], false, now, false, source)
+					require.ErrorContains(t, err, "synthetic_failure")
+					require.NoError(t, st.Close())
+					st, err = store.Open(dbPath)
+					require.NoError(t, err)
+					coverage, err = loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					require.NoError(t, err)
+					require.False(t, coverage.Complete)
+					require.NotNil(t, coverage.Pending)
+					require.Equal(t, floor, *coverage.Pending)
+					fail = false
+					require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, floor, false, now, false, source))
+					require.NoError(t, st.Close())
+					st, err = store.Open(dbPath)
+					require.NoError(t, err)
+					coverage, err = loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					require.NoError(t, err)
+					require.True(t, coverage.Complete)
+					require.Nil(t, coverage.Pending)
+					require.Equal(t, "1710000200.000000", coverage.Latest)
+					require.Equal(t, 2, requests)
+					_, plan, err = client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{}, sourceName)
+					require.NoError(t, err)
+					require.Equal(t, (store.ChannelSyncCursor{RetentionFloor: floor}).ApplyRetentionFloor(repairOldest(coverage.Latest, time.Hour)), plan["C123"])
+				})
+			}
+		}
+	}
 }

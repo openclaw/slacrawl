@@ -78,6 +78,46 @@ auto_update = true
 stale_after = "15m"
 ```
 
+## Archive Schema Upgrades
+
+The first writable open of a pre-v8 database upgrades its SQLite schema version
+to 8 in a transaction. This is separate from the TOML configuration version.
+Read-only inspection with automatic share updates disabled can inspect a valid
+v7 archive without migrating it; `init` only writes configuration. A command such
+as `sync` opens the archive writable and can migrate it even if it subsequently
+fails for missing credentials.
+
+The one-time upgrade removes `history_coverage_v1` checkpoints for the exact
+`api-bot` and `api-user` sources. Pre-v8 checkpoints cannot reliably distinguish
+locally completed scans from checkpoints imported from another archive. Messages,
+retention floors and seeds, provider/MCP state, and other sync state are retained.
+The migration performs no network requests or backfill and does not mark any
+history complete. Later writable opens preserve newly earned checkpoints.
+
+The next ordinary API sync treats that coverage as unknown and may repeat history
+requests from the existing retention floor. Without a floor, it can scan all
+accessible history, with corresponding API cost and rate-limit delays. A newer
+saved message does not prove that older history was read. Successful scans earn
+local completion checkpoints; interrupted scans retain their pending interval.
+
+Git-share snapshots retain manifest version 1 and their existing table format,
+but these API coverage checkpoints are local-only and are not exported. Imports
+consume and validate older snapshots containing them without applying them:
+merge preserves the destination's own checkpoints, while explicit restore clears
+coverage and leaves it unknown. Data-only snapshots do not back up API completion
+state.
+
+Before upgrading, stop every old process accessing the database and retain a
+consistent pre-upgrade backup. Use SQLite-consistent backup procedures or a
+properly stopped archive; copying only a live database's main file can omit WAL
+data. Old binaries reject schema v8 on a new open, but that check does not stop
+already-open clients. Do not mix old and new running processes.
+
+Recovery with an older binary requires restoring the consistent pre-upgrade
+backup after stopping the upgraded processes. Do not lower `user_version` or
+attempt an in-place downgrade. A data-only snapshot readable by an older binary
+does not make old-version syncing or opening an upgraded database safe.
+
 ## Workspace Selection
 
 `workspace_id` remains the default CLI workspace.

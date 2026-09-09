@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Migrate archives to schema v8 on first writable open, invalidating pre-v8 API history checkpoints once while retaining messages and retention state. Checkpoints are now local-only in Git shares; restore leaves coverage unknown. The next sync may repeat retention-bounded history requests, or all accessible history without a floor. Stop old processes and keep a consistent pre-upgrade backup; in-place downgrade is unsupported.
 - Keep saved configuration files owner-only on POSIX systems, including when subscribing without importing an archive.
 - Update CrawlKit to v0.15.0 while retaining the Go 1.27.0 minimum and preferred Go 1.27.1 toolchain.
 - Retry unfinished API history intervals after partial failures instead of advancing from the newest saved message; legacy and desktop-only histories establish coverage with a retention-bounded backfill.

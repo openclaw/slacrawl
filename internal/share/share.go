@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -644,6 +645,9 @@ func exportTable(ctx context.Context, db *sql.DB, dataDir, table string) (TableM
 		for i, column := range columns {
 			row[column] = exportValue(values[i])
 		}
+		if isLocalHistoryCoverage(table, row) {
+			continue
+		}
 		body, err := json.Marshal(row)
 		if err != nil {
 			return TableManifest{}, fmt.Errorf("marshal %s row: %w", table, err)
@@ -758,6 +762,18 @@ func importTableFile(ctx context.Context, tx *sql.Tx, stmt *sql.Stmt, columns []
 		if err != nil {
 			return 0, fmt.Errorf("decode %s: %w", rel, err)
 		}
+		if isLocalHistoryCoverage(table.Name, row) {
+			// Discard foreign coverage without bypassing the required-field and
+			// SQL scalar checks that insertion previously enforced.
+			for _, column := range []string{"source_name", "entity_type", "entity_id", "value", "updated_at"} {
+				value := importValue(row[column])
+				if value == nil || !driver.IsValue(value) {
+					return 0, fmt.Errorf("invalid sync_state history checkpoint field %s", column)
+				}
+			}
+			rows++
+			continue
+		}
 		if table.Name == "message_files" && !includeMedia {
 			row["media_path"] = nil
 			row["content_sha256"] = nil
@@ -807,6 +823,11 @@ func importTableFile(ctx context.Context, tx *sql.Tx, stmt *sql.Stmt, columns []
 		rows++
 	}
 	return rows, nil
+}
+
+func isLocalHistoryCoverage(table string, row map[string]any) bool {
+	return table == "sync_state" && row["entity_type"] == "history_coverage_v1" &&
+		(row["source_name"] == "api-bot" || row["source_name"] == "api-user")
 }
 
 func synthesizeLegacySubordinateTombstone(ctx context.Context, tx *sql.Tx, row map[string]any) error {

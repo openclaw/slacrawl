@@ -21,7 +21,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/store/storedb"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 const PlaceholderUserRawJSON = `{"slacrawl_provider_placeholder":true}`
 
 const (
@@ -275,6 +275,13 @@ const schemaV5Migration = messageEventHeadTriggerSchema
 const schemaV7Migration = `
 create index if not exists idx_messages_channel_thread on messages(channel_id, thread_ts);
 create index if not exists idx_message_events_channel_ts on message_events(channel_id, ts);
+`
+
+// Pre-v8 checkpoints may have come from another archive and cannot prove local coverage.
+const schemaV8Migration = `
+delete from sync_state
+where entity_type = 'history_coverage_v1'
+  and source_name in ('api-bot', 'api-user');
 `
 
 const schemaV6EventMigration = `
@@ -3218,6 +3225,12 @@ func migrateSchema(db *sql.DB, currentVersion int) error {
 			return fmt.Errorf("migrate sqlite schema to v7: %w", err)
 		}
 		currentVersion = 7
+	}
+	if currentVersion < 8 {
+		if _, err := tx.Exec(schemaV8Migration); err != nil {
+			return fmt.Errorf("migrate sqlite schema to v8: %w", err)
+		}
+		currentVersion = 8
 	}
 	if currentVersion != schemaVersion {
 		return fmt.Errorf("no migration path from sqlite schema version %d to %d", currentVersion, schemaVersion)
