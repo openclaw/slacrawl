@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/openclaw/crawlkit/control"
@@ -32,7 +36,7 @@ func TestControlManifest(t *testing.T) {
 	}, manifest.Privacy)
 	require.Equal(t, map[string]control.Command{
 		"doctor":      {Title: "Doctor", Argv: []string{"slacrawl", "--json", "doctor"}, JSON: true},
-		"status":      {Title: "Status", Argv: []string{"slacrawl", "--json", "status"}, JSON: true},
+		"status":      {Title: "Status", Argv: []string{"slacrawl", "status", "--json"}, JSON: true},
 		"sync":        {Title: "Sync", Argv: []string{"slacrawl", "--json", "sync", "--source", "all", "--latest-only"}, JSON: true, Mutates: true},
 		"search":      {Title: "Search", Argv: []string{"slacrawl", "--json", "search"}, JSON: true},
 		"tap":         {Title: "Import desktop cache", Argv: []string{"slacrawl", "--json", "sync", "--source", "desktop"}, JSON: true, Mutates: true},
@@ -43,4 +47,28 @@ func TestControlManifest(t *testing.T) {
 		"update":      {Title: "Update share", Argv: []string{"slacrawl", "--json", "update"}, JSON: true, Mutates: true},
 		"legacy-json": {Title: "Legacy JSON flag", Argv: []string{"slacrawl", "--json"}, JSON: true, Legacy: true},
 	}, manifest.Commands)
+}
+
+func TestManifestStatusExecutesNormalizedContract(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stdout}
+	ctx := context.Background()
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(dir, "archive.db")}))
+	stdout.Reset()
+	argv := controlManifest(configPath).Commands["status"].Argv
+	args := append([]string{"--config", configPath}, argv[1:]...)
+	require.NoError(t, app.Run(ctx, args))
+	var normalized map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &normalized))
+	require.Equal(t, control.SchemaVersion, normalized["schema_version"])
+	require.Equal(t, "slacrawl", normalized["app_id"])
+
+	stdout.Reset()
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "status"}))
+	var legacy map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &legacy))
+	require.Equal(t, float64(0), legacy["messages"])
+	require.NotContains(t, legacy, "schema_version")
 }

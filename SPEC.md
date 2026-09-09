@@ -362,7 +362,10 @@ Share config:
    - explicit `--since` wins
    - `--full` disables incremental cutoffs
    - `--latest-only` skips channels that do not already have a stored cursor
-   - otherwise reuse the latest stored per-channel timestamp with overlap
+   - otherwise reuse the last completed source/workspace/channel history horizon with overlap
+   - retain unfinished intervals across failures; observed message maxima do not certify completed backfill
+   - histories without a completion checkpoint start at the permitted retention floor, including desktop-only or legacy archives
+   - explicit `--since` coverage is isolated from ordinary/full history checkpoints
 7. apply any configured or CLI-provided excluded channel-name filters after channel discovery and allow-list filtering
 8. fetch users
 9. backfill message history

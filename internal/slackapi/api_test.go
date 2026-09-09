@@ -507,6 +507,7 @@ func TestSyncDefaultsToIncrementalHistoryWhenNotFull(t *testing.T) {
 		UpdatedAt:      client.now(),
 	}, nil))
 
+	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000000.000100"}))
 	err := client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Channels: []string{"C123"}})
 	require.NoError(t, err)
 	require.Equal(t, "1709996400.000100", server.lastHistoryOldest("C123"))
@@ -798,6 +799,7 @@ func TestRepairWorkspaceReconcilesIncrementalHistory(t *testing.T) {
 		UpdatedAt:      client.now(),
 	}, nil))
 
+	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000000.000100"}))
 	require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
 
 	rows, err := st.Messages(ctx, "", "C123", "", 10)

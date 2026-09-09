@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -30,13 +31,14 @@ type Tool struct {
 }
 
 type Options struct {
-	Endpoint        string
-	AccessToken     string
-	AccountID       string
-	ProtocolVersion string
-	ClientName      string
-	ClientVersion   string
-	HTTPClient      *http.Client
+	Endpoint           string
+	AccessToken        string
+	AccountID          string
+	ProtocolVersion    string
+	ClientName         string
+	ClientVersion      string
+	HTTPClient         *http.Client
+	RestrictAuthOrigin bool
 }
 
 type Client struct {
@@ -82,7 +84,8 @@ type toolCallResult struct {
 }
 
 func New(opts Options) (*Client, error) {
-	if strings.TrimSpace(opts.Endpoint) == "" {
+	opts.Endpoint = strings.TrimSpace(opts.Endpoint)
+	if opts.Endpoint == "" {
 		return nil, errors.New("MCP endpoint is required")
 	}
 	if opts.ProtocolVersion == "" {
@@ -97,8 +100,34 @@ func New(opts Options) (*Client, error) {
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 60 * time.Second}
 	}
+	if opts.RestrictAuthOrigin {
+		origin, err := url.Parse(opts.Endpoint)
+		if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil {
+			return nil, errors.New("automatic MCP authentication requires an HTTPS origin")
+		}
+		client := *opts.HTTPClient
+		previous := client.CheckRedirect
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if req.URL.User != nil || !sameHTTPSOrigin(origin, req.URL) {
+				return errors.New("MCP redirect would leave the credential origin")
+			}
+			if previous != nil {
+				if err := previous(req, via); err != nil {
+					return err
+				}
+			} else if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			// Caller policy may rewrite the request before it is sent.
+			if req.URL.User != nil || !sameHTTPSOrigin(origin, req.URL) {
+				return errors.New("MCP redirect would leave the credential origin")
+			}
+			return nil
+		}
+		opts.HTTPClient = &client
+	}
 	return &Client{
-		endpoint:        strings.TrimSpace(opts.Endpoint),
+		endpoint:        opts.Endpoint,
 		accessToken:     strings.TrimSpace(opts.AccessToken),
 		accountID:       strings.TrimSpace(opts.AccountID),
 		protocolVersion: opts.ProtocolVersion,
@@ -106,6 +135,17 @@ func New(opts Options) (*Client, error) {
 		clientVersion:   opts.ClientVersion,
 		httpClient:      opts.HTTPClient,
 	}, nil
+}
+
+func sameHTTPSOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if u.Port() == "" {
+			return "443"
+		}
+		return u.Port()
+	}
+	return a.Scheme == "https" && b.Scheme == "https" &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
 func (c *Client) Close() error { return nil }

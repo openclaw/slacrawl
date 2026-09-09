@@ -210,7 +210,7 @@ func (c Config) Save(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return crawlconfig.WriteTOML(path, c, 0o644)
+	return crawlconfig.WriteTOML(path, c, 0o600)
 }
 
 func (c *Config) Normalize() error {

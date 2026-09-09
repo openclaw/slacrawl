@@ -1181,6 +1181,194 @@ pragma user_version = 2;
 	require.Equal(t, 2, version)
 }
 
+func TestHistoryMigrationInvalidatesOnlyPreV8APICoverage(t *testing.T) {
+	path := historyMigrationV7Fixture(t)
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	before := historyMigrationRows(t, db)
+	require.NoError(t, db.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	var version int
+	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+	require.Equal(t, 8, version)
+	var expected [][5]string
+	for _, row := range before {
+		if row[1] != "history_coverage_v1" || (row[0] != "api-bot" && row[0] != "api-user") {
+			expected = append(expected, row)
+		}
+	}
+	require.Equal(t, expected, historyMigrationRows(t, s.DB()))
+	var text string
+	require.NoError(t, s.DB().QueryRow(`select text from messages`).Scan(&text))
+	require.Equal(t, "migration fixture", text)
+	floor, err := s.ChannelRetentionFloor(context.Background(), "T1", "C1")
+	require.NoError(t, err)
+	require.Equal(t, "100.000000", floor)
+	seeded, err := s.ChannelRetentionSeeded(context.Background(), "T1", "C1")
+	require.NoError(t, err)
+	require.True(t, seeded)
+
+	for _, source := range []string{"api-bot", "api-user"} {
+		require.NoError(t, s.SetSyncState(context.Background(), source, "history_coverage_v1", "earned", `{"complete":true,"latest":"200","pending":"100"}`))
+	}
+	earned := historyMigrationRows(t, s.DB())
+	require.NoError(t, s.Close())
+	s, err = Open(path)
+	require.NoError(t, err)
+	require.Equal(t, earned, historyMigrationRows(t, s.DB()))
+}
+
+func TestHistoryMigrationOpenVersions(t *testing.T) {
+	t.Run("read-only v7 then writable v8", func(t *testing.T) {
+		path := historyMigrationV7Fixture(t)
+		db, err := sql.Open("sqlite", path)
+		require.NoError(t, err)
+		before := historyMigrationRows(t, db)
+		require.NoError(t, db.Close())
+		s, err := OpenReadOnly(path)
+		require.NoError(t, err)
+		var version int
+		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+		require.Equal(t, 7, version)
+		require.Equal(t, before, historyMigrationRows(t, s.DB()))
+		require.NoError(t, s.Close())
+		s, err = Open(path)
+		require.NoError(t, err)
+		require.NoError(t, s.Close())
+		s, err = OpenReadOnly(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, s.Close()) }()
+		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+		require.Equal(t, 8, version)
+	})
+	t.Run("fresh empty", func(t *testing.T) {
+		s, err := Open(filepath.Join(t.TempDir(), "empty.db"))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, s.Close()) }()
+		var version int
+		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+		require.Equal(t, 8, version)
+		require.Empty(t, historyMigrationRows(t, s.DB()))
+	})
+	t.Run("nonempty unversioned legacy", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "legacy.db")
+		db, err := sql.Open("sqlite", path)
+		require.NoError(t, err)
+		_, err = db.Exec(legacyStoreSchemaV2 + `
+pragma user_version = 0;
+insert into sync_state values ('api-bot', 'history_coverage_v1', 'opaque', 'not json', 'old');
+insert into sync_state values ('provider:test', 'cursor', 'opaque', 'preserved', 'old');
+`)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+		s, err := Open(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, s.Close()) }()
+		var version int
+		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+		require.Equal(t, 8, version)
+		require.Contains(t, historyMigrationRows(t, s.DB()), [5]string{"provider:test", "cursor", "opaque", "preserved", "old"})
+		var targeted int
+		require.NoError(t, s.DB().QueryRow(`select count(*) from sync_state where entity_type = 'history_coverage_v1'`).Scan(&targeted))
+		require.Zero(t, targeted)
+	})
+	for name, opener := range map[string]func(string) (*Store, error){"writable": Open, "read-only": OpenReadOnly} {
+		t.Run("future "+name, func(t *testing.T) {
+			path := historyMigrationV7Fixture(t)
+			db, err := sql.Open("sqlite", path)
+			require.NoError(t, err)
+			_, err = db.Exec(`pragma user_version = 9`)
+			require.NoError(t, err)
+			before := historyMigrationRows(t, db)
+			_, err = opener(path)
+			require.ErrorContains(t, err, "database schema version 9 is newer than this slacrawl build supports")
+			require.Equal(t, before, historyMigrationRows(t, db))
+			require.NoError(t, db.Close())
+		})
+	}
+}
+
+func TestHistoryMigrationRollbackAndRetry(t *testing.T) {
+	path := historyMigrationV7Fixture(t)
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	before := historyMigrationRows(t, db)
+	_, err = db.Exec(`alter table channels drop column purpose`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	_, err = Open(path)
+	require.ErrorContains(t, err, "sqlite schema table channels missing column purpose")
+	db, err = sql.Open("sqlite", path)
+	require.NoError(t, err)
+	var version int
+	require.NoError(t, db.QueryRow(`pragma user_version`).Scan(&version))
+	require.Equal(t, 7, version)
+	require.Equal(t, before, historyMigrationRows(t, db))
+	_, err = db.Exec(`alter table channels add column purpose text`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	s, err := Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
+	require.Equal(t, 8, version)
+	var targeted int
+	require.NoError(t, s.DB().QueryRow(`select count(*) from sync_state where entity_type = 'history_coverage_v1' and source_name in ('api-bot', 'api-user')`).Scan(&targeted))
+	require.Zero(t, targeted)
+}
+
+func historyMigrationV7Fixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "v7.db")
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	// Schema v8 changes no DDL; initialize the complete v7 schema directly.
+	_, err = db.Exec(schema + `
+pragma user_version = 7;
+insert into channels (id,workspace_id,name,kind,raw_json,updated_at) values ('C1','T1','fixture','public_channel','{}','old');
+insert into messages (channel_id,ts,workspace_id,text,normalized_text,source_rank,source_name,raw_json,updated_at)
+values ('C1','200.000000','T1','migration fixture','migration fixture',2,'api-bot','{}','old');
+`)
+	require.NoError(t, err)
+	for _, row := range [][4]string{
+		{"api-bot", "history_coverage_v1", `["T1","C1",""]`, `{"complete":true,"latest":"200"}`},
+		{"api-user", "history_coverage_v1", `["T2","C2","100"]`, `{"pending":"100"}`},
+		{"api-bot", "history_coverage_v1", "opaque malformed key", "{not json"},
+		{"API-BOT", "history_coverage_v1", "near", "preserved"},
+		{"api-bot ", "history_coverage_v1", "near", "preserved"},
+		{"api-user", "history_coverage_v1 ", "near", "preserved"},
+		{"api-bot", "history_coverage_v2", "future", "preserved"},
+		{"api-user", "cursor", "ordinary", "preserved"},
+		{"mcp", "history_coverage_v1", "connector", "preserved"},
+		{"provider:test", "history_coverage_v1", "provider", "preserved"},
+		{retentionFloorSource, retentionFloorEntityType, "T1|C1", "100.000000"},
+		{retentionFloorSource, retentionSeedEntityType, "T1|C1", "1"},
+	} {
+		_, err = db.Exec(`insert into sync_state values (?, ?, ?, ?, 'unchanged time')`, row[0], row[1], row[2], row[3])
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Close())
+	return path
+}
+
+func historyMigrationRows(t *testing.T, db *sql.DB) [][5]string {
+	t.Helper()
+	rows, err := db.Query(`select source_name,entity_type,entity_id,value,updated_at from sync_state order by source_name,entity_type,entity_id`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result [][5]string
+	for rows.Next() {
+		var row [5]string
+		require.NoError(t, rows.Scan(&row[0], &row[1], &row[2], &row[3], &row[4]))
+		result = append(result, row)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
 const legacyStoreSchemaV2 = `
 create table workspaces (
   id text primary key,

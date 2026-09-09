@@ -1174,6 +1174,275 @@ func TestNeedsImportUsesLastImportTime(t *testing.T) {
 	require.True(t, NeedsImport(ctx, s, time.Hour))
 }
 
+func TestHistoryCheckpointsStayLocalOnExport(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mixed=%t", mixed), func(t *testing.T) {
+			ctx := context.Background()
+			source := seedStore(t, filepath.Join(t.TempDir(), "source.db"))
+			defer func() { require.NoError(t, source.Close()) }()
+			_, err := source.DB().Exec(`delete from sync_state`)
+			require.NoError(t, err)
+			for _, sourceName := range []string{"api-bot", "api-user"} {
+				require.NoError(t, source.SetSyncState(ctx, sourceName, "history_coverage_v1", "opaque", "{not json"))
+			}
+			var expected []map[string]any
+			if mixed {
+				for _, row := range []map[string]any{
+					historySnapshotRow("API-BOT", "history_coverage_v1", "case", "keep"),
+					historySnapshotRow("api-bot ", "history_coverage_v1", "space", "keep"),
+					historySnapshotRow("api-user", "history_coverage_v1 ", "space", "keep"),
+					historySnapshotRow("api-bot", "history_coverage_v2", "future", "keep"),
+					historySnapshotRow("mcp", "history_coverage_v1", "connector", "keep"),
+					historySnapshotRow("provider:test", "cursor", "provider", "keep"),
+					historySnapshotRow("retention", "channel_floor", "T1|C1", "100"),
+				} {
+					_, err := source.DB().Exec(`insert into sync_state values (?, ?, ?, ?, ?)`,
+						row["source_name"], row["entity_type"], row["entity_id"], row["value"], row["updated_at"])
+					require.NoError(t, err)
+					expected = append(expected, row)
+				}
+			}
+			before, err := source.QueryReadOnly(ctx, `select * from sync_state order by source_name,entity_type,entity_id`)
+			require.NoError(t, err)
+			opts := Options{RepoPath: filepath.Join(t.TempDir(), "share")}
+			manifest, err := Export(ctx, source, opts)
+			require.NoError(t, err)
+			require.Equal(t, 1, manifest.Version)
+			for _, table := range manifest.Tables {
+				if table.Name != "sync_state" {
+					continue
+				}
+				require.Equal(t, []string{"source_name", "entity_type", "entity_id", "value", "updated_at"}, table.Columns)
+				require.NotEmpty(t, table.Files)
+				require.Empty(t, table.File)
+				require.Regexp(t, `^tables/sync_state/[0-9]{6}\.jsonl\.gz$`, table.Files[0])
+				records := historySnapshotRows(t, opts.RepoPath, table)
+				require.Equal(t, len(records), table.Rows)
+				require.Equal(t, len(expected), table.Rows)
+				require.ElementsMatch(t, expected, records)
+			}
+			after, err := source.QueryReadOnly(ctx, `select * from sync_state order by source_name,entity_type,entity_id`)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
+func TestHistoryCheckpointsIgnoredByMergeAndRestore(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("restore=%t/legacy=%t", restore, legacy), func(t *testing.T) {
+				ctx := context.Background()
+				source := seedStore(t, filepath.Join(t.TempDir(), "source.db"))
+				defer func() { require.NoError(t, source.Close()) }()
+				opts := Options{RepoPath: filepath.Join(t.TempDir(), "share")}
+				manifest, err := Export(ctx, source, opts)
+				require.NoError(t, err)
+				incoming := []map[string]any{
+					historySnapshotRow("api-bot", "history_coverage_v1", "same", "foreign"),
+					historySnapshotRow("api-user", "history_coverage_v1", "absent", "foreign"),
+					historySnapshotRow("api-bot", "history_coverage_v1", "malformed key", "{not json"),
+					historySnapshotRow("mcp", "history_coverage_v1", "connector", "foreign"),
+					historySnapshotRow("provider:test", "cursor", "cursor", "foreign"),
+					historySnapshotRow("api-bot", "history_coverage_v2", "future", "foreign"),
+					historySnapshotRow("api-user ", "history_coverage_v1", "near", "foreign"),
+					historySnapshotRow("retention", "channel_floor", "T1|C1", "100"),
+					historySnapshotRow("retention", "channel_seed", "T1|C1", "1"),
+				}
+				writeHistorySnapshot(t, opts.RepoPath, &manifest, incoming, legacy)
+				reader := seedStore(t, filepath.Join(t.TempDir(), "reader.db"))
+				defer func() { require.NoError(t, reader.Close()) }()
+				require.NoError(t, reader.SetSyncState(ctx, "api-bot", "history_coverage_v1", "same", "local"))
+				require.NoError(t, reader.SetSyncState(ctx, "api-user", "history_coverage_v1", "local-only", "pending"))
+				require.NoError(t, reader.SetSyncState(ctx, "provider:test", "cursor", "cursor", "local"))
+				importer := Import
+				if restore {
+					importer = Restore
+				}
+				_, err = importer(ctx, reader, opts)
+				require.NoError(t, err)
+				targeted, err := reader.QueryReadOnly(ctx, `select source_name,entity_id,value from sync_state where entity_type = 'history_coverage_v1' and source_name in ('api-bot','api-user') order by source_name,entity_id`)
+				require.NoError(t, err)
+				if restore {
+					require.Empty(t, targeted)
+				} else {
+					require.Equal(t, []map[string]any{
+						{"source_name": "api-bot", "entity_id": "same", "value": "local"},
+						{"source_name": "api-user", "entity_id": "local-only", "value": "pending"},
+					}, targeted)
+				}
+				for _, row := range incoming[3:] {
+					value, err := reader.GetSyncState(ctx, row["source_name"].(string), row["entity_type"].(string), row["entity_id"].(string))
+					require.NoError(t, err)
+					expected := row["value"]
+					if !restore && row["source_name"] == "provider:test" {
+						expected = "local"
+					}
+					require.Equal(t, expected, value)
+				}
+				assertArchiveStillPresent(t, ctx, reader)
+			})
+		}
+	}
+}
+
+func TestHistoryCheckpointImportFailuresRollBackAndRetry(t *testing.T) {
+	cases := []string{"count", "malformed-json", "truncated-gzip"}
+	for _, field := range []string{"source_name", "entity_type", "entity_id", "value", "updated_at"} {
+		for _, invalid := range []string{"missing", "null", "object", "array"} {
+			cases = append(cases, field+"/"+invalid)
+		}
+	}
+	for _, restore := range []bool{false, true} {
+		for _, failure := range cases {
+			t.Run(fmt.Sprintf("restore=%t/%s", restore, failure), func(t *testing.T) {
+				ctx := context.Background()
+				source := seedStore(t, filepath.Join(t.TempDir(), "source.db"))
+				defer func() { require.NoError(t, source.Close()) }()
+				_, err := source.DB().Exec(`update messages set text='incoming replacement', normalized_text='incoming replacement', updated_at='2099-01-01T00:00:00Z'`)
+				require.NoError(t, err)
+				opts := Options{RepoPath: filepath.Join(t.TempDir(), "share")}
+				manifest, err := Export(ctx, source, opts)
+				require.NoError(t, err)
+				row := historySnapshotRow("api-bot", "history_coverage_v1", "same", "foreign")
+				parts := strings.Split(failure, "/")
+				if len(parts) == 2 {
+					switch parts[1] {
+					case "missing":
+						delete(row, parts[0])
+					case "null":
+						row[parts[0]] = nil
+					case "object":
+						row[parts[0]] = map[string]any{"unsupported": true}
+					case "array":
+						row[parts[0]] = []any{"unsupported"}
+					}
+				}
+				file := writeHistorySnapshot(t, opts.RepoPath, &manifest, []map[string]any{row}, false)
+				switch failure {
+				case "count":
+					for i := range manifest.Tables {
+						if manifest.Tables[i].Name == "sync_state" {
+							manifest.Tables[i].Rows++
+						}
+					}
+					writeManifest(t, opts.RepoPath, manifest)
+				case "malformed-json":
+					var buf bytes.Buffer
+					gz := gzip.NewWriter(&buf)
+					require.NoError(t, json.NewEncoder(gz).Encode(row))
+					_, err := gz.Write([]byte("{"))
+					require.NoError(t, err)
+					require.NoError(t, gz.Close())
+					require.NoError(t, os.WriteFile(file, buf.Bytes(), 0o600))
+				case "truncated-gzip":
+					body, err := os.ReadFile(file)
+					require.NoError(t, err)
+					require.NoError(t, os.WriteFile(file, body[:len(body)-5], 0o600))
+				}
+				reader := seedStore(t, filepath.Join(t.TempDir(), "reader.db"))
+				defer func() { require.NoError(t, reader.Close()) }()
+				require.NoError(t, reader.SetSyncState(ctx, "api-bot", "history_coverage_v1", "same", "local"))
+				before := historyArchiveState(t, reader)
+				importer := Import
+				if restore {
+					importer = Restore
+				}
+				_, err = importer(ctx, reader, opts)
+				require.Error(t, err)
+				if failure == "count" {
+					require.ErrorContains(t, err, "row count mismatch")
+				}
+				require.Equal(t, before, historyArchiveState(t, reader))
+				writeHistorySnapshot(t, opts.RepoPath, &manifest, []map[string]any{
+					historySnapshotRow("api-bot", "history_coverage_v1", "same", "{opaque invalid json"),
+				}, false)
+				_, err = importer(ctx, reader, opts)
+				require.NoError(t, err)
+				var text string
+				require.NoError(t, reader.DB().QueryRow(`select text from messages`).Scan(&text))
+				require.Equal(t, "incoming replacement", text)
+				var checkpoints int
+				require.NoError(t, reader.DB().QueryRow(`select count(*) from sync_state where entity_type='history_coverage_v1' and source_name='api-bot'`).Scan(&checkpoints))
+				require.Equal(t, map[bool]int{false: 1, true: 0}[restore], checkpoints)
+			})
+		}
+	}
+}
+
+func historySnapshotRow(source, entityType, key, value string) map[string]any {
+	return map[string]any{"source_name": source, "entity_type": entityType, "entity_id": key, "value": value, "updated_at": "2000-01-01T00:00:00Z"}
+}
+
+func writeHistorySnapshot(t *testing.T, repoPath string, manifest *Manifest, rows []map[string]any, legacy bool) string {
+	t.Helper()
+	for i := range manifest.Tables {
+		table := &manifest.Tables[i]
+		if table.Name != "sync_state" {
+			continue
+		}
+		file := tableManifestFiles(*table)[0]
+		table.Rows, table.File, table.Files = len(rows), "", []string{file}
+		if legacy {
+			table.File, table.Files = file, nil
+		}
+		groups := [][]map[string]any{rows}
+		if !legacy && len(rows) > 1 {
+			table.Files = append(table.Files, "tables/sync_state/000002.jsonl.gz")
+			groups = [][]map[string]any{rows[:1], rows[1:]}
+		}
+		for j, group := range groups {
+			var compressed bytes.Buffer
+			gz := gzip.NewWriter(&compressed)
+			for _, row := range group {
+				require.NoError(t, json.NewEncoder(gz).Encode(row))
+			}
+			require.NoError(t, gz.Close())
+			fullPath := filepath.Join(repoPath, filepath.FromSlash(tableManifestFiles(*table)[j]))
+			require.NoError(t, os.WriteFile(fullPath, compressed.Bytes(), 0o600))
+		}
+		writeManifest(t, repoPath, *manifest)
+		return filepath.Join(repoPath, filepath.FromSlash(file))
+	}
+	t.Fatal("sync_state table missing")
+	return ""
+}
+
+func historySnapshotRows(t *testing.T, repoPath string, table TableManifest) []map[string]any {
+	t.Helper()
+	var result []map[string]any
+	for _, rel := range tableManifestFiles(table) {
+		body, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(rel)))
+		require.NoError(t, err)
+		gz, err := gzip.NewReader(bytes.NewReader(body))
+		require.NoError(t, err)
+		dec := json.NewDecoder(gz)
+		dec.UseNumber()
+		for {
+			var row map[string]any
+			err := dec.Decode(&row)
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			result = append(result, row)
+		}
+		require.NoError(t, gz.Close())
+	}
+	return result
+}
+
+func historyArchiveState(t *testing.T, s *store.Store) map[string][]map[string]any {
+	t.Helper()
+	result := map[string][]map[string]any{}
+	for _, table := range append(append([]string{}, SnapshotTables...), "message_fts", "message_event_heads") {
+		rows, err := s.QueryReadOnly(context.Background(), "select * from "+quoteIdent(table)+" order by 1,2")
+		require.NoError(t, err)
+		result[table] = rows
+	}
+	return result
+}
+
 func writeManifest(t *testing.T, repoPath string, manifest Manifest) {
 	t.Helper()
 	body, err := json.MarshalIndent(manifest, "", "  ")
