@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.0 - 2026-09-09
 
 - Migrate archives to schema v8 on first writable open, invalidating pre-v8 API history checkpoints once while retaining messages and retention state. Checkpoints are now local-only in Git shares; restore leaves coverage unknown. The next sync may repeat retention-bounded history requests, or all accessible history without a floor. Stop old processes and keep a consistent pre-upgrade backup; in-place downgrade is unsupported. See [archive schema upgrades](docs/configuration.md#archive-schema-upgrades).
