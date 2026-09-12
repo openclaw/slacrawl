@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 - 2026-09-11
 
 **Highlights:** Refresh archive runtime dependencies and security analysis tooling while retaining the Go 1.27.0 minimum.
 
 - Update CrawlKit to 0.16.2, terminal character widths to go-runewidth 0.0.30, and Go network, operating-system, and Unicode text support to x/net 0.59.0, x/sys 0.48.0, and x/text 0.42.0; retain SQLite 1.58.0 with its required libc 1.75.6 runtime.
+- Automatically update the Homebrew formula after verified releases and verify its archive checksums before completing the release workflow.
 - Update govulncheck to 1.8.0, deadcode to 0.50.0, and the pinned CodeQL action to 4.38.0.
 - Update the optional APT/RPM publishing workflows to Cloudsmith CLI 1.27.0.
 
