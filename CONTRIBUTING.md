@@ -60,10 +60,10 @@ workflow, a thin caller of `openclaw/release-workflows`' reusable Go CLI
 pipeline. The shared workflow owns the annotated version tag, builds the
 GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
 OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only independently verified
-bytes, and opens the next `Unreleased` changelog PR. Slacrawl has a formula in
-`openclaw/homebrew-tap`, but this caller does not enable automatic Homebrew
-handoff, so the tap can lag GitHub Releases. Separate tap updates are not a
-success criterion for this workflow.
+bytes, updates the `slacrawl` formula in `openclaw/homebrew-tap`, verifies the
+formula's archive checksums, and opens the next `Unreleased` changelog PR.
+Homebrew handoff uses the repository's `HOMEBREW_TAP_TOKEN` secret and must
+succeed before the release workflow completes.
 
 ```bash
 gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
