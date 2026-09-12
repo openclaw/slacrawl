@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.1 - 2026-09-11
 
 **Highlights:** Refresh archive runtime dependencies and security analysis tooling while retaining the Go 1.27.0 minimum.
