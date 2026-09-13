@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update CI and Crabbox hydration to Node.js 26.8.2 for Desktop decoding tests.
 - Confine directory-export imports to the selected root so symlinks cannot import unrelated files. Compatibility: links outside the root now fail; contained links and a linked export root remain supported.
 - Keep digest, quiet-channel and weekly-trend reports within their timestamp windows, and count thread roots independently across channels, including roots identified only by reply metadata.
 - Make nested analytics help succeed without a valid configuration and reject non-finite `sync --since` values before opening the archive or starting ingestion.
