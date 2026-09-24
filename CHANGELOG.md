@@ -2,7 +2,12 @@
 
 ## Unreleased
 
+## 0.10.1 - 2026-09-24
+
+**Highlights:** Restore desktop sync when cached messages contain timestamped attachments, retaining quoted content in the parent payload.
+
 - Fix desktop sync rejecting timestamped attachments and quoted messages as conflicting standalone messages; retain attachments in their parent payload under every DM policy. Thanks @ViaxCo for the fix and @vitorsj for the report! (#254, #255)
+- Update CrawlKit to 0.16.4 for snapshot column-order compatibility and bounded scheduler output draining.
 - Clarify desktop upgrade recovery: the schema-8 migration introduced in v0.9.0 happens on writable open even when sync fails; downgrading requires a consistent pre-upgrade backup.
 
 ## 0.10.0 - 2026-09-21
