@@ -950,6 +950,7 @@ observations, not content approval or publication authority.
 5. apply `include_drafts = false`, then prepare all admitted conversation records before desktop summaries or writes:
    - explicit `include_dms = false` requires selected native public/private channel metadata; any decoded IM/MPIM, unknown, or conflicting observation for that workspace/channel vetoes admission
    - retain richest-state selection and legacy payload/duplicate behavior for omitted/true; preserve decoder identity evidence separately from persisted raw payloads
+   - keep attachments in their parent message payload; do not discover them as separate messages
    - freeze workspace/name candidates before filtering and carry each resolved owner into persistence
    - reject otherwise retained channel/message container identity conflicts under every policy before any desktop writes
    - under explicit `include_dms = false`, require every draft destination to pass type, workspace, and selectors and resolve to one workspace; otherwise omit the whole draft

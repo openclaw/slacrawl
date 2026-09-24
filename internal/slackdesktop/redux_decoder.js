@@ -155,6 +155,9 @@ function walkMessages(node, fallbackChannel, seenNodes, context, ancestors, sele
   pushMessage(node, fallbackChannel, undefined, context, select);
 
   for (const [key, child] of Object.entries(node)) {
+    if (key === "attachments") {
+      continue;
+    }
     const nextChannel =
       key.startsWith("C") || key.startsWith("G") || key.startsWith("D") ? key : fallbackChannel;
     const nextFallbackTS =

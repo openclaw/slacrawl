@@ -22,6 +22,11 @@ Today the desktop adapter can ingest:
 - custom status metadata
 - object store inventory for IndexedDB drift tracking
 
+Message attachments, including quoted messages and link unfurls, remain in the
+parent message's raw payload. They are not discovered as separate messages,
+even when they contain timestamps and another channel ID. DM exclusion applies
+to the parent conversation; it does not redact quoted content inside attachments.
+
 The desktop adapter intentionally does not use local desktop auth material for write actions.
 
 To recover sent messages without archiving unsent drafts, set
@@ -156,6 +161,13 @@ This will:
 3. merge supported rows into SQLite
 
 Ctrl-C cancels desktop sync, watch, and doctor, including a Node decoder that stops responding.
+
+When upgrading from pre-v0.9.0, stop archive writers and keep a consistent SQLite
+backup before the first sync. Opening the archive writable upgrades it to schema
+8 even if desktop sync later fails. Older binaries cannot open that upgraded
+archive; rollback requires restoring the pre-upgrade backup. See
+[Archive Schema Upgrades](configuration.md#archive-schema-upgrades) for recovery
+and backup guidance.
 
 ## Continuous Desktop Refresh
 

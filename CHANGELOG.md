@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix desktop sync rejecting timestamped attachments and quoted messages as conflicting standalone messages; retain attachments in their parent payload under every DM policy. Thanks @ViaxCo for the fix and @vitorsj for the report! (#254, #255)
+- Clarify desktop upgrade recovery: the schema-8 migration introduced in v0.9.0 happens on writable open even when sync fails; downgrading requires a consistent pre-upgrade backup.
+
 ## 0.10.0 - 2026-09-21
 
 **Highlights:** Enforce configured DM and draft exclusions, preserve incomplete API/MCP sync work, and add offline export preparation and verification. Byte verification does not authorize publication.

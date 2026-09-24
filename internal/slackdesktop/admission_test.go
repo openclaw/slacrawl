@@ -211,6 +211,46 @@ func TestDesktopAdmissionRejectsRetainedIdentityBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestDesktopAdmissionDoesNotTreatAttachmentsAsMessages(t *testing.T) {
+	for _, container := range []string{"messages", "threads"} {
+		for _, attachmentChannel := range []string{"DOTHER", "CPUB", ""} {
+			t.Run(container+"/"+attachmentChannel, func(t *testing.T) {
+				root := t.TempDir()
+				state := admissionState("CPUB", map[string]any{"is_channel": true})
+				message := state["messages"].(map[string]any)["CPUB"].(map[string]any)["1710000001.000001"].(map[string]any)
+				attachments := []any{map[string]any{
+					"ts": "1710000002.000001", "channel_id": attachmentChannel,
+					"text": "attached message", "user": "UATTACHED",
+				}}
+				message["attachments"] = attachments
+				if container == "threads" {
+					state["threads"] = map[string]any{"CPUB": map[string]any{"1710000001.000001": map[string]any{"messages": []any{message}}}}
+					delete(state, "messages")
+				}
+				writeAdmissionBlob(t, root, "state", state)
+				for _, policy := range []admission.DMPolicy{admission.Default, admission.Include, admission.Exclude} {
+					t.Run(fmt.Sprint(policy), func(t *testing.T) {
+						st := admissionStore(t)
+						for range 2 {
+							source, err := Ingest(context.Background(), st, root, IngestOptions{DMPolicy: policy})
+							require.NoError(t, err)
+							require.Equal(t, 1, source.Admission.Messages)
+						}
+						rows, err := st.QueryReadOnly(context.Background(), "select channel_id, ts, raw_json from messages")
+						require.NoError(t, err)
+						require.Len(t, rows, 1)
+						require.Equal(t, "CPUB", rows[0]["channel_id"])
+						require.Equal(t, "1710000001.000001", rows[0]["ts"])
+						var raw map[string]any
+						require.NoError(t, json.Unmarshal([]byte(rows[0]["raw_json"].(string)), &raw))
+						require.Equal(t, attachments, raw["attachments"])
+					})
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopAdmissionSupportedShapesAndReplay(t *testing.T) {
 	root := t.TempDir()
 	state := admissionState("CPUB", map[string]any{"is_channel": true})
