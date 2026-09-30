@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the pinned CodeQL action to 4.38.2. Thanks @dependabot.
+
 - Update TruffleHog secret scanning to 3.97.9. Thanks @dependabot.
 
 ## 0.10.1 - 2026-09-24
