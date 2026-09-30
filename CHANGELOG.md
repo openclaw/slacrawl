@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update TruffleHog secret scanning to 3.97.9. Thanks @dependabot.
+
 ## 0.10.1 - 2026-09-24
 
 **Highlights:** Restore desktop sync when cached messages contain timestamped attachments, retaining quoted content in the parent payload.
