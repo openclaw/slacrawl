@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CrawlKit to 0.16.6.
+
 - Update the pinned CodeQL action to 4.38.2. Thanks @dependabot.
 
 - Update TruffleHog secret scanning to 3.97.9. Thanks @dependabot.
