@@ -32,6 +32,8 @@ make build
 ./bin/slacrawl --help
 ```
 
+macOS binaries require macOS 13 or newer.
+
 The repository also includes a [`Dockerfile`](Dockerfile) for container builds.
 
 ## Quick start

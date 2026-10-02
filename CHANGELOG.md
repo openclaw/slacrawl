@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.10.2 - 2026-10-02
+
+**Highlights:** Update CrawlKit to 0.16.6 and refresh CodeQL and TruffleHog security scanning.
+
 - Update CrawlKit to 0.16.6.
 
 - Update the pinned CodeQL action to 4.38.2. Thanks @dependabot.
