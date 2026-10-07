@@ -73,6 +73,10 @@ function looksLikeMessage(entry) {
   );
 }
 
+function isMessageContainerKey(key) {
+  return key === "replies" || key === "messages" || /^\d+(?:\.\d+)?$/.test(key);
+}
+
 function channelAliases(entry, includeID = false) {
   return [...new Set([
     ...(includeID ? [entry.id] : []),
@@ -154,8 +158,12 @@ function walkMessages(node, fallbackChannel, seenNodes, context, ancestors, sele
 
   pushMessage(node, fallbackChannel, undefined, context, select);
 
+  // metadata.event_payload and files[].shares carry ts and text without being
+  // messages. Attachments are one such field; skip every non-container key
+  // once this node is itself a message. Channel maps still walk nested keys.
+  const nodeIsMessage = looksLikeMessage(node);
   for (const [key, child] of Object.entries(node)) {
-    if (key === "attachments") {
+    if (key === "attachments" || (nodeIsMessage && !isMessageContainerKey(key))) {
       continue;
     }
     const nextChannel =
@@ -167,8 +175,7 @@ function walkMessages(node, fallbackChannel, seenNodes, context, ancestors, sele
     const childContext = {
       channel: context.channel,
       // Supported cache containers never regain trust below an arbitrary field.
-      supported: context.supported &&
-        (/^\d+(?:\.\d+)?$/.test(key) || key === "replies" || key === "messages"),
+      supported: context.supported && isMessageContainerKey(key),
     };
     if (looksLikeMessage(child)) {
       pushMessage(child, nextChannel, nextFallbackTS, childContext, select);

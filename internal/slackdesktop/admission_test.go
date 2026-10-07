@@ -211,6 +211,57 @@ func TestDesktopAdmissionRejectsRetainedIdentityBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestDesktopAdmissionDoesNotPromoteNestedMessageShapedObjects(t *testing.T) {
+	for _, container := range []string{"messages", "threads"} {
+		t.Run(container, func(t *testing.T) {
+			root := t.TempDir()
+			state := admissionState("CPUB", map[string]any{"is_channel": true})
+			message := state["messages"].(map[string]any)["CPUB"].(map[string]any)["1710000001.000001"].(map[string]any)
+			message["metadata"] = map[string]any{
+				"event_type": "app_mention",
+				"event_payload": map[string]any{
+					"ts": "1710000002.000001", "channel_id": "COTHER",
+					"text": "planted payload", "user": "UPLANTED",
+				},
+			}
+			message["files"] = []any{map[string]any{
+				"id": "F1",
+				"shares": map[string]any{"public": map[string]any{"COTHER": []any{map[string]any{
+					"ts": "1710000003.000001", "text": "share row", "user": "USHARE",
+				}}}},
+			}}
+			message["replies"] = map[string]any{"1710000004.000001": map[string]any{
+				"thread_ts": "1710000001.000001", "text": "real reply", "user": "UREPLY",
+			}}
+			if container == "threads" {
+				state["threads"] = map[string]any{"CPUB": map[string]any{"1710000001.000001": map[string]any{"messages": []any{message}}}}
+				delete(state, "messages")
+			}
+			writeAdmissionBlob(t, root, "state", state)
+			for _, policy := range []admission.DMPolicy{admission.Default, admission.Include, admission.Exclude} {
+				t.Run(fmt.Sprint(policy), func(t *testing.T) {
+					st := admissionStore(t)
+					source, err := Ingest(context.Background(), st, root, IngestOptions{DMPolicy: policy})
+					require.NoError(t, err)
+					require.Equal(t, 2, source.Admission.Messages)
+					rows, err := st.QueryReadOnly(context.Background(), "select channel_id, ts, thread_ts, raw_json from messages order by ts")
+					require.NoError(t, err)
+					require.Len(t, rows, 2)
+					require.Equal(t, "CPUB", rows[1]["channel_id"])
+					require.Equal(t, "1710000004.000001", rows[1]["ts"])
+					require.Equal(t, "1710000001.000001", rows[1]["thread_ts"])
+					blob, err := json.Marshal(rows)
+					require.NoError(t, err)
+					require.Contains(t, string(blob), "intake-canary")
+					require.Contains(t, string(blob), "real reply")
+					require.NotContains(t, string(blob), "planted payload")
+					require.NotContains(t, string(blob), "share row")
+				})
+			}
+		})
+	}
+}
+
 func TestDesktopAdmissionDoesNotTreatAttachmentsAsMessages(t *testing.T) {
 	for _, container := range []string{"messages", "threads"} {
 		for _, attachmentChannel := range []string{"DOTHER", "CPUB", ""} {

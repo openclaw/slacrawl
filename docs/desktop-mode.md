@@ -27,6 +27,11 @@ parent message's raw payload. They are not discovered as separate messages,
 even when they contain timestamps and another channel ID. DM exclusion applies
 to the parent conversation; it does not redact quoted content inside attachments.
 
+Nested app metadata and file-share records are not separate messages, even when
+they contain message-like timestamps and text. Desktop recovery continues to
+read cached replies from message and thread containers without treating nested
+payload channel IDs as the parent conversation's identity.
+
 The desktop adapter intentionally does not use local desktop auth material for write actions.
 
 To recover sent messages without archiving unsent drafts, set
