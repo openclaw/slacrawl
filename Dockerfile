@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.27
 
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 ARG ALPINE_VERSION=3.24
 
-FROM golang:${GO_VERSION}-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
+FROM golang:${GO_VERSION}-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
 RUN apk add --no-cache ca-certificates git
 WORKDIR /src
 COPY go.mod go.sum ./

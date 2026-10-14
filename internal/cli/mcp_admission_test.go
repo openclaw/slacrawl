@@ -147,7 +147,8 @@ func TestMCPDMPolicyAcrossCLIPaths(t *testing.T) {
 								rows, queryErr := st.QueryReadOnly(context.Background(), "select * from "+table)
 								require.NoError(t, queryErr)
 								require.NotContains(t, fmt.Sprint(rows), canary, table)
-								require.NotContains(t, fmt.Sprint(rows), "CDM", table)
+								// Revisions are random: match the channel token, not a substring of its ID.
+								require.NotRegexp(t, `\bCDM\b`, fmt.Sprint(rows), table)
 								if !native || selection != "all" {
 									require.Empty(t, rows, table)
 								}
