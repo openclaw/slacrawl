@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build with Go 1.27.2 to include the October standard-library security fixes; retain the Go 1.27.0 source minimum and macOS compatibility checks.
+
 - Update CrawlKit to 0.16.7 and the pinned Release Drafter actions to 7.9.0, retaining the Go 1.27.0 minimum. Thanks @vincentkoc and @dependabot! (#261, #264, #265, #266)
 
 ## 0.10.2 - 2026-10-02
