@@ -15,7 +15,7 @@ Requirements:
 - Go `1.27.0+`
 - SQLite with FTS5 support
 
-The module selects Go `1.27.1` as its preferred build toolchain, matching CI and the container build. Go's automatic toolchain selection downloads it when needed; the supported minimum remains `1.27.0`.
+The module selects Go `1.27.2` as its preferred build toolchain, matching CI and the container build. Go's automatic toolchain selection downloads it when needed; the supported minimum remains `1.27.0`.
 
 Build and test:
 
@@ -25,7 +25,7 @@ make check
 ```
 
 `make check` includes the race detector and workflow syntax validation. CI runs
-the race-enabled suite on Linux with Go 1.27.1 and the regular suite on macOS
+the race-enabled suite on Linux with Go 1.27.2 and the regular suite on macOS
 with the minimum Go 1.27.0, with Node.js 26.10.0 available for Desktop decoding tests.
 Both platforms run the same `make smoke` CLI checks. Dependency updates wait at
 least two days after release; Dependabot uses the same cooldown.

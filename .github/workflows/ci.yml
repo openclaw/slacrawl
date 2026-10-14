@@ -47,7 +47,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            go: '1.27.1'
+            go: '1.27.2'
             target: test-race
           - os: macos-latest
             go: '1.27.0'

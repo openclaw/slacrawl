@@ -2,7 +2,7 @@ module github.com/openclaw/slacrawl
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/alecthomas/kong v1.16.1
@@ -13,7 +13,7 @@ require (
 	github.com/slack-go/slack v0.29.0
 	github.com/stretchr/testify v1.12.1
 	github.com/syndtr/goleveldb v1.0.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.42.0
 )
 
