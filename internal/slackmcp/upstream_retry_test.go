@@ -72,3 +72,44 @@ func TestUpstreamHTTPRetryStopsWhenSleepIsCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []string{"", "next"}, *cursors)
 }
+
+func TestUpstreamHTTPRetryStopsWhenWorkRevokedDuringBackoff(t *testing.T) {
+	current := true
+	calls := 0
+	var delays []time.Duration
+	client := &Client{
+		pageSize: 100,
+		maxPages: 5,
+		sleep: func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			current = false
+			return nil
+		},
+		mcp: threadWorkSession(func(context.Context, string, map[string]any) (string, error) {
+			calls++
+			return "", errThrottled
+		}),
+	}
+	page, err := client.channelMessages(context.Background(), toolset{provider: providerCodex, readChannel: "read"}, "TLOCAL", "CONE", "", func() (bool, error) {
+		return current, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, channelPage{revoked: true}, page)
+	require.Equal(t, 1, calls)
+	require.Equal(t, []time.Duration{2 * time.Second}, delays)
+}
+
+func TestUpstreamHTTPRetryRecoversWhenWorkStaysCurrent(t *testing.T) {
+	client, cursors, delays := retryClient(1, errThrottled)
+	checks := 0
+	page, err := client.channelMessages(context.Background(), toolset{provider: providerCodex, readChannel: "read"}, "TLOCAL", "CONE", "", func() (bool, error) {
+		checks++
+		return true, nil
+	})
+	require.NoError(t, err)
+	require.False(t, page.revoked)
+	require.Len(t, page.Messages, 2)
+	require.Greater(t, checks, 0)
+	require.Equal(t, []string{"", "next", "next"}, *cursors)
+	require.Equal(t, []time.Duration{2 * time.Second}, *delays)
+}
