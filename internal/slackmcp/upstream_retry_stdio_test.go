@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,20 +31,27 @@ func TestStdioUpstreamRetryRechecksOwnership(t *testing.T) {
 				mcp:      session,
 				pageSize: 100,
 				maxPages: 2,
-				sleep: func(context.Context, time.Duration) error {
+				sleep: func(_ context.Context, wait time.Duration) error {
 					if mode == "revoke" {
 						current = false
 					}
+					require.NoError(t, appendRetryLog(logPath, "client: backoff "+wait.String()+", work revoked="+strconv.FormatBool(!current)))
 					return nil
 				},
 			}
 			page, err := client.channelMessages(context.Background(), toolset{provider: providerCodex, readChannel: "read"}, "TLOCAL", "CONE", "", func() (bool, error) {
+				require.NoError(t, appendRetryLog(logPath, "client: ownership check current="+strconv.FormatBool(current)))
 				return current, nil
 			})
 			require.NoError(t, session.Close())
 			logged, readErr := os.ReadFile(logPath)
 			require.NoError(t, readErr)
-			lines := strings.FieldsFunc(string(logged), func(r rune) bool { return r == '\n' })
+			var lines []string
+			for _, line := range strings.Split(string(logged), "\n") {
+				if strings.HasPrefix(line, "server: tools/call ") {
+					lines = append(lines, line)
+				}
+			}
 			t.Logf("mode=%s requests=%d\n%s", mode, len(lines), logged)
 			if mode == "revoke" {
 				require.NoError(t, err)
@@ -89,10 +97,13 @@ func TestMCPUpstreamRetryStdioHelper(t *testing.T) {
 		if err != nil {
 			os.Exit(4)
 		}
-		if err := appendRetryLog(logPath, "tools/call "+string(encoded)); err != nil {
+		if err := appendRetryLog(logPath, "server: tools/call "+string(encoded)); err != nil {
 			os.Exit(5)
 		}
 		if calls == 1 {
+			if err := appendRetryLog(logPath, "server: -> error -32603 CLIENT_HTTP_NOT_IMPLEMENTED"); err != nil {
+				os.Exit(5)
+			}
 			if err := encoder.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      request.ID,
@@ -104,6 +115,9 @@ func TestMCPUpstreamRetryStdioHelper(t *testing.T) {
 				os.Exit(6)
 			}
 			continue
+		}
+		if err := appendRetryLog(logPath, "server: -> result 1 message"); err != nil {
+			os.Exit(5)
 		}
 		if err := encoder.Encode(map[string]any{
 			"jsonrpc": "2.0",
