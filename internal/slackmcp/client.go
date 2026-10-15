@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/mcpclient"
@@ -23,6 +24,7 @@ type Client struct {
 	pageSize     int
 	searchLimit  int
 	maxPages     int
+	sleep        func(context.Context, time.Duration) error
 }
 
 type toolset struct {
@@ -350,7 +352,7 @@ func (c *Client) callMessages(ctx context.Context, tool string, args map[string]
 			return "", !ok && err == nil, err
 		}
 	}
-	raw, err := c.mcp.CallToolText(ctx, tool, args)
+	raw, err := c.callToolRetryingUpstreamHTTP(ctx, tool, args)
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return "", false, cancelErr
 	}
@@ -361,6 +363,36 @@ func (c *Client) callMessages(ctx context.Context, tool string, args map[string]
 		}
 	}
 	return raw, false, err
+}
+
+var upstreamHTTPBackoff = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second}
+
+func (c *Client) callToolRetryingUpstreamHTTP(ctx context.Context, tool string, args map[string]any) (string, error) {
+	raw, err := c.mcp.CallToolText(ctx, tool, args)
+	for _, delay := range upstreamHTTPBackoff {
+		if !errors.Is(err, mcpclient.ErrUpstreamHTTP) {
+			break
+		}
+		if sleepErr := c.sleepContext(ctx, delay); sleepErr != nil {
+			return "", sleepErr
+		}
+		raw, err = c.mcp.CallToolText(ctx, tool, args)
+	}
+	return raw, err
+}
+
+func (c *Client) sleepContext(ctx context.Context, delay time.Duration) error {
+	if c.sleep != nil {
+		return c.sleep(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func collectPages[T any](maxPages int, fetch func(string) (page[T], error)) ([]T, error) {
