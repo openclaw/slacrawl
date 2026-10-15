@@ -87,7 +87,18 @@ type rpcEnvelope struct {
 }
 
 type rpcError struct {
-	Code int64 `json:"code"`
+	Code    int64  `json:"code"`
+	Message string `json:"message"`
+}
+
+var ErrUpstreamHTTP = errors.New("MCP upstream HTTP failure")
+
+func (e *rpcError) err(method string) error {
+	message := fmt.Sprintf("MCP %s JSON-RPC error %d", method, e.Code)
+	if e.Code == -32603 && strings.Contains(e.Message, "(CLIENT_HTTP_NOT_IMPLEMENTED)") {
+		return &diagnosticError{message: message, cause: ErrUpstreamHTTP}
+	}
+	return errors.New(message)
 }
 
 type toolsPage struct {
@@ -238,7 +249,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		return fmt.Errorf("decode MCP %s JSON-RPC response: invalid response", method)
 	}
 	if envelope.Error != nil {
-		return fmt.Errorf("MCP %s JSON-RPC error %d", method, envelope.Error.Code)
+		return envelope.Error.err(method)
 	}
 	if envelope.Result == nil {
 		return fmt.Errorf("MCP %s response missing result", method)

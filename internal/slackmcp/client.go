@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/mcpclient"
@@ -23,6 +24,7 @@ type Client struct {
 	pageSize     int
 	searchLimit  int
 	maxPages     int
+	sleep        func(context.Context, time.Duration) error
 }
 
 type toolset struct {
@@ -339,28 +341,60 @@ func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID,
 }
 
 func (c *Client) callMessages(ctx context.Context, tool string, args map[string]any, current func() (bool, error)) (string, bool, error) {
-	// A concurrent archive writer can renew work during any page. Check around
-	// each tools/call before parsing or continuing pagination.
-	if err := ctx.Err(); err != nil {
-		return "", false, err
-	}
-	if current != nil {
-		ok, err := current()
-		if err != nil || !ok {
-			return "", !ok && err == nil, err
+	var raw string
+	var err error
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if attempt-1 >= len(upstreamHTTPBackoff) || !errors.Is(err, mcpclient.ErrUpstreamHTTP) {
+				break
+			}
+			if sleepErr := c.sleepContext(ctx, upstreamHTTPBackoff[attempt-1]); sleepErr != nil {
+				err = sleepErr
+				break
+			}
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", false, ctxErr
+		}
+		if revoked, checkErr := ownershipRevoked(current); revoked || checkErr != nil {
+			return "", revoked, checkErr
+		}
+		raw, err = c.mcp.CallToolText(ctx, tool, args)
 	}
-	raw, err := c.mcp.CallToolText(ctx, tool, args)
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return "", false, cancelErr
 	}
-	if current != nil {
-		ok, checkErr := current()
-		if checkErr != nil || !ok {
-			return "", !ok && checkErr == nil, checkErr
-		}
+	if revoked, checkErr := ownershipRevoked(current); revoked || checkErr != nil {
+		return "", revoked, checkErr
 	}
 	return raw, false, err
+}
+
+func ownershipRevoked(current func() (bool, error)) (bool, error) {
+	if current == nil {
+		return false, nil
+	}
+	ok, err := current()
+	if err != nil {
+		return false, err
+	}
+	return !ok, nil
+}
+
+var upstreamHTTPBackoff = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second}
+
+func (c *Client) sleepContext(ctx context.Context, delay time.Duration) error {
+	if c.sleep != nil {
+		return c.sleep(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func collectPages[T any](maxPages int, fetch func(string) (page[T], error)) ([]T, error) {

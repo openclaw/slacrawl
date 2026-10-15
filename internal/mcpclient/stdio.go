@@ -207,7 +207,7 @@ func (c *StdioClient) call(ctx context.Context, method string, params any, out a
 			return result.err
 		}
 		if result.response.Error != nil {
-			return fmt.Errorf("MCP %s JSON-RPC error %d", method, result.response.Error.Code)
+			return result.response.Error.err(method)
 		}
 		if result.response.Result == nil {
 			return fmt.Errorf("MCP %s response missing result", method)
