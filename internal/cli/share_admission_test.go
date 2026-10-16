@@ -46,7 +46,23 @@ func isolateShareGit(t *testing.T, dir string) {
 	hooks := filepath.Join(dir, "empty-hooks")
 	require.NoError(t, os.MkdirAll(hooks, 0o700))
 	gitConfig := filepath.Join(dir, "gitconfig")
-	require.NoError(t, os.WriteFile(gitConfig, []byte(fmt.Sprintf("[user]\nname = Slacrawl Fixture\nemail = fixture@example.invalid\n[commit]\ngpgSign = false\n[tag]\ngpgSign = false\n[init]\ndefaultBranch = main\n[core]\nhooksPath = %q\n", filepath.ToSlash(hooks))), 0o600))
+	// Background repacking must not race the byte-for-byte rejection snapshots.
+	require.NoError(t, os.WriteFile(gitConfig, []byte(fmt.Sprintf(`[user]
+name = Slacrawl Fixture
+email = fixture@example.invalid
+[commit]
+gpgSign = false
+[tag]
+gpgSign = false
+[init]
+defaultBranch = main
+[core]
+hooksPath = %q
+[maintenance]
+auto = false
+[gc]
+auto = 0
+`, filepath.ToSlash(hooks))), 0o600))
 	for key, value := range map[string]string{
 		"GIT_CONFIG_GLOBAL": gitConfig, "GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_COUNT": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "file",
