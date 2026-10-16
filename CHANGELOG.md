@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve the previous sync configuration when subscribe fails and reject invalid refresh durations before saving; reject publish `--push` with `--no-commit`. Thanks @SebTardif! (#283, #284, #286)
+- Honor users/channels filters after queries, allow `help` in query text and filter values, and cancel SQL stdin reads on interrupt. Thanks @SebTardif! (#280, #281, #285)
+- Keep available thread parents alongside replies on short TUI pages. Thanks @SebTardif! (#282)
+
 ## 0.10.3 - 2026-10-16
 
 **Highlights:** Include the October Go standard-library security fixes and refresh CrawlKit and SQLite for safer archive handling.

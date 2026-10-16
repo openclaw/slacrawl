@@ -221,10 +221,20 @@ slacrawl users --limit 200
 slacrawl sql 'select channel_id, count(*) as messages from messages group by channel_id order by messages desc limit 10;'
 ```
 
+`users` and `channels` accept filters before or after their optional query, for
+example `slacrawl users alice --workspace T01234567`. Missing filter values
+return an error. Search terms and filter values can contain the word `help`;
+use `slacrawl search -- help` to search for that word by itself.
+
+`tui --limit N` keeps up to N visible page messages plus their available thread
+parents, so a reply retains its context even on a short page. Draft and system
+message filters also apply to parents.
+
 `sql` accepts one read-only `SELECT` query, including `WITH` queries, leading
 comments, and SQLite quoted identifiers. Additional statements are rejected.
 Give every result column a unique name with `AS` when needed; duplicate names
 return an error because output rows use column names as keys.
+With no query argument, `sql` reads stdin; Ctrl-C cancels that read and exits 130.
 
 ## Reports and analytics
 

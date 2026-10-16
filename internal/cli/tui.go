@@ -109,10 +109,11 @@ func archiveSourceLocation(cfg config.Config) string {
 }
 
 func slackTUIRows(rows []store.MessageRow, includeDrafts bool, includeSystem bool, limit int) []tui.Row {
-	if limit <= 0 {
-		limit = len(rows)
+	type visibleRow struct {
+		row  store.MessageRow
+		item tui.Row
 	}
-	items := make([]tui.Row, 0, len(rows))
+	visible := make([]visibleRow, 0, len(rows))
 	for _, row := range rows {
 		if !includeDrafts && slackIsDraft(row) {
 			continue
@@ -120,50 +121,81 @@ func slackTUIRows(rows []store.MessageRow, includeDrafts bool, includeSystem boo
 		if !includeSystem && slackIsNoisySystem(row) {
 			continue
 		}
-		title := strings.TrimSpace(row.NormalizedText)
-		if title == "" {
-			title = strings.TrimSpace(row.Text)
+		visible = append(visible, visibleRow{row: row, item: slackMessageTUIRow(row)})
+	}
+	if limit <= 0 || limit > len(visible) {
+		limit = len(visible)
+	}
+	byKey := make(map[string]visibleRow, len(visible))
+	for _, row := range visible {
+		byKey[slackRowKey(row.row)] = row
+	}
+	emitted := make(map[string]struct{}, limit)
+	items := make([]tui.Row, 0, limit)
+	emit := func(row visibleRow) {
+		key := slackRowKey(row.row)
+		if _, ok := emitted[key]; ok {
+			return
 		}
-		if title == "" {
-			title = row.ChannelID + " " + row.TS
+		emitted[key] = struct{}{}
+		items = append(items, row.item)
+	}
+	for _, row := range visible[:limit] {
+		if parentTS := slackParentTS(row.row); parentTS != "" {
+			parentKey := row.row.WorkspaceID + "\x00" + row.row.ChannelID + "\x00" + parentTS
+			if parent, ok := byKey[parentKey]; ok {
+				emit(parent)
+			}
 		}
-		detail := strings.TrimSpace(row.Text)
-		if detail == "" {
-			detail = row.NormalizedText
-		}
-		readableDetail := strings.TrimSpace(row.NormalizedText)
-		if readableDetail == "" {
-			readableDetail = detail
-		}
-		items = append(items, tui.Row{
-			Source:    "slack",
-			Kind:      "message",
-			ID:        strings.TrimSpace(row.ChannelID + "/" + row.TS),
-			ParentID:  slackParentTS(row),
-			Scope:     slackWorkspaceScope(row),
-			Container: coalesce(row.ChannelName, row.ChannelID),
-			Author:    slackAuthorName(row),
-			Title:     title,
-			Text:      detail,
-			Detail:    readableDetail,
-			URL:       slackMessageURL(row),
-			CreatedAt: formatSlackTimestamp(row.TS),
-			Tags:      []string{row.WorkspaceID, row.ChannelID, row.UserID},
-			Fields: map[string]string{
-				"channel_id":   row.ChannelID,
-				"latest_reply": row.LatestReply,
-				"reply_count":  strconv.Itoa(row.ReplyCount),
-				"subtype":      row.Subtype,
-				"thread":       row.ThreadTS,
-				"ts":           row.TS,
-				"user_id":      row.UserID,
-			},
-		})
-		if len(items) >= limit {
-			break
-		}
+		emit(row)
 	}
 	return items
+}
+
+func slackRowKey(row store.MessageRow) string {
+	return row.WorkspaceID + "\x00" + row.ChannelID + "\x00" + strings.TrimSpace(row.TS)
+}
+
+func slackMessageTUIRow(row store.MessageRow) tui.Row {
+	title := strings.TrimSpace(row.NormalizedText)
+	if title == "" {
+		title = strings.TrimSpace(row.Text)
+	}
+	if title == "" {
+		title = row.ChannelID + " " + row.TS
+	}
+	detail := strings.TrimSpace(row.Text)
+	if detail == "" {
+		detail = row.NormalizedText
+	}
+	readableDetail := strings.TrimSpace(row.NormalizedText)
+	if readableDetail == "" {
+		readableDetail = detail
+	}
+	return tui.Row{
+		Source:    "slack",
+		Kind:      "message",
+		ID:        strings.TrimSpace(row.ChannelID + "/" + row.TS),
+		ParentID:  slackParentTS(row),
+		Scope:     slackWorkspaceScope(row),
+		Container: coalesce(row.ChannelName, row.ChannelID),
+		Author:    slackAuthorName(row),
+		Title:     title,
+		Text:      detail,
+		Detail:    readableDetail,
+		URL:       slackMessageURL(row),
+		CreatedAt: formatSlackTimestamp(row.TS),
+		Tags:      []string{row.WorkspaceID, row.ChannelID, row.UserID},
+		Fields: map[string]string{
+			"channel_id":   row.ChannelID,
+			"latest_reply": row.LatestReply,
+			"reply_count":  strconv.Itoa(row.ReplyCount),
+			"subtype":      row.Subtype,
+			"thread":       row.ThreadTS,
+			"ts":           row.TS,
+			"user_id":      row.UserID,
+		},
+	}
 }
 
 func slackIsDraft(row store.MessageRow) bool {

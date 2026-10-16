@@ -156,7 +156,7 @@ func (a *App) runSQL(ctx context.Context, configPath string, args []string, form
 	}
 	query := strings.TrimSpace(strings.Join(parsed.Query, " "))
 	if query == "" {
-		data, err := io.ReadAll(os.Stdin)
+		data, err := readAllContext(ctx, os.Stdin)
 		if err != nil {
 			return err
 		}
@@ -204,7 +204,14 @@ func (a *App) runUsers(ctx context.Context, configPath string, args []string, fo
 	fs := flag.NewFlagSet("users", flag.ContinueOnError)
 	workspaceID := fs.String("workspace", "", "workspace id")
 	limit := fs.Int("limit", 100, "row limit")
-	if err := a.parseCommandFlags(fs, args); err != nil {
+	ordered, err := reorderFlagsBeforePositionals(args, map[string]bool{
+		"workspace": true,
+		"limit":     true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := a.parseCommandFlags(fs, ordered); err != nil {
 		return err
 	}
 	if configErr != nil {
@@ -238,7 +245,15 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 	workspaceID := fs.String("workspace", "", "workspace id")
 	kind := fs.String("kind", "", "channel kind")
 	limit := fs.Int("limit", 100, "row limit")
-	if err := a.parseCommandFlags(fs, args); err != nil {
+	ordered, err := reorderFlagsBeforePositionals(args, map[string]bool{
+		"workspace": true,
+		"kind":      true,
+		"limit":     true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := a.parseCommandFlags(fs, ordered); err != nil {
 		return err
 	}
 	if configErr != nil {
@@ -265,6 +280,30 @@ func (a *App) runChannels(ctx context.Context, configPath string, args []string,
 		return err
 	}
 	return a.writeOutput("Channels", results, format, false)
+}
+
+func readAllContext(ctx context.Context, r io.Reader) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		done <- result{data: data, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-done:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.data, nil
+	}
 }
 
 func printSearchUsage(w io.Writer) {

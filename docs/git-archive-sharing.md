@@ -128,13 +128,13 @@ Relevant flags:
 - `--branch` chooses the target branch
 - `--message` sets the commit message
 - `--tag` creates an immutable lightweight tag and requires a commit
-- `--no-commit` exports without creating a commit
+- `--no-commit` exports without creating a commit; it cannot be combined with `--push` or `--tag`
 - `--push` pushes the commit and optional tag to `origin`
 - `--no-media` omits cached media from the snapshot
 
 ## Subscribe on another machine
 
-`subscribe` writes a reader config, disables live Slack API and desktop sources for that config, clones the share repository, and imports the snapshot:
+`subscribe` clones the share repository and imports the snapshot, then saves a reader config with live Slack API and desktop sources disabled. A failed clone or import leaves the previous config unchanged. With `--no-import`, it saves the reader config without cloning or importing:
 
 ```sh
 slacrawl subscribe --repo ~/.slacrawl/share --db ~/.slacrawl/slacrawl.db git@github.com:your-org/private-slacrawl-archive.git
@@ -152,7 +152,7 @@ Relevant flags:
 - `--db` chooses the reader's SQLite file
 - `--branch` chooses the tracked branch
 - `--remote` stores the remote without requiring a positional argument
-- `--stale-after` controls when read-time refresh considers the snapshot stale
+- `--stale-after` controls when read-time refresh considers the snapshot stale; use a Go duration such as `15m`, `2h`, or `2160h` for 90 days (`90d` is not supported)
 - `--no-auto-update` disables read-time refresh
 - `--no-import` skips the initial import
 - `--no-media` skips restoring cached media

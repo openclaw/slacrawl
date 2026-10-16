@@ -198,6 +198,7 @@ func TestPublishDMPolicyPreservesArgumentAndHelpPrecedence(t *testing.T) {
 		{"unknown-flag", []string{"--unknown"}, "flag provided but not defined"},
 		{"argument", []string{"extra"}, "publish takes no positional arguments"},
 		{"no-commit-tag", []string{"--no-commit", "--tag", "snapshot"}, "publish --tag requires a commit"},
+		{"no-commit-push", []string{"--no-commit", "--push"}, "publish --push requires a commit"},
 		{"missing-config", nil, "no such file"},
 		{"malformed-config", nil, "toml"},
 		{"help", []string{"--help"}, ""},

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
@@ -36,6 +38,9 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	}
 	if *noCommit && strings.TrimSpace(*tag) != "" {
 		return errors.New("publish --tag requires a commit")
+	}
+	if *noCommit && *push {
+		return errors.New("publish --push requires a commit")
 	}
 	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
 	if err := share.ValidateExportPolicy(policy); err != nil {
@@ -120,6 +125,9 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	if strings.TrimSpace(*remote) == "" {
 		return errors.New("subscribe requires a remote")
 	}
+	if err := rejectUnparseableStaleAfter(*staleAfter); err != nil {
+		return err
+	}
 	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
 	if !*noImport {
 		if err := share.ValidateImportPolicy(policy); err != nil {
@@ -140,10 +148,10 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	cfg.Slack.User.Enabled = false
 	cfg.Slack.Desktop.Enabled = false
 	cfg.Slack.Desktop.Path = ""
-	if err := cfg.Save(configPath); err != nil {
-		return err
-	}
 	if *noImport {
+		if err := cfg.Save(configPath); err != nil {
+			return err
+		}
 		return a.writeOutput("Subscribe", map[string]any{
 			"config_path": configPath,
 			"repo_path":   cfg.Share.RepoPath,
@@ -151,11 +159,6 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 		}, format, true)
 	}
 
-	st, err := a.openStore(cfg)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
 	opts, err := shareOptions(cfg.Share.RepoPath, cfg.Share.Remote, cfg.Share.Branch, cfg.CacheDir, !*noMedia)
 	if err != nil {
 		return err
@@ -164,8 +167,16 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	if err := share.Pull(ctx, opts); err != nil {
 		return err
 	}
+	st, err := a.openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
 	manifest, imported, err := share.ImportIfChanged(ctx, st, opts)
 	if err != nil {
+		return err
+	}
+	if err := cfg.Save(configPath); err != nil {
 		return err
 	}
 	return a.writeOutput("Subscribe", map[string]any{
@@ -177,6 +188,17 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 		"media":        manifest.Media,
 		"imported":     imported,
 	}, format, true)
+}
+
+func rejectUnparseableStaleAfter(value string) error {
+	if _, err := time.ParseDuration(value); err != nil {
+		hint := "15m or 2h"
+		if strings.Contains(err.Error(), `unit "d"`) {
+			hint = "2160h for 90 days"
+		}
+		return fmt.Errorf("invalid --stale-after %q: use a duration such as %s: %w", value, hint, err)
+	}
+	return nil
 }
 
 func (a *App) runUpdate(ctx context.Context, configPath string, args []string, format OutputFormat) error {
