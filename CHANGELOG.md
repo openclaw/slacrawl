@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Update CrawlKit to 0.17.0 and SQLite to 1.60.1 with its matching libc 1.77.1 runtime for safer WAL error handling and faster large statement binding; refresh ANSI rendering, networking, timestamp formatting, and analysis tools while retaining the Go 1.27.0 minimum.
+- Expose a non-publishing dry run of the unified release workflow for build, signing, and package verification.
+
 - Build with Go 1.27.2 to include the October standard-library security fixes; retain the Go 1.27.0 source minimum and macOS compatibility checks.
 
 - Update CrawlKit to 0.16.7 and the pinned Release Drafter actions to 7.9.0, retaining the Go 1.27.0 minimum. Thanks @vincentkoc and @dependabot! (#261, #264, #265, #266)

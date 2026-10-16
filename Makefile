@@ -46,7 +46,7 @@ vet:
 	GOWORK=off go vet ./...
 
 vulncheck:
-	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 workflow-lint:
 	GOWORK=off go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
@@ -55,7 +55,7 @@ deadcode:
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' EXIT; \
-	if ! GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$$output_file"; then cat "$$output_file"; exit 1; fi; \
+	if ! GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... > "$$output_file"; then cat "$$output_file"; exit 1; fi; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
 
 tidy-check:

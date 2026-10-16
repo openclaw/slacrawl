@@ -75,6 +75,14 @@ succeed before the release workflow completes.
 gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
 ```
 
+Validate the current version without creating tags, releases, or Homebrew updates:
+
+```bash
+gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z -f dry_run=true
+```
+
+The dry run uses the same build, signing, and independent verification pipeline.
+
 `make release` and `scripts/release.sh` fail closed and point to that workflow.
 Local commands never create release tags, sign, notarize, or publish. Use
 `make snapshot` for credential-free packaging; `make release-snapshot` remains
