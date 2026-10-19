@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run macOS CI on the Apple Silicon macOS 27 image while retaining the macOS 13 deployment target.
+
 - Preserve the previous sync configuration when subscribe fails and reject invalid refresh durations before saving; reject publish `--push` with `--no-commit`. Thanks @SebTardif! (#283, #284, #286)
 - Honor users/channels filters after queries, allow `help` in query text and filter values, and cancel SQL stdin reads on interrupt. Thanks @SebTardif! (#280, #281, #285)
 - Keep available thread parents alongside replies on short TUI pages. Thanks @SebTardif! (#282)
