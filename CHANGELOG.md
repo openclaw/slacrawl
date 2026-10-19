@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Dispatch ClawSweeper events with GitHub Actions OIDC instead of repository-held App credentials, retaining the independent App webhook route.
 - Run macOS CI on the Apple Silicon macOS 27 image while retaining the macOS 13 deployment target.
 
 - Preserve the previous sync configuration when subscribe fails and reject invalid refresh durations before saving; reject publish `--push` with `--no-commit`. Thanks @SebTardif! (#283, #284, #286)
