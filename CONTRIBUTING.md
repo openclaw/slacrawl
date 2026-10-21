@@ -64,7 +64,7 @@ make snapshot
 
 Official releases run through the manual **Release (unified)** GitHub Actions
 workflow, a thin caller of `openclaw/release-workflows`' reusable Go CLI
-pipeline. The shared workflow owns the annotated version tag, builds the
+pipeline. The shared workflow requires a fleet-signed annotated version tag, builds the
 GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
 OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only independently verified
 bytes, updates the `slacrawl` formula in `openclaw/homebrew-tap`, verifies the
@@ -72,20 +72,26 @@ formula's archive checksums, and opens the next `Unreleased` changelog PR.
 Homebrew handoff uses the repository's `HOMEBREW_TAP_TOKEN` secret and must
 succeed before the release workflow completes.
 
-```bash
-gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
-```
-
-Validate the current version without creating tags, releases, or Homebrew updates:
+Validate the release-preparation commit without creating tags, releases, or Homebrew updates:
 
 ```bash
 gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z -f dry_run=true
 ```
 
 The dry run uses the same build, signing, and independent verification pipeline.
+After it passes, create the annotated `vX.Y.Z` tag at that exact commit with the
+fleet release SSH key (never a personal default key), verify it against
+`.github/release-allowed-signers`, and push it. The workflow rejects unsigned or
+unapproved tags and reuses the verified tag without moving it.
+
+```bash
+git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag vX.Y.Z
+git push origin refs/tags/vX.Y.Z
+gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
+```
 
 `make release` and `scripts/release.sh` fail closed and point to that workflow.
-Local commands never create release tags, sign, notarize, or publish. Use
+Local commands never sign or notarize binaries or publish release artifacts. Use
 `make snapshot` for credential-free packaging; `make release-snapshot` remains
 a compatibility alias.
 

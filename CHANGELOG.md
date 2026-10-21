@@ -2,14 +2,18 @@
 
 ## Unreleased
 
+## 0.10.4 - 2026-10-20
+
+**Highlights:** Preserve sync settings on failed subscriptions, correct query filters and TUI thread context, and fix the Go crypto/x509 security vulnerability.
+
 - Build and test with Go 1.27.3 to fix GO-2026-6809 in `crypto/x509`, retaining the Go 1.27.0 source minimum.
-
-- Dispatch ClawSweeper events with GitHub Actions OIDC instead of repository-held App credentials, retaining the independent App webhook route.
-- Run macOS CI on the Apple Silicon macOS 27 image while retaining the macOS 13 deployment target.
-
 - Preserve the previous sync configuration when subscribe fails and reject invalid refresh durations before saving; reject publish `--push` with `--no-commit`. Thanks @SebTardif! (#283, #284, #286)
 - Honor users/channels filters after queries, allow `help` in query text and filter values, and cancel SQL stdin reads on interrupt. Thanks @SebTardif! (#280, #281, #285)
 - Keep available thread parents alongside replies on short TUI pages. Thanks @SebTardif! (#282)
+- Dispatch ClawSweeper events with GitHub Actions OIDC instead of repository-held App credentials, retaining the independent App webhook route.
+- Run macOS CI on the Apple Silicon macOS 27 image while retaining the macOS 13 deployment target.
+
+- Require release tags signed by the fleet release key before the unified pipeline can publish artifacts.
 
 ## 0.10.3 - 2026-10-16
 

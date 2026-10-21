@@ -27,6 +27,7 @@ jobs:
       version: ${{ inputs.version }}
       dry-run: ${{ inputs.dry_run }}
       repository-type: openclaw
+      require-signed-tag: true
       homebrew-formula: slacrawl
       nfpm: auto
     secrets:
