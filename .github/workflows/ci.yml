@@ -47,10 +47,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            go: '1.27.2'
+            go: '1.27.3'
             target: test-race
           - os: xcode-27
-            go: '1.27.0'
+            go: '1.27.3'
             target: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20

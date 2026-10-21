@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build and test with Go 1.27.3 to fix GO-2026-6809 in `crypto/x509`, retaining the Go 1.27.0 source minimum.
+
 - Dispatch ClawSweeper events with GitHub Actions OIDC instead of repository-held App credentials, retaining the independent App webhook route.
 - Run macOS CI on the Apple Silicon macOS 27 image while retaining the macOS 13 deployment target.
 
