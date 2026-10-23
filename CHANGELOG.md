@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Update CI and Crabbox to Node 26.12.1 and upgrade Alpine certificate packages to reject compromised eMudhra keys in the selected runtimes and container trust stores. Thanks @joshavant! (#297)
+- Update CrawlKit to 0.17.2 and its Go analysis dependencies while retaining the Go 1.27.0 minimum and the matched SQLite/libc runtime versions.
 
 ## 0.10.4 - 2026-10-20
 

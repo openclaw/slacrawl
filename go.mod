@@ -9,7 +9,7 @@ require (
 	github.com/golang/snappy v1.0.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-runewidth v0.0.31
-	github.com/openclaw/crawlkit v0.17.0
+	github.com/openclaw/crawlkit v0.17.2
 	github.com/slack-go/slack v0.30.1
 	github.com/stretchr/testify v1.12.1
 	github.com/syndtr/goleveldb v1.0.0
