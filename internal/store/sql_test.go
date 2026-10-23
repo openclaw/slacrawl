@@ -88,6 +88,24 @@ func TestQueryReadOnlyRejectsDuplicateResultColumns(t *testing.T) {
 	require.Equal(t, []map[string]any{{"value": int64(1), "Value": int64(2)}}, rows)
 }
 
+func TestQueryReadOnlyJSONValues(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	for _, tc := range []struct{ query, want string }{
+		{`select json_object('channel', 'C1', 'messages', json_array('hello', 'world')) as payload`, `{"channel":"C1","messages":["hello","world"]}`},
+		{`select json_group_object('channel', 'C1') as payload`, `{"channel":"C1"}`},
+		{`select json_group_array(json_object('channel', 'C1')) as payload`, `[{"channel":"C1"}]`},
+	} {
+		rows, err := s.QueryReadOnly(context.Background(), tc.query)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		payload, ok := rows[0]["payload"].(string)
+		require.True(t, ok, "JSON query result must remain text, got %T", rows[0]["payload"])
+		require.JSONEq(t, tc.want, payload)
+	}
+}
+
 func FuzzQueryReadOnlyQuotedAliases(f *testing.F) {
 	for _, label := range []string{"", "plain", "semi;colon", "tick`inside", "-- /* '\"", "\r'--[", "名字;項目"} {
 		f.Add(label)

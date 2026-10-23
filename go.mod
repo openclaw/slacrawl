@@ -9,7 +9,7 @@ require (
 	github.com/golang/snappy v1.0.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-runewidth v0.0.31
-	github.com/openclaw/crawlkit v0.17.2
+	github.com/openclaw/crawlkit v0.17.3
 	github.com/slack-go/slack v0.30.1
 	github.com/stretchr/testify v1.12.1
 	github.com/syndtr/goleveldb v1.0.0
@@ -44,8 +44,8 @@ require (
 	github.com/xo/terminfo v1.2.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.61.0 // indirect
-	modernc.org/libc v1.77.1 // indirect
+	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
+	modernc.org/sqlite v1.61.0 // indirect
 )
