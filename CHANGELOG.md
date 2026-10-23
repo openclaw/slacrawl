@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CI and Crabbox to Node 26.12.1 and upgrade Alpine certificate packages to reject compromised eMudhra keys in the selected runtimes and container trust stores. Thanks @joshavant! (#297)
+
 ## 0.10.4 - 2026-10-20
 
 **Highlights:** Preserve sync settings on failed subscriptions, correct query filters and TUI thread context, and fix the Go crypto/x509 security vulnerability.
