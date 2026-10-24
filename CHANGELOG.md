@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.10.5 - 2026-10-23
+
+**Highlights:** Honor SQLite lock deadlines, upgrade SQLite to 3.54.1, and reject compromised eMudhra keys in CI and container trust stores.
+
 - Update CrawlKit to 0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and its matching libc runtime.
 - Update CI and Crabbox to Node 26.12.1 and upgrade Alpine certificate packages to reject compromised eMudhra keys in the selected runtimes and container trust stores. Thanks @joshavant! (#297)
 - Update CrawlKit to 0.17.2 and its Go analysis dependencies while retaining the Go 1.27.0 minimum and the matched SQLite/libc runtime versions.
