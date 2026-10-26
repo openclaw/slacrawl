@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the paired CodeQL actions to 4.39.1 and the analysis bundle to 2.27.3. Thanks @dependabot.
+
 ## 0.10.5 - 2026-10-23
 
 **Highlights:** Honor SQLite lock deadlines, upgrade SQLite to 3.54.1, and reject compromised eMudhra keys in CI and container trust stores.
