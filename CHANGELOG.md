@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Update the paired CodeQL actions to 4.39.1 and the analysis bundle to 2.27.3. Thanks @dependabot.
+- Pin the TruffleHog scanner image and action to 3.99.7 to retain patched trust roots. Thanks @joshavant!
 
 ## 0.10.5 - 2026-10-23
 
