@@ -64,7 +64,8 @@ make snapshot
 
 Official releases run through the manual **Release (unified)** GitHub Actions
 workflow, a thin caller of `openclaw/release-workflows`' reusable Go CLI
-pipeline. The shared workflow requires a fleet-signed annotated version tag, builds the
+pipeline. The shared workflow requires an SSH-signed annotated version tag approved
+by `.github/release-allowed-signers`. It builds the
 GoReleaser matrix and Linux packages, signs and notarizes the macOS binaries as
 OpenClaw Foundation Team ID `FWJYW4S8P8`, publishes only independently verified
 bytes, updates the `slacrawl` formula in `openclaw/homebrew-tap`, verifies the
@@ -79,9 +80,10 @@ gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z -f
 ```
 
 The dry run uses the same build, signing, and independent verification pipeline.
-After it passes, create the annotated `vX.Y.Z` tag at that exact commit with the
-fleet release SSH key (never a personal default key), verify it against
-`.github/release-allowed-signers`, and push it. The workflow rejects unsigned or
+After it passes, select an SSH signing key listed in
+`.github/release-allowed-signers` at that exact commit. Do not rely on Git's default
+signing key. Create the SSH-signed annotated `vX.Y.Z` tag at that commit. Verify it
+against the allowlist before pushing it. The workflow rejects unsigned or
 unapproved tags and reuses the verified tag without moving it.
 
 ```bash
