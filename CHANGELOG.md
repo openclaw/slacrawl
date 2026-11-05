@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Refresh Kong, SQLite, networking and YAML dependencies, and use Node.js 26.13.0 for Desktop decoding tests.
 - Document explicit SSH key selection from the release allowlist before creating release tags.
 - Update the paired CodeQL actions to 4.39.1 and the analysis bundle to 2.27.3. Thanks @dependabot.
 - Pin the TruffleHog scanner image and action to 3.99.7 to retain patched trust roots. Thanks @joshavant!
