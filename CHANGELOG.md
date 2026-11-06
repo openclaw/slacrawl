@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.10.6 - 2026-11-06
+
+**Highlights:** Preserve literal SQLite paths and refresh archive dependencies.
+
+- Update CrawlKit to v0.17.4 to preserve literal SQLite paths when opening archives, taking snapshots, and checking freshness; reject ambiguous Windows paths.
 
 - Refresh Kong, SQLite, networking and YAML dependencies, and use Node.js 26.13.0 for Desktop decoding tests.
 - Document explicit SSH key selection from the release allowlist before creating release tags.
