@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.10.6 - 2026-11-06
 
 **Highlights:** Preserve literal SQLite paths and refresh archive dependencies.
