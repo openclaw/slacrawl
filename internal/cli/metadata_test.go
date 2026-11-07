@@ -33,7 +33,6 @@ func TestMetadataFormatFlag(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			var stdout, stderr bytes.Buffer
 			app := New()
 			app.Stdout = &stdout
