@@ -244,17 +244,22 @@ func (a *App) runMetadata(configPath string, args []string, format OutputFormat)
 	fs := flag.NewFlagSet("metadata", flag.ContinueOnError)
 	fs.SetOutput(a.Stderr)
 	jsonOut := fs.Bool("json", false, "write crawlkit metadata JSON")
+	formatFlag := fs.String("format", "", "output format: text, json, or log")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if *jsonOut {
-		format = FormatJSON
-	}
 	if fs.NArg() != 0 {
 		return errors.New("metadata takes flags only")
+	}
+	if *jsonOut || flagWasSet(fs, "format") {
+		parsed, err := resolveOutputFormat(*formatFlag, *jsonOut)
+		if err != nil {
+			return err
+		}
+		format = parsed
 	}
 	return a.writeOutput("Metadata", controlManifest(configPath), format, false)
 }

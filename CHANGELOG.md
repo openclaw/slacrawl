@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accept `metadata --format=json` and `metadata --format json`. The command already accepted `--json` and `--help`.
+
 ## 0.10.6 - 2026-11-06
 
 **Highlights:** Preserve literal SQLite paths and refresh archive dependencies.
