@@ -1,0 +1,558 @@
+{
+  "changed": {
+    "/auth.test": {
+      "ok": true,
+      "team": "SDK fixture",
+      "team_id": "TSDKFIXTURE",
+      "url": "https://fixture.example.test/",
+      "user": "fixture",
+      "user_id": "UROOT"
+    },
+    "/conversations.history": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "edited": {
+            "ts": "1710000003.000400",
+            "user": "UROOT"
+          },
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "gamma <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.list": {
+      "channels": [
+        {
+          "id": "CSDKFIXTURE",
+          "is_channel": true,
+          "is_member": true,
+          "is_private": false,
+          "name": "sdk-fixture",
+          "purpose": {
+            "value": "archive compatibility"
+          },
+          "topic": {
+            "value": "synthetic"
+          }
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.replies": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "edited": {
+            "ts": "1710000003.000400",
+            "user": "UROOT"
+          },
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "gamma <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        },
+        {
+          "parent_user_id": "UROOT",
+          "text": "replymarker",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000001.000200",
+          "type": "message",
+          "user": "UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/users.list": {
+      "members": [
+        {
+          "id": "UROOT",
+          "name": "uroot",
+          "profile": {
+            "display_name": "uroot",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UROOT"
+        },
+        {
+          "id": "UMENTION",
+          "name": "umention",
+          "profile": {
+            "display_name": "umention",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UMENTION"
+        },
+        {
+          "id": "UREPLY",
+          "name": "ureply",
+          "profile": {
+            "display_name": "ureply",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    }
+  },
+  "old-a": {
+    "/auth.test": {
+      "ok": true,
+      "team": "SDK fixture",
+      "team_id": "TSDKFIXTURE",
+      "url": "https://fixture.example.test/",
+      "user": "fixture",
+      "user_id": "UROOT"
+    },
+    "/conversations.history": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "alpha <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.list": {
+      "channels": [
+        {
+          "id": "CSDKFIXTURE",
+          "is_channel": true,
+          "is_member": true,
+          "is_private": false,
+          "name": "sdk-fixture",
+          "purpose": {
+            "value": "archive compatibility"
+          },
+          "topic": {
+            "value": "synthetic"
+          }
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.replies": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "alpha <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        },
+        {
+          "parent_user_id": "UROOT",
+          "text": "replymarker",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000001.000200",
+          "type": "message",
+          "user": "UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/users.list": {
+      "members": [
+        {
+          "id": "UROOT",
+          "name": "uroot",
+          "profile": {
+            "display_name": "uroot",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UROOT"
+        },
+        {
+          "id": "UMENTION",
+          "name": "umention",
+          "profile": {
+            "display_name": "umention",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UMENTION"
+        },
+        {
+          "id": "UREPLY",
+          "name": "ureply",
+          "profile": {
+            "display_name": "ureply",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    }
+  },
+  "old-b": {
+    "/auth.test": {
+      "ok": true,
+      "team": "SDK fixture",
+      "team_id": "TSDKFIXTURE",
+      "url": "https://fixture.example.test/",
+      "user": "fixture",
+      "user_id": "UROOT"
+    },
+    "/conversations.history": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "edited": {
+            "ts": "1710000002.000300",
+            "user": "UROOT"
+          },
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "beta <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.list": {
+      "channels": [
+        {
+          "id": "CSDKFIXTURE",
+          "is_channel": true,
+          "is_member": true,
+          "is_private": false,
+          "name": "sdk-fixture",
+          "purpose": {
+            "value": "archive compatibility"
+          },
+          "topic": {
+            "value": "synthetic"
+          }
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/conversations.replies": {
+      "has_more": false,
+      "messages": [
+        {
+          "blocks": [
+            {
+              "block_id": "fixture-section",
+              "text": {
+                "text": "blockmarker",
+                "type": "mrkdwn"
+              },
+              "type": "section"
+            },
+            {
+              "block_id": "fixture-context",
+              "elements": [
+                {
+                  "text": "contextmarker",
+                  "type": "mrkdwn"
+                }
+              ],
+              "type": "context"
+            }
+          ],
+          "display_as_bot": false,
+          "edited": {
+            "ts": "1710000002.000300",
+            "user": "UROOT"
+          },
+          "files": [
+            {
+              "filetype": "text",
+              "id": "FTEST01",
+              "mimetype": "text/plain",
+              "mode": "hosted",
+              "name": "filemarker.txt",
+              "plain_text": "filemarker",
+              "size": 10,
+              "title": "filemarker",
+              "url_private": "https://files.example.test/filemarker.txt",
+              "user": "UROOT"
+            }
+          ],
+          "latest_reply": "1710000001.000200",
+          "reply_count": 1,
+          "text": "beta <@UMENTION>",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000000.000100",
+          "type": "message",
+          "user": "UROOT"
+        },
+        {
+          "parent_user_id": "UROOT",
+          "text": "replymarker",
+          "thread_ts": "1710000000.000100",
+          "ts": "1710000001.000200",
+          "type": "message",
+          "user": "UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "/users.list": {
+      "members": [
+        {
+          "id": "UROOT",
+          "name": "uroot",
+          "profile": {
+            "display_name": "uroot",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UROOT"
+        },
+        {
+          "id": "UMENTION",
+          "name": "umention",
+          "profile": {
+            "display_name": "umention",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UMENTION"
+        },
+        {
+          "id": "UREPLY",
+          "name": "ureply",
+          "profile": {
+            "display_name": "ureply",
+            "title": "Fixture"
+          },
+          "real_name": "Synthetic UREPLY"
+        }
+      ],
+      "ok": true,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    }
+  }
+}
