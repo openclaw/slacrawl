@@ -1,0 +1,62 @@
+version = 1
+workspace_id = 'TSDKFIXTURE'
+workspaces = []
+providers = []
+db_path = '/synthetic/slacrawl/archive.db'
+cache_dir = '/synthetic/slacrawl/cache'
+log_dir = '/synthetic/slacrawl/logs'
+
+[slack]
+[slack.bot]
+enabled = false
+token_env = 'SLACK_BOT_TOKEN'
+
+[slack.app]
+enabled = false
+token_env = 'SLACK_APP_TOKEN'
+
+[slack.user]
+enabled = true
+token_env = 'SLACRAWL_SDK_FIXTURE_USER'
+
+[slack.desktop]
+enabled = false
+path = '/synthetic/slack'
+
+[slack.mcp]
+enabled = false
+transport = 'http'
+base_url = 'https://api.example.test/mcp'
+command = ''
+args = []
+env_allowlist = []
+auth_path = '/synthetic/slacrawl/mcp-auth.json'
+token_env = 'CODEX_APPS_ACCESS_TOKEN'
+account_id_env = 'CODEX_APPS_ACCOUNT_ID'
+connector_id = ''
+channel_types = 'public_channel,private_channel'
+page_size = 100
+search_limit = 20
+max_pages = 250
+protocol_version = '2025-03-26'
+
+[sync]
+concurrency = 1
+repair_every = '30m'
+desktop_refresh_every = '5m'
+full_history = true
+include_dms = false
+auto_join = false
+exclude_channels = []
+file_media = false
+max_file_bytes = 104857600
+
+[search]
+default_mode = 'auto'
+
+[share]
+remote = 'https://example.test/archive.git'
+repo_path = '/synthetic/slacrawl/share'
+branch = 'main'
+auto_update = false
+stale_after = '15m'

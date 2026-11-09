@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update the Slack SDK to 0.35.0 with an offline upgrade regression that preserves existing archive rows, raw history, search results and configuration; an explicitly false `display_as_bot` field can add one serialization-only history event on the first sync. Thanks @dependabot.
 - Run TruffleHog 3.99.8 for secret scanning, matching the pinned action version. Thanks @dependabot.
 
 ## 0.10.6 - 2026-11-06
