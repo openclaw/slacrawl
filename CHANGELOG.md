@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run TruffleHog 3.99.8 for secret scanning, matching the pinned action version. Thanks @dependabot.
+
 ## 0.10.6 - 2026-11-06
 
 **Highlights:** Preserve literal SQLite paths and refresh archive dependencies.
