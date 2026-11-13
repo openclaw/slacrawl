@@ -1,5 +1,5 @@
-// Package remotedelivery owns Slacrawl's explicit service projection. It does not
-// acquire source data, authorize bindings, persist an outbox or perform HTTP.
+// Package remotedelivery owns Slacrawl's private projection, durable outbox and
+// explicit delivery driver. Callers qualify bindings and own source acquisition.
 package remotedelivery
 
 import (

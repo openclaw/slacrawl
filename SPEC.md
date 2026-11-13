@@ -327,8 +327,46 @@ After a process exit, staged bytes and intermediate receipts resume unchanged,
 even if the source has since changed. A failed final checkpoint write also rolls
 back its receipt. Completed captures, bodies and receipts remain retained;
 pruning, retention activation and reconciliation/reset APIs are separate work.
-No HTTP, dispatcher, CLI/config integration, scheduler or live registration is
-activated by this local API.
+The local outbox API does not activate a scheduler or live registration.
+
+### Explicit pending delivery
+
+`Outbox.DeliverPending` connects an already registered outbox to the unchanged
+Crawlkit client. It constructs that client from the registration's origin and
+uses its app/archive; callers supply only trusted in-memory HTTP and token
+adapters. There is no caller-selected endpoint and no stored credential. Crawlkit
+continues to own authenticated transport and redirect policy, including HTTPS
+and the loopback HTTP exception. This library operation is not wired into a CLI,
+configuration default, collector, scheduler or listener.
+
+Each invocation requires `MaxParts` from 1 to 64 and a positive `MaxDuration`.
+The duration creates a child context and preserves an earlier parent deadline.
+Caller-owned HTTP transports and token providers must honor that context; the
+driver creates no background work. It pins the capture pending at entry, reads
+its exact persisted bytes through `NextPart`, sends each selected part once, and
+durably accepts its matching receipt through `RecordReceipt` before proceeding.
+It neither captures nor stages native data, and holds no SQLite transaction over
+HTTP. A concurrently staged successor is left for a later invocation.
+
+`DeliveryResult.Status` distinguishes `idle` (no capture pending at entry),
+`complete` (the pinned capture completed), `part_limit` (the part budget ended
+with that capture still pending), and `pending` on a failure after identifying
+the capture. Errors before identification can return an empty result. The result
+counts successful receipt-recording calls, including an exact receipt already
+recorded by another dispatcher; it does not count unique network effects. The
+completed status is about that pinned capture, not a claim that the outbox is
+still empty or the native archive is current.
+
+Network, response-validation and local receipt failures stop the invocation
+immediately. There are no implicit retries or replacement captures. A lost reply
+or uncertain local commit is reconciled from the retained outbox; a later explicit
+call resumes the same persisted part. Failed calls can therefore undercount
+effects whose acknowledgment was lost. Printable errors expose only a fixed
+operation classification and, when applicable, `context.Canceled` or
+`context.DeadlineExceeded` identity. Driver errors do not wrap private remote or
+SQLite diagnostics, URLs or tokens. Initial native bootstrap, qualified baseline
+registration, credential-selection CLI policy and scheduled activation remain
+separate work.
 
 ## Search Design
 

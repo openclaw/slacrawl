@@ -55,7 +55,7 @@ type PendingPart struct {
 
 // Outbox owns a separate private SQLite file. Its owner must keep the pathname
 // bound to that file while open, as with native capture. There is no rebinding,
-// pruning, source writing, credential storage or HTTP operation here.
+// pruning, source writing or credential storage.
 type Outbox struct{ base *crawlstore.Store }
 
 // InitOutbox exclusively creates a new file; a failed initialization retains it

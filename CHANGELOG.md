@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an explicit bounded pending-delivery driver that sends registered outbox
+  bytes through Crawlkit and records receipts before continuing, with safe
+  lost-reply recovery and no automatic capture, CLI or scheduler activation.
+
 - Add a private SQLite delivery outbox that stages complete captures as exact bounded parts, resumes them after process exits and advances completed cursors only with matching receipts. No dispatcher, live registration or retention activation is included.
 
 - Add a pure private archive projection for six native content tables, preserving typed values and opaque raw evidence while excluding acquisition checkpoints and local file-cache fields. No delivery worker or network activation is included.
