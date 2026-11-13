@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a pure private archive projection for six native content tables, preserving typed values and opaque raw evidence while excluding acquisition checkpoints and local file-cache fields. No delivery worker or network activation is included.
+
 - Add bounded read-only native capture for explicitly registered Slack archive scopes, preserving typed local rows and removal observations while rejecting changed baselines, admission or limits. No delivery worker, live upgrade or network activation is included.
 
 - Record transactional native change keys and removals in SQLite schema 9, expose journal generation/sequence metadata in status JSON, and invalidate delivery baselines after repair or exact share restore. Delivery workers and journal compaction remain deferred.

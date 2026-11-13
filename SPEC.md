@@ -216,9 +216,63 @@ NUL survive capture; unexpected storage classes or invalid UTF-8 fail.
 
 `NativeCapture` is **not a service payload**. Native raw JSON and media/cache paths
 remain local captured data. File identities and archive paths also stay local.
-A future egress owner must explicitly select/translate allowed columns before
+An egress owner must explicitly select/translate allowed columns before
 serialization. Capture establishes neither historical completeness nor successful
-delivery; the outbox, service projection and receiver remain separate work.
+delivery. The private projection below supplies a column contract; the outbox,
+binding activation and receiver remain separate work.
+
+### Private archive service projection
+
+`remotedelivery.ProjectPrivateArchive` is a pure translation from an already
+admitted `NativeCapture` to Crawlkit `remote.Change` values. Its fixed profile is
+`slacrawl-private-archive-v1`. It does not open SQLite, authorize a binding,
+advance a cursor, send HTTP or create an outbox. Native file identity, scope
+admission metadata and archive paths are not projected.
+
+This profile retains private source evidence. It is not a report or public
+projection: those consumers need their own visibility and sanitization owners.
+`raw_json` remains opaque text, including original whitespace and unmodeled
+content; it is neither re-encoded nor regex-redacted. Before activation, the
+binding owner must qualify the captured payload provenance and authorize this
+private profile. Unknown raw provenance does not become safe through projection.
+
+The key and row orders are fixed independently of native schema column order:
+
+| Table | Key columns | Row columns, in order |
+| --- | --- | --- |
+| `workspaces` | `id` | `id name domain enterprise_id raw_json updated_at` |
+| `channels` | `id` | `id workspace_id name kind topic purpose is_private is_archived is_shared is_general raw_json updated_at` |
+| `users` | `id` | `id workspace_id name real_name display_name title is_bot is_deleted raw_json updated_at` |
+| `messages` | `channel_id ts` | `channel_id ts workspace_id user_id subtype client_msg_id thread_ts parent_user_id text normalized_text reply_count latest_reply edited_ts deleted_ts source_rank source_name raw_json updated_at` |
+| `message_files` | `channel_id ts file_id` | `workspace_id channel_id ts file_id user_id name title mimetype filetype pretty_type mode size url_private url_private_download permalink is_public plain_text preview_plain_text content_sha256 content_size fetched_at raw_json updated_at deleted_at deletion_source deletion_reason` |
+| `message_mentions` | `channel_id ts mention_type target_id` | `channel_id ts mention_type target_id display_text deleted_at deletion_source deletion_reason updated_at` |
+
+All keys remain text or native NULL. Integer columns are the channel flags
+`is_private is_archived is_shared is_general`, user flags `is_bot is_deleted`,
+message `reply_count source_rank`, and file `size is_public content_size`.
+Other columns are text; native NULL remains distinct from empty text. Integer
+values use exact signed 64-bit decimal strings. UTF-8 including NUL, timestamp
+spellings and raw text are preserved. Unknown tables, missing/extra/duplicate
+content columns, key/row disagreement or incompatible scalar types fail without
+returning partial changes.
+
+`message_files.media_path`, `fetch_status` and `fetch_error` are the only excluded
+content columns. Retained hashes, sizes and `fetched_at` are source observations;
+they do not prove that the service possesses any attachment bytes. These named
+exclusions do not strip similarly named content from opaque raw payloads.
+
+All `sync_state` rows and removal observations are excluded. Acquisition
+checkpoints remain collector-owned; this profile makes no coverage claim. A
+sync-only capture produces an empty, non-null changes array. Its complete native
+watermark still requires the future delivery owner's normal receipt/acknowledgment
+flow, rather than being silently skipped or treated as already delivered.
+
+Upserts preserve capture row order, followed by removals in capture removal
+order. Removals contain only the table and native key; local removal provenance
+does not enter the payload. Capture already owns coalescing, so a delete/reinsert
+returns the current upsert while a key move retains its old-key removal.
+Projection does not split batches or enforce wire limits; the future outbox owns
+partitioning and Crawlkit enforces its change-batch limits before encoding.
 
 ## Search Design
 
