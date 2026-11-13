@@ -85,7 +85,7 @@ func TestNativeDiagnosticContractKeepsKnownThreadError(t *testing.T) {
 	client := primaryOwnerClient(t, config.Tokens{User: "fixture-user"}, func(*http.Request, url.Values) (any, error) {
 		return map[string]any{"ok": false, "error": "thread_not_found"}, nil
 	})
-	_, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000"}, nil)
+	_, err := client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000"}, nil)
 	require.EqualError(t, err, "thread_not_found")
 	var native slack.SlackErrorResponse
 	require.ErrorAs(t, err, &native)

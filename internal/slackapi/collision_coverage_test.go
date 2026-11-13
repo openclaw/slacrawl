@@ -306,7 +306,7 @@ func TestReplyCollisionSupersedesOrdinaryGeneration(t *testing.T) {
 			})
 			var next []store.ThreadWork
 			collide := func() {
-				outcome, err := collider.syncThread(ctx, second, "T123", "C123", root, true, time.Unix(1710000300, 0), nil, newThreadSkipTracker(), &b)
+				outcome, err := collider.syncThread(ctx, second, "T123", "C123", root, true, time.Unix(1710000300, 0), threadSyncSource{token: collider.tokens.User, sourceName: SourceUser, sourceRank: 1}, nil, newThreadSkipTracker(), &b)
 				require.NoError(t, err)
 				require.Equal(t, threadSyncIncomplete, outcome)
 				next, err = second.PendingThreadWork(ctx, SourceUser, "T123", "C123")
@@ -324,7 +324,7 @@ func TestReplyCollisionSupersedesOrdinaryGeneration(t *testing.T) {
 				}
 				return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": "1710000003.000000", "thread_ts": root, "text": "ordinary response"}}}, nil
 			})
-			outcome, err := ordinary.syncThread(ctx, first, "T123", "C123", root, true, time.Unix(1710000200, 0), &work[0], newThreadSkipTracker(), &a)
+			outcome, err := ordinary.syncThread(ctx, first, "T123", "C123", root, true, time.Unix(1710000200, 0), threadSyncSource{token: ordinary.tokens.User, sourceName: SourceUser, sourceRank: 1}, &work[0], newThreadSkipTracker(), &a)
 			require.NoError(t, err)
 			require.Equal(t, map[bool]threadSyncResult{true: threadSyncRevoked, false: threadSyncComplete}[collisionFirst], outcome)
 			completed, err := first.CompleteThreadWork(ctx, work[0], skipKey, &a)

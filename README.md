@@ -48,7 +48,12 @@ slacrawl search "incident"
 slacrawl tui
 ```
 
-`init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A configured bot takes precedence; failed bot authentication never falls back to the user token. Without a bot, the user owns discovery, profiles and history. Slacrawl uses the user token for historical replies and optional DMs. Live Socket Mode tailing still requires both bot and app tokens.
+`init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A configured bot takes precedence; failed bot authentication never falls back to the user token. Without a bot, the user owns discovery, profiles and history. Live Socket Mode tailing still requires both bot and app tokens.
+
+Slacrawl prefers the user token for historical replies and optional DMs. With no
+user token configured, API sync fetches channel replies with the bot where its
+scopes and membership permit; workspace thread coverage stays partial. A rejected
+user credential never triggers bot reply fallback.
 
 Already have a Slack export? Import its ZIP or extracted directory instead of syncing from the API:
 

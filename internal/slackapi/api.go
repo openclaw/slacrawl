@@ -205,6 +205,15 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 	}
 
+	replies := threadSyncSource{}
+	if userRepliesAvailable {
+		replies = threadSyncSource{token: c.tokens.User, sourceName: SourceUser, sourceRank: 1}
+	} else if c.tokens.User == "" {
+		// Bot replies use the already authenticated workspace. A rejected
+		// configured user credential must not silently change reply identity.
+		replies = threadSyncSource{token: source.token, sourceName: source.sourceName, sourceRank: source.sourceRank}
+	}
+
 	now := c.now()
 	if err := st.UpsertWorkspace(ctx, store.Workspace{
 		ID:           workspaceID,
@@ -239,7 +248,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 		selectedChannels = append(selectedChannels, channel)
 	}
-	if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedChannels, opts, now, userRepliesAvailable, source); err != nil {
+	if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedChannels, opts, now, replies, source); err != nil {
 		return err
 	}
 
@@ -283,7 +292,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 				}
 				selectedDMs = append(selectedDMs, channel)
 			}
-			if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedDMs, opts, now, userRepliesAvailable, channelSyncSource{
+			if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedDMs, opts, now, replies, channelSyncSource{
 				token:            c.tokens.User,
 				sourceName:       SourceUser,
 				sourceRank:       1,

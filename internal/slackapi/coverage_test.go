@@ -60,8 +60,12 @@ func TestHistoryCoverageRetriesIncompleteInterval(t *testing.T) {
 			_, plan, err := client.channelSyncPlan(ctx, st, "T123", channels, SyncOptions{})
 			require.NoError(t, err)
 			require.Equal(t, store.APIHistoryOptions{}, plan)
+			replies := threadSyncSource{}
+			if threadFailure {
+				replies = threadSyncSource{token: "test-user", sourceName: SourceUser, sourceRank: 1}
+			}
 			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
-			err = client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, threadFailure, source)
+			err = client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, replies, source)
 			require.ErrorContains(t, err, map[bool]string{false: "slack conversations.history API response failed", true: "slack conversations.replies API response failed"}[threadFailure])
 			requireNativeErrorCode(t, err, "synthetic_failure")
 			state, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
@@ -72,7 +76,7 @@ func TestHistoryCoverageRetriesIncompleteInterval(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, store.APIHistoryOptions{}, plan)
 			fail = false
-			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, threadFailure, source))
+			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, replies, source))
 			require.Equal(t, []string{"", ""}, oldest)
 			state, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
@@ -109,7 +113,7 @@ func TestHistoryCoverageAdvancesEmptyAndSparseScans(t *testing.T) {
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "test"}, server.URL+"/", server.Client())
 			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
-			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source))
+			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, threadSyncSource{}, source))
 			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
@@ -270,7 +274,7 @@ func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, store.APIHistoryOptions{}, plan, "selection does not derive coverage from message maxima")
 					source := channelSyncSource{token: "fixture", sourceName: sourceName, sourceRank: 2}
-					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan, now, false, source)
+					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan, now, threadSyncSource{}, source)
 					require.ErrorContains(t, err, "slack conversations.history API response failed")
 					requireNativeErrorCode(t, err, "synthetic_failure")
 					require.NoError(t, st.Close())
@@ -282,7 +286,7 @@ func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
 					require.NotNil(t, coverage.Pending)
 					require.Equal(t, floor, *coverage.Pending)
 					fail = false
-					require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source))
+					require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, threadSyncSource{}, source))
 					require.NoError(t, st.Close())
 					st, err = store.Open(dbPath)
 					require.NoError(t, err)

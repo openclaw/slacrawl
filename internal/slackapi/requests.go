@@ -189,14 +189,14 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 	})
 }
 
-func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetConversationRepliesParameters, check func() error) (*conversationRepliesPage, error) {
+func (c *Client) getConversationReplies(ctx context.Context, token string, params *slack.GetConversationRepliesParameters, check func() error) (*conversationRepliesPage, error) {
 	return retry(ctx, c.sleep, 3, func() (*conversationRepliesPage, error) {
 		if err := checkHistoryRequest(ctx, check); err != nil {
 			return nil, err
 		}
 		values := conversationRepliesValues(params)
 		resp := rawConversationRepliesResponse{}
-		_, requestErr := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp)
+		_, requestErr := c.postSlackForm(ctx, token, "conversations.replies", values, &resp)
 		if err := checkHistoryRequest(ctx, check); err != nil {
 			return nil, err
 		}

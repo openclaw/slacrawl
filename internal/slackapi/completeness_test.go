@@ -61,7 +61,7 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 						require.Nil(t, page)
 					} else {
 						var page *conversationRepliesPage
-						page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+						page, err = client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 						require.Nil(t, page)
 					}
 					require.EqualError(t, err, "conversations."+method+" response did not report success")
@@ -80,7 +80,7 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 				require.Nil(t, page)
 				require.EqualError(t, err, "conversations.history response did not report success")
 			} else {
-				page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+				page, err := client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 				require.Nil(t, page)
 				require.EqualError(t, err, "conversations.replies response did not report success")
 			}
@@ -115,7 +115,7 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 						require.Nil(t, page)
 					}
 				} else {
-					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+					page, callErr := client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					err = callErr
 					if tc.value == "[]" {
 						require.NotNil(t, page)
@@ -176,7 +176,7 @@ func TestConversationPageSuccessPreservesNativeErrors(t *testing.T) {
 					require.Nil(t, page)
 				} else {
 					var page *conversationRepliesPage
-					page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+					page, err = client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					require.Nil(t, page)
 				}
 				var native slack.SlackErrorResponse
@@ -218,7 +218,7 @@ func TestConversationPageRateLimitRetryAndCancellation(t *testing.T) {
 				if method == "history" {
 					page, err = client.getConversationHistory(ctx, "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Cursor: "second"}, nil)
 				} else {
-					page, err = client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000", Cursor: "second"}, nil)
+					page, err = client.getConversationReplies(ctx, client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000", Cursor: "second"}, nil)
 				}
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
@@ -281,7 +281,7 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 						require.Equal(t, cursor, page.NextCursor)
 					}
 				} else {
-					page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000", Limit: 1}, nil)
+					page, err := client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000", Limit: 1}, nil)
 					if missing {
 						require.Nil(t, page)
 						require.EqualError(t, err, "conversations.replies response did not provide a collection array; page remains uncertified")
@@ -391,7 +391,7 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				if sourceName == SourceUser {
 					source.sourceRank = 1
 				}
-				err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source)
+				err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, threadSyncSource{}, source)
 				if mode == "more" {
 					require.ErrorContains(t, err, "has_more without a continuation cursor")
 				} else {
@@ -581,7 +581,7 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "fixture", User: "fixture-user"}, server.URL+"/", server.Client())
 			source := channelSyncSource{token: "fixture", sourceName: SourceBot, sourceRank: 2}
-			err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, true, source)
+			err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, threadSyncSource{token: client.tokens.User, sourceName: SourceUser, sourceRank: 1}, source)
 			if mode == "cancellation" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
@@ -895,7 +895,7 @@ func TestNativePageStatusErrors(t *testing.T) {
 					require.Nil(t, page)
 					err = callErr
 				case "conversations.replies":
-					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+					page, callErr := client.getConversationReplies(context.Background(), client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					require.Nil(t, page)
 					err = callErr
 				}
@@ -1506,7 +1506,7 @@ func nativeResponseCall(t *testing.T, ctx context.Context, client *Client, metho
 		}
 		return err
 	case "conversations.replies":
-		page, err := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
+		page, err := client.getConversationReplies(ctx, client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 		if err != nil {
 			require.Nil(t, page)
 		} else {

@@ -125,8 +125,8 @@ func TestAPIUserPrimaryFromCLI(t *testing.T) {
 			if tc.bot != "" {
 				primary = "bot"
 			}
-			hasReplies := tc.user == "user" || tc.fanout
-			includeDMs := tc.policy != "false" && hasReplies
+			hasUserReplies := tc.user == "user" || tc.fanout
+			includeDMs := tc.policy != "false" && hasUserReplies
 			require.NotEmpty(t, stdout.String())
 			var report map[string]any
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
@@ -136,7 +136,7 @@ func TestAPIUserPrimaryFromCLI(t *testing.T) {
 					roleTeams["user-"+team] = team
 				} else {
 					roleTeams[primary] = team
-					if hasReplies {
+					if hasUserReplies {
 						roleTeams["user"] = team
 					}
 				}
@@ -146,7 +146,16 @@ func TestAPIUserPrimaryFromCLI(t *testing.T) {
 				if tc.fanout {
 					role = "user-" + team
 				}
-				userPrimaryAssertTeam(t, cfg.DBPath, before, after, team, primary, role, hasReplies, includeDMs, roleTeams, calls)
+				replyRole := ""
+				if hasUserReplies {
+					replyRole = "user"
+					if tc.fanout {
+						replyRole = role
+					}
+				} else if tc.user == "" {
+					replyRole = "bot"
+				}
+				userPrimaryAssertTeam(t, cfg.DBPath, before, after, team, primary, role, replyRole, includeDMs, roleTeams, calls)
 			}
 			wantAuth := []string{primary}
 			if tc.bot != "" && tc.user != "" {
@@ -344,8 +353,10 @@ func userPrimaryCounts(snapshot map[string][]map[string]any) map[string]int {
 	return counts
 }
 
-func userPrimaryAssertTeam(t *testing.T, path string, before, after map[string][]map[string]any, team, primary, role string, replies, dms bool, roleTeams map[string]string, calls []userPrimaryCall) {
+func userPrimaryAssertTeam(t *testing.T, path string, before, after map[string][]map[string]any, team, primary, role, replyRole string, dms bool, roleTeams map[string]string, calls []userPrimaryCall) {
 	t.Helper()
+	replies := replyRole != ""
+	userReplies := replies && replyRole != "bot"
 	wantMessages := 3
 	if replies {
 		wantMessages++
@@ -372,7 +383,7 @@ func userPrimaryAssertTeam(t *testing.T, path string, before, after map[string][
 	require.Equal(t, wantKinds, gotKinds)
 	for _, row := range rows {
 		source, rank := "api-"+primary, int64(2)
-		if primary == "user" || (replies && (row["ts"] == "1710000001.000000" || row["ts"] == "1710000003.000000")) || row["channel_id"] == team+"D" || row["channel_id"] == team+"M" {
+		if primary == "user" || (userReplies && (row["ts"] == "1710000001.000000" || row["ts"] == "1710000003.000000")) || row["channel_id"] == team+"D" || row["channel_id"] == team+"M" {
 			source, rank = "api-user", 1
 		}
 		require.Equal(t, source, row["source_name"])
@@ -399,12 +410,12 @@ func userPrimaryAssertTeam(t *testing.T, path string, before, after map[string][
 			}
 		}
 		want := wantMessages
-		if primary == "bot" && replies {
+		if primary == "bot" && userReplies {
 			want++ // The same native parent is also observed by the user replies source.
 		}
 		require.Equal(t, want, count, table)
 		wantSources := map[string]int{"api-" + primary: wantMessages}
-		if primary == "bot" && replies {
+		if primary == "bot" && userReplies {
 			wantSources = map[string]int{"api-bot": 3, "api-user": 2}
 		}
 		require.Equal(t, wantSources, bySource, table)
@@ -461,7 +472,7 @@ func userPrimaryAssertTeam(t *testing.T, path string, before, after map[string][
 			}
 			require.Equal(t, horizon, call.Form.Get("latest"))
 		case "conversations.replies":
-			require.Equal(t, userRole, call.Role)
+			require.Equal(t, replyRole, call.Role)
 			require.Equal(t, team+"C", call.Form.Get("channel"))
 			require.Equal(t, "1710000001.000000", call.Form.Get("ts"))
 			thread++

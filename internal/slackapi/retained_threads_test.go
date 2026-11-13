@@ -448,15 +448,16 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 				require.Empty(t, pending, "committed deletion cancels the prepared generation")
 			}
 			tokens := config.Tokens{Bot: "fixture-bot", User: "fixture-user"}
-			if mode == "unavailable" {
-				tokens.User = ""
-			}
 			histories, replies := 0, 0
 			var prepared store.ThreadWork
 			var newer []map[string]any
 			const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
 			client := primaryOwnerClient(t, tokens, func(r *http.Request, form url.Values) (any, error) {
 				switch r.URL.Path {
+				case "/auth.test":
+					if mode == "unavailable" && form.Get("token") == tokens.User {
+						return map[string]any{"ok": false, "error": "invalid_auth"}, nil
+					}
 				case "/conversations.history":
 					histories++
 					require.Equal(t, "C123", form.Get("channel"))

@@ -34,7 +34,7 @@ func TestAPIRetainedThreadsFromCLI(t *testing.T) {
 			t.Setenv(cfg.Slack.Bot.TokenEnv, "fixture-bot")
 			t.Setenv(cfg.Slack.User.TokenEnv, "fixture-user")
 			if name == "unavailable-resume" {
-				t.Setenv(cfg.Slack.User.TokenEnv, "")
+				t.Setenv(cfg.Slack.User.TokenEnv, "fixture-invalid-user")
 			}
 			require.NoError(t, cfg.Save(configPath))
 			configBefore, err := os.ReadFile(configPath)
@@ -77,7 +77,11 @@ func TestAPIRetainedThreadsFromCLI(t *testing.T) {
 				payload := map[string]any{"ok": true}
 				switch r.URL.Path {
 				case "/auth.test":
-					payload["team_id"], payload["team"] = "T123", "Fixture"
+					if role == "fixture-invalid-user" {
+						payload = map[string]any{"ok": false, "error": "invalid_auth"}
+					} else {
+						payload["team_id"], payload["team"] = "T123", "Fixture"
+					}
 				case "/conversations.list":
 					payload["channels"] = []any{map[string]any{"id": "C123", "name": "fixture", "is_channel": true}}
 				case "/users.list":

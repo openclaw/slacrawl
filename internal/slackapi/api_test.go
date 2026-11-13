@@ -1646,7 +1646,7 @@ func TestSyncChannelUsesInclusiveRetentionFloor(t *testing.T) {
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
 		store.APIHistoryOptions{},
 		now,
-		false,
+		threadSyncSource{},
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
 	require.NoError(t, err)
@@ -1694,7 +1694,7 @@ func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
 		store.APIHistoryOptions{RestoreRequested: true},
 		now,
-		true,
+		threadSyncSource{token: client.tokens.User, sourceName: SourceUser, sourceRank: 1},
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2, coverageScope: "1710600000.000000"},
 	)
 	require.NoError(t, err)
@@ -1958,7 +1958,7 @@ func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
 		store.APIHistoryOptions{},
 		now,
-		false,
+		threadSyncSource{},
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
 	require.EqualError(t, err, "conversations.history repeated cursor")
@@ -1991,7 +1991,7 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	defer cancel()
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
-	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil, nil, nil)
+	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, threadSyncSource{token: client.tokens.User, sourceName: SourceUser, sourceRank: 1}, nil, nil, nil)
 	require.EqualError(t, err, "conversations.replies repeated cursor")
 	require.Equal(t, 2, calls)
 	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)

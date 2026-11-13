@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fetch channel thread replies during bot-only API sync, preserving bot provenance, retained retry work and partial workspace coverage; configured user credentials keep priority without bot fallback.
+
 - Update the Slack SDK to 0.35.0 with an offline upgrade regression that preserves existing archive rows, raw history, search results and configuration; an explicitly false `display_as_bot` field can add one serialization-only history event on the first sync. Thanks @dependabot.
 - Run TruffleHog 3.99.8 for secret scanning, matching the pinned action version. Thanks @dependabot.
 

@@ -16,7 +16,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
-func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, opts store.APIHistoryOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
+func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, opts store.APIHistoryOptions, now time.Time, replies threadSyncSource, source channelSyncSource) error {
 	if source.token == "" {
 		return errors.New("history token is required")
 	}
@@ -84,7 +84,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				return err
 			}
 		}
-		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work, source.threadSkip, &attempt)
+		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, replies, work, source.threadSkip, &attempt)
 		if outcome == threadSyncIncomplete {
 			historyIncomplete = true
 		}
@@ -198,7 +198,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			if source.retainedThreads && msg.ReplyCount > 0 {
 				batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: msg.Timestamp})
 			}
-			if msg.ReplyCount > 0 && userRepliesAvailable {
+			if msg.ReplyCount > 0 && replies.token != "" {
 				if _, synced := syncedThreads[msg.Timestamp]; !synced {
 					if _, queued := queuedThreads[msg.Timestamp]; !queued {
 						queuedThreads[msg.Timestamp] = struct{}{}
@@ -267,7 +267,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				pendingThreads[work.TS] = work
 			}
 		}
-		if userRepliesAvailable {
+		if replies.token != "" {
 			threads := make([]string, 0, len(pendingThreads))
 			for ts := range pendingThreads {
 				threads = append(threads, ts)
@@ -297,7 +297,7 @@ const (
 	threadSyncIncomplete
 )
 
-func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork, skips *threadSkipTracker, history *store.APIHistoryAttempt) (threadSyncResult, error) {
+func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, source threadSyncSource, work *store.ThreadWork, skips *threadSkipTracker, history *store.APIHistoryAttempt) (threadSyncResult, error) {
 	cursor := ""
 	seen := map[string]bool{}
 	// Rejection before the first request must leave a later page free to
@@ -330,7 +330,7 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			}
 		}
 		revokedResult = threadSyncRevoked
-		resp, err := c.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{
+		resp, err := c.getConversationReplies(ctx, source.token, &slack.GetConversationRepliesParameters{
 			ChannelID: channelID,
 			Timestamp: threadTS,
 			Cursor:    cursor,
@@ -364,7 +364,7 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 				msg.Channel = channelID
 			}
 			batch.Messages = append(batch.Messages, store.MessageWrite{
-				Message:                toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now),
+				Message:                toStoreMessage(workspaceID, msg, source.sourceName, source.sourceRank, rawMsg.RawPayload, now),
 				Mentions:               toStoreMentions(msg),
 				EnforceRetention:       enforceRetention,
 				SkipWorkspaceCollision: true,
@@ -402,6 +402,12 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 	}
 }
 
+type threadSyncSource struct {
+	token      string
+	sourceName string
+	sourceRank int
+}
+
 type channelSyncSource struct {
 	token            string
 	sourceName       string
@@ -414,7 +420,12 @@ type channelSyncSource struct {
 }
 
 func (c *Client) syncChannels(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, threadSkip *threadSkipTracker) error {
-	return c.syncChannelsWithSource(ctx, st, workspaceID, channels, opts, now, userRepliesAvailable, channelSyncSource{
+	// Tail repair keeps its existing user-token reply capability.
+	replies := threadSyncSource{}
+	if userRepliesAvailable {
+		replies = threadSyncSource{token: c.tokens.User, sourceName: SourceUser, sourceRank: 1}
+	}
+	return c.syncChannelsWithSource(ctx, st, workspaceID, channels, opts, now, replies, channelSyncSource{
 		token:      c.tokens.Bot,
 		sourceName: SourceBot,
 		sourceRank: 2,
@@ -527,7 +538,7 @@ func (c *Client) warnLogger() *slog.Logger {
 	return slog.Default()
 }
 
-func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
+func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, replies threadSyncSource, source channelSyncSource) error {
 	if len(channels) == 0 {
 		return nil
 	}
@@ -568,7 +579,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				source.threadSkip.RecordOmission()
 				continue
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, replies, source); err != nil {
 				tracker.Finish(err)
 				return err
 			}
@@ -600,7 +611,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				source.threadSkip.RecordOmission()
 				continue
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, replies, source); err != nil {
 				select {
 				case errCh <- err:
 				default:

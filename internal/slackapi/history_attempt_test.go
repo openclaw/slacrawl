@@ -67,7 +67,7 @@ func TestHistoryAttemptRejectsSupersededPages(t *testing.T) {
 						source.token = "fixture-user"
 						source.sourceRank = 1
 					}
-					err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000200, 0), false, source)
+					err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000200, 0), threadSyncSource{}, source)
 					require.ErrorIs(t, err, store.ErrAPIHistorySuperseded)
 					require.Equal(t, 2, calls)
 					require.Equal(t, before, historyAttemptSnapshot(t, first))
@@ -76,7 +76,7 @@ func TestHistoryAttemptRejectsSupersededPages(t *testing.T) {
 					require.NotContains(t, logs.String()+err.Error(), "foreign-owner-fixture")
 					assertAdmissionCanariesAbsent(t, first, logs.String()+err.Error(), "stale-page-canary")
 					corrected = true
-					require.NoError(t, client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000100, 0), false, source))
+					require.NoError(t, client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000100, 0), threadSyncSource{}, source))
 					require.Equal(t, 3, calls)
 					state, err := first.APIHistory(ctx, scope)
 					require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestHistoryAttemptRejectsSupersededReplies(t *testing.T) {
 						return historyAttemptResponse(response), nil
 					})
 					source := channelSyncSource{token: "fixture-bot", sourceName: SourceBot, sourceRank: 2, coverageScope: scope.Since, retainedThreads: retained, threadSkip: newThreadSkipTracker()}
-					err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{RestoreRequested: !retained}, time.Unix(1710000200, 0), true, source)
+					err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{RestoreRequested: !retained}, time.Unix(1710000200, 0), threadSyncSource{token: client.tokens.User, sourceName: SourceUser, sourceRank: 1}, source)
 					require.ErrorIs(t, err, store.ErrAPIHistorySuperseded)
 					require.Equal(t, 1, histories)
 					require.Equal(t, 2, replies)
@@ -172,7 +172,7 @@ func TestHistoryAttemptGuardsJoinResults(t *testing.T) {
 				return map[string]any{"ok": true, "channel": map[string]any{"id": "C123"}}, nil
 			})
 			source := channelSyncSource{token: "fixture-bot", sourceName: SourceBot, sourceRank: 2, allowJoin: true, threadSkip: newThreadSkipTracker()}
-			err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000200, 0), false, source)
+			err := client.syncChannelMessagesWithSource(ctx, first, "T123", historyAttemptChannel(), store.APIHistoryOptions{}, time.Unix(1710000200, 0), threadSyncSource{}, source)
 			require.ErrorIs(t, err, store.ErrAPIHistorySuperseded)
 			require.Equal(t, []string{"/conversations.history", "/conversations.join"}, calls, "already dispatched join is not undone, but stale state and history retry are blocked")
 			require.Equal(t, before, historyAttemptSnapshot(t, first))
@@ -209,7 +209,7 @@ func TestHistoryAttemptChecksEachPhysicalRetry(t *testing.T) {
 				err = e
 				require.Nil(t, page)
 			} else {
-				page, e := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, check)
+				page, e := client.getConversationReplies(ctx, client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, check)
 				err = e
 				require.Nil(t, page)
 			}
@@ -247,7 +247,7 @@ func TestHistoryAttemptCancellationPrecedesStaleResponse(t *testing.T) {
 				err = e
 				require.Nil(t, page)
 			} else {
-				page, e := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, check)
+				page, e := client.getConversationReplies(ctx, client.tokens.User, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, check)
 				err = e
 				require.Nil(t, page)
 			}

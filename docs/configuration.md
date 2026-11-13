@@ -706,6 +706,12 @@ When configured, the bot token is primary for API sync:
 - channel discovery
 - users snapshot
 - channel history
+- channel replies when no user token is configured
+
+Bot replies use the same authenticated workspace and `api-bot` rank 2 provenance.
+Slack scopes and channel membership still limit access; a successful channel
+thread does not establish full workspace thread coverage. Tail repair retains
+its user-token reply path.
 
 An invalid configured bot stops sync; it does not fall back to a user token.
 Disable it for user-only API sync or desktop-only operation:
@@ -744,8 +750,10 @@ workspace validation, channel discovery, profiles and history. This applies to
 errors. Its history coverage and successful workspace marker remain separate
 from `api-bot`; switching tokens does not borrow the bot's completed interval.
 
-With a bot, the user is optional. Slacrawl uses it for historical replies and
-optional DM discovery while the bot retains primary ownership.
+With a bot, the user is optional. Slacrawl prefers it for historical replies and
+optional DM discovery while the bot retains primary ownership. When configured,
+the user remains the reply credential: rejected authentication or reply access
+does not retry with the bot. Disable the user credential to select bot replies.
 
 When both authenticate, bot and user tokens must belong to the same workspace. API sync and
 periodic tail repair reject a valid user token from another workspace before
@@ -830,9 +838,12 @@ keeps its existing scope.
 Replies work is saved locally before history can overwrite hints and in the
 same transaction as fetched messages that establish roots through reply counts
 or retained child relationships. Later history errors, incomplete responses and
-intentional scope skips keep that work pending for a later sync. When user replies
-are unavailable, bot history can still complete with partial thread coverage;
-the saved work remains. Switching from bot-primary to user-primary sync keeps
+intentional scope skips keep that work pending for a later sync. A bot-only API
+sync can complete channel replies without claiming full workspace thread coverage.
+Unavailable reply credentials or access leave the saved work pending while bot
+history can still complete. Bot and user replies share the existing `api-user`
+work queue and generation guards; fetched messages retain the actual credential
+source. Switching from bot-primary to user-primary sync keeps
 that replies work without borrowing the bot's history checkpoint.
 
 Existing message reconciliation can revive a tombstone when an in-flight history

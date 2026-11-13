@@ -66,7 +66,7 @@ Important Slack facts that drive the schema:
 
 - messages are scoped by `(channel_id, ts)`
 - threads remain message relationships via `thread_ts`
-- Slacrawl's historical thread-reply path uses a user token for public/private channels
+- API sync prefers a user token for channel replies; without one configured, the authenticated bot can fetch replies within its scopes and membership
 - live updates should use Socket Mode when enabled
 - desktop-local data is an optional read-only source and must never become a write path
 
@@ -431,7 +431,10 @@ Share config:
 8. fetch users with the primary client, including the profile snapshot used for DM names
 9. backfill message history
 10. for bot-primary history only, when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`; user-primary history never joins and does not suppress ordinary `missing_scope` failures
-11. backfill thread replies when the user token authenticates to the selected workspace; reuse primary user authentication without another auth call
+11. backfill thread replies with the user token when it authenticates to the selected workspace; reuse primary user authentication without another auth call
+    - when no user token is configured, API Sync uses its authenticated bot for channel replies with `api-bot` rank 2 provenance; user replies retain `api-user` rank 1
+    - never switch reply credentials after configured user authentication or reply access fails; bot scope/membership errors retain pending work
+    - keep workspace full-thread eligibility gated on valid user auth; bot-only success remains partial, and Tail repair keeps its user-token reply path
     - ordinary sync with empty `Since`, including Full, durably queues eligible retained roots before history and page-discovered roots with their message transaction; post-history discovery runs after completeness checks
     - starting ordinary preparation renews selected retained generations even without replies capability; it can supersede earlier work, which remains durably pending with partial coverage
     - use `api-user`-owned workspace/channel/root jobs with generation-conditional completion; preserve jobs when hints disappear, replies fail or replies capability is unavailable
@@ -573,8 +576,10 @@ workspace identity or other payload shape.
 
 Sync authenticates its selected primary token before archive writes, without
 falling back from a failed configured bot to a user token. Invalid optional user
-auth still permits bot history with partial reply coverage. Doctor treats failed
-bot auth as fatal and failed user auth as unavailable; Tail authenticates its bot
+auth still permits bot history with partial reply coverage, but disables replies
+rather than changing credentials. With no user configured, API Sync can fetch
+bot-accessible channel replies while keeping workspace coverage partial. Doctor
+treats failed bot auth as fatal and failed user auth as unavailable; Tail authenticates its bot
 before constructing Socket Mode. Untyped Tail lookups must succeed before type
 admission, writes or acknowledgement. Failed joins remain recorded, nonfatal
 history skips; only a successful join permits the history retry. Auth response
