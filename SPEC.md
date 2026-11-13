@@ -218,8 +218,8 @@ NUL survive capture; unexpected storage classes or invalid UTF-8 fail.
 remain local captured data. File identities and archive paths also stay local.
 An egress owner must explicitly select/translate allowed columns before
 serialization. Capture establishes neither historical completeness nor successful
-delivery. The private projection below supplies a column contract; the outbox,
-binding activation and receiver remain separate work.
+delivery. The private projection and local outbox below supply delivery data and
+durability contracts; binding activation and the receiver remain separate work.
 
 ### Private archive service projection
 
@@ -264,15 +264,71 @@ exclusions do not strip similarly named content from opaque raw payloads.
 All `sync_state` rows and removal observations are excluded. Acquisition
 checkpoints remain collector-owned; this profile makes no coverage claim. A
 sync-only capture produces an empty, non-null changes array. Its complete native
-watermark still requires the future delivery owner's normal receipt/acknowledgment
+watermark still requires the delivery owner's normal receipt/acknowledgment
 flow, rather than being silently skipped or treated as already delivered.
 
 Upserts preserve capture row order, followed by removals in capture removal
 order. Removals contain only the table and native key; local removal provenance
 does not enter the payload. Capture already owns coalescing, so a delete/reinsert
 returns the current upsert while a key move retains its old-key removal.
-Projection does not split batches or enforce wire limits; the future outbox owns
+Projection does not split batches or enforce wire limits; the local outbox owns
 partitioning and Crawlkit enforces its change-batch limits before encoding.
+
+### Local delivery outbox
+
+`remotedelivery.InitOutbox` exclusively creates a separate private SQLite file
+from a caller-supplied qualified `Registration`. It does not inspect a native
+archive or infer a baseline. Registration fixes the service origin, app/archive,
+private profile, native file identity, scope SHA256 and initial native/service
+cursors. Origin validation accepts HTTP for isolated previews; transport and
+authentication policy remain with the Crawlkit client. Credentials and source
+paths are not stored. Registration cannot be changed or reset through this API.
+
+Only literal absolute regular file paths are supported, not SQLite URIs,
+`:memory:` or symlinks. The owner must keep each outbox pathname bound to its
+physical file while open. `OpenOutbox` first recognizes the schema and registration
+read-only, before a writable helper can change permissions or journal mode.
+It rejects unknown/native archives instead of initializing or migrating them.
+Initialization creates a mode-0600 database and mode-0700 missing parent
+directories; a failed initialization retains its file for diagnosis.
+
+The three tables are `binding`, `captures` and `parts`. A unique partial index
+permits one pending capture. `Stage` calls the private projector and partitions
+its materialized result outside the write transaction. It then uses
+`BEGIN IMMEDIATE` to recheck the saved baseline and pending state, and atomically
+persist the complete ordered capture: its randomly allocated ID, every exact
+request body, SHA256 and final native anchor. `synchronous=FULL` is set on each
+checked-out write connection before the transaction. A concurrent stage loses
+without replacing pending data; an uncertain commit is resolved by reopening
+and reading `State`/`NextPart`, never by silently recapturing source rows.
+
+Native wire anchors are
+`slacrawl-native-v1:<generation32hex>:<nonnegative canonical int64>:<entry32hex>`.
+File identity and scope admission facts stay in the local registration. All
+parts have the same native range. The first expected service cursor is the last
+completed capture's cursor; subsequent parts name the preceding batch ID.
+Bounds are 4 MiB encoded per part, 500 changes per part and 64 parts, plus a
+required positive caller `MaxEncodedBytes` no greater than 256 MiB. These are
+logical payload bounds, not RSS promises. An oversized single change or complete
+capture fails without partial staging. Zero native progress returns
+`ErrNoNativeProgress`; positive progress containing only excluded observations
+persists one empty changes part.
+
+`NextPart` returns the first unreceipted part's persisted bytes and verifies its
+hash. Its transaction is closed before return. Multiple dispatchers may obtain
+the same bytes. `RecordReceipt` matches the stored part's route, binding, batch
+ID, hash, cursor and positive canonical int64 service sequence. Receipts must
+arrive in part order. Recording the final receipt, completing the capture and
+advancing both completed cursors share one transaction. The native archive is
+never written. Exact duplicate receipts are harmless, including after a newer
+capture is pending; a changed `Replayed` flag does not replace the first receipt.
+
+After a process exit, staged bytes and intermediate receipts resume unchanged,
+even if the source has since changed. A failed final checkpoint write also rolls
+back its receipt. Completed captures, bodies and receipts remain retained;
+pruning, retention activation and reconciliation/reset APIs are separate work.
+No HTTP, dispatcher, CLI/config integration, scheduler or live registration is
+activated by this local API.
 
 ## Search Design
 

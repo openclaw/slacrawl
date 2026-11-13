@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a private SQLite delivery outbox that stages complete captures as exact bounded parts, resumes them after process exits and advances completed cursors only with matching receipts. No dispatcher, live registration or retention activation is included.
+
 - Add a pure private archive projection for six native content tables, preserving typed values and opaque raw evidence while excluding acquisition checkpoints and local file-cache fields. No delivery worker or network activation is included.
 
 - Add bounded read-only native capture for explicitly registered Slack archive scopes, preserving typed local rows and removal observations while rejecting changed baselines, admission or limits. No delivery worker, live upgrade or network activation is included.
