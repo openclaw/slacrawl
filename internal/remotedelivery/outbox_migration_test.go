@@ -292,3 +292,29 @@ func TestOutboxV2RejectsUnqualifiedAndSeedPendingState(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenCurrentOutboxRefusesV1BeforeWritableOpen(t *testing.T) {
+	o, current, _, ctx := driverFixture(t, "http://127.0.0.1:8123", 1)
+	require.NoError(t, o.Close())
+	path := historicalOutbox(t, current)
+	require.NoError(t, os.Chmod(path, 0o640))
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	_, err = remotedelivery.OpenCurrentOutbox(ctx, path)
+	require.ErrorContains(t, err, "explicit upgrade")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	require.NoFileExists(t, path+"-wal")
+	require.NoFileExists(t, path+"-shm")
+	// The existing migration API remains supported and current-only reopen works.
+	o, err = remotedelivery.OpenOutbox(ctx, path)
+	require.NoError(t, err)
+	require.NoError(t, o.Close())
+	o, err = remotedelivery.OpenCurrentOutbox(ctx, path)
+	require.NoError(t, err)
+	require.NoError(t, o.Close())
+}

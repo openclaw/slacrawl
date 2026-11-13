@@ -192,6 +192,12 @@ func readExportPlan(ctx context.Context, path string) (exportPrivatePlan, error)
 }
 
 func readExportInput(ctx context.Context, path string) ([]byte, error) {
+	return readPrivateInput(ctx, path, 0)
+}
+
+// A zero limit preserves the existing export input contract. Delivery scope
+// documents use a bounded read, including if the file grows after stat.
+func readPrivateInput(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -209,7 +215,17 @@ func readExportInput(ctx context.Context, path string) ([]byte, error) {
 	if err != nil || !os.SameFile(before, opened) {
 		return nil, errors.New("export input identity changed")
 	}
-	body, err := io.ReadAll(file)
+	var reader io.Reader = file
+	if maxBytes > 0 {
+		if opened.Size() > maxBytes {
+			return nil, errors.New("private input exceeds its size limit")
+		}
+		reader = io.LimitReader(file, maxBytes+1)
+	}
+	body, err := io.ReadAll(reader)
+	if maxBytes > 0 && int64(len(body)) > maxBytes {
+		return nil, errors.New("private input exceeds its size limit")
+	}
 	if err != nil {
 		return nil, errors.New("cannot read export input")
 	}

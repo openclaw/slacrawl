@@ -23,6 +23,7 @@ var (
 		"sync",
 		"import",
 		"export",
+		"delivery",
 		"purge",
 		"tail",
 		"watch",
@@ -90,7 +91,7 @@ _slacrawl()
     local i
     for ((i=1; i < ${#words[@]}; i++)); do
         case "${words[i]}" in
-            init|version|check-update|metadata|doctor|report|digest|analytics|publish|subscribe|update|sync|import|export|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
+            init|version|check-update|metadata|doctor|report|digest|analytics|publish|subscribe|update|sync|import|export|delivery|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
                 command="${words[i]}"
                 break
                 ;;
@@ -183,6 +184,15 @@ _slacrawl()
                 prepare) COMPREPLY=( $(compgen -W "--db --selection --out --format --json --help -h" -- "${cur}") ) ;;
                 build) COMPREPLY=( $(compgen -W "--db --plan --out --format --json --help -h" -- "${cur}") ) ;;
                 verify) COMPREPLY=( $(compgen -W "--db --plan --dir --format --json --help -h" -- "${cur}") ) ;;
+            esac
+            ;;
+        delivery)
+            case "${prev}" in --db|--scope|--outbox) _filedir; return ;; esac
+            case "${words[i+1]}" in
+                init) COMPREPLY=( $(compgen -W "--db --scope --outbox --origin --archive --binding --format --json --help -h" -- "${cur}") ) ;;
+                stage-seed) COMPREPLY=( $(compgen -W "--db --scope --outbox --max-rows --max-native-bytes --max-encoded-bytes --timeout --format --json --help -h" -- "${cur}") ) ;;
+                deliver) COMPREPLY=( $(compgen -W "--outbox --max-parts --timeout --token-env --format --json --help -h" -- "${cur}") ) ;;
+                *) COMPREPLY=( $(compgen -W "init stage-seed deliver --help -h" -- "${cur}") ) ;;
             esac
             ;;
         publish)
@@ -337,6 +347,17 @@ _slacrawl() {
               verify)
                 _arguments '--db[existing archive]:path:_files' '--plan[private plan]:path:_files' '--dir[artifact directory]:path:_files' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]'
                 ;;
+            esac
+          fi
+          ;;
+        delivery)
+          if (( CURRENT == 3 )); then
+            _values 'delivery subcommand' init stage-seed deliver
+          else
+            case $words[3] in
+              init) _arguments '--db[native archive]:path:_files' '--scope[private scope]:path:_files' '--outbox[new outbox]:path:_files' '--origin[service origin]:URL:' '--archive[archive ID]:ID:' '--binding[binding ID]:ID:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
+              stage-seed) _arguments '--db[native archive]:path:_files' '--scope[private scope]:path:_files' '--outbox[outbox]:path:_files' '--max-rows[row bound]:count:' '--max-native-bytes[native byte bound]:bytes:' '--max-encoded-bytes[encoded byte bound]:bytes:' '--timeout[deadline]:duration:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
+              deliver) _arguments '--outbox[outbox]:path:_files' '--max-parts[request bound]:count:' '--timeout[deadline]:duration:' '--token-env[token environment variable]:name:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
             esac
           fi
           ;;

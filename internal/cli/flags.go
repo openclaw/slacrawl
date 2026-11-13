@@ -15,7 +15,7 @@ import (
 )
 
 type slacrawlRootArgs struct {
-	Config  string   `help:"Config path."`
+	Config  *string  `help:"Config path."`
 	Format  string   `default:"text" help:"Output format: text, json, or log."`
 	JSON    bool     `name:"json" help:"Compatibility alias for --format json."`
 	NoColor bool     `name:"no-color" help:"Disable ANSI color in text output."`

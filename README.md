@@ -136,8 +136,15 @@ on open, preserving pending requests and receipts exactly. Older binaries
 reject the upgraded file. Explicit library callers can stage a complete private
 seed and resume exact requests through the existing delivery driver; only the
 final verified receipt qualifies its native baseline. Ambiguous keys retain
-evidence but block completion. No CLI or scheduler is enabled. See
+evidence but block completion. No scheduler is enabled. See
 [the outbox contract](SPEC.md#local-delivery-outbox).
+
+Explicit operator commands are available as `slacrawl delivery init`,
+`stage-seed`, and `deliver`. They require a separately qualified private scope,
+explicit native/outbox paths and bounded operations; only `deliver` contacts the
+registered service using `CRAWL_REMOTE_TOKEN` (or `--token-env`). They neither
+sync nor migrate the source/outbox and reject `--config`. See
+[the command and scope contract](SPEC.md#operator-delivery-commands) before use.
 
 ## Keep it current
 

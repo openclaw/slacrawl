@@ -434,7 +434,68 @@ freshness or acquisition completeness.
 A held attempt has no flag-clearing, reset or replacement API. Retain the outbox
 and receiver evidence, reconcile the native identity ambiguity through its owner,
 then explicitly qualify a new source/binding/outbox. The outbox does not create a
-receiver registration, listener, collector, CLI command or scheduler.
+receiver registration, listener, collector or scheduler.
+
+### Operator delivery commands
+
+`delivery init`, `delivery stage-seed` and `delivery deliver` route before
+personal config discovery, release notifications and automatic archive opening.
+They reject `--config`, including an explicitly empty value. There is no default
+workspace, channel enumeration, source synchronization, schema migration,
+receiver registration or scheduler. Native paths must name an existing literal
+absolute regular file; source ownership must satisfy capture's stable-path rule.
+
+- `init --db PATH --scope PATH --outbox NEW_PATH --origin URL --archive ID
+  --binding ID` pins physical file identity and the explicit scope in a new
+  unqualified outbox. It does not open native SQLite or invent a journal head.
+- `stage-seed --db PATH --scope PATH --outbox PATH --max-rows N
+  --max-native-bytes N --max-encoded-bytes N --timeout D` requires positive
+  limits and a deadline, matching registered file/scope and no pending capture.
+  It materializes one read-only native seed, closes its transaction, then stages
+  all exact requests. The byte limits bound logical scalar/metadata and encoded
+  payloads, not process RSS. Encoded bytes cannot exceed `(8192+2)*4 MiB`.
+- `deliver --outbox PATH --max-parts N --timeout D [--token-env NAME]` resumes
+  persisted requests against the stored endpoint, without reading the native
+  archive or scope file. The part bound is 1..64 and the deadline is positive.
+  The token comes only from Crawlkit's `EnvTokenProvider`, default environment
+  variable `CRAWL_REMOTE_TOKEN`; no Slack/MCP token fallback, argument containing
+  the token value, credential persistence or new config section exists.
+
+Existing outboxes use `OpenCurrentOutbox`: older schemas are refused during
+read-only recognition, before writable opening. The library's existing
+`OpenOutbox` upgrade contract is unchanged; upgrades require a separate explicit
+operation outside these commands. No migration command is included.
+
+The private scope JSON is at most 1 MiB, from a regular nonsymlink file. Following
+export selection conventions, all fields must appear in the order and JSON
+spelling below (whitespace is allowed). Unknown, duplicate or missing fields,
+NULL arrays, invalid UTF-8 and duplicate channel/key identities are refused.
+
+```json
+{"version":1,"workspace_id":"T_EXAMPLE","channels":[{"channel_id":"C_EXAMPLE","admission_sha256":"<64 lowercase hex>"}],"include_workspace_users":false,"sync_state_keys":[]}
+```
+
+Each optional admitted sync-state key uses exactly `source_name`, `entity_type`,
+`entity_id`, in that order. There is no inferred key family. The source-owned
+`NativeChannelAdmissionSHA256` computes the channel digest from previously
+reviewed facts; this CLI does not prepare or authorize scope. The scope document
+and raw-payload provenance require separate operator qualification. All
+`sync_state` remains excluded from the private wire profile.
+
+JSON/text/log output contains only operation status, baseline state, capture ID,
+counts, a hold if present and the staged `native_anchor`: `generation_id`, decimal
+string `sequence`, and `entry_id`. These are the real H components for separate
+receiver setup, spelling the wire anchor as
+`slacrawl-native-v1:<generation_id>:<sequence>:<entry_id>`. Output omits source
+rows, paths, full admission facts and credentials. Initialization/staging is not
+baseline qualification. Only the recorded final receipt qualifies it; even that
+does not establish source freshness or complete acquisition.
+
+A failed delivery reports bounded progress and an error while retaining exact
+pending bytes. A held seed reports `ambiguous_keys` and fails without clearing
+its hold. After an uncertain stage or output failure, inspect the retained
+outbox through its owner before retrying; never delete/recreate it to retry.
+No force/reset/rebind or delta acquisition command is provided.
 
 ### Explicit pending delivery
 
@@ -443,8 +504,8 @@ Crawlkit transport. It constructs that client from the registration's origin and
 uses its app/archive; callers supply only trusted in-memory HTTP and token
 adapters. There is no caller-selected endpoint and no stored credential. Crawlkit
 continues to own authenticated transport and redirect policy, including HTTPS
-and the loopback HTTP exception. This library operation is not wired into a CLI,
-configuration default, collector, scheduler or listener.
+and the loopback HTTP exception. The explicit operator CLI below invokes this library; no configuration default,
+collector, scheduler or listener invokes it.
 
 Each invocation requires `MaxParts` from 1 to 64 and a positive `MaxDuration`.
 The duration creates a child context and preserves an earlier parent deadline.

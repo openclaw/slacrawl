@@ -2,10 +2,15 @@
 
 ## Unreleased
 
+- Add explicit `delivery init`, `stage-seed`, and `deliver` operator commands
+  with bounded private scope/capture, environment-only service credentials and
+  resumable exact pending requests. They bypass config discovery and refuse
+  implicit source/outbox upgrades; staging does not qualify a baseline.
+
 - Add explicit private seed registration, atomic durable staging and resumable
   delivery through the existing outbox. Only the final matching receipt
   qualifies the real native head; ambiguous keys retain evidence and block
-  completion. No collector, CLI or scheduler is activated.
+  completion. No collector or scheduler is activated.
 
 - Upgrade recognized delivery outboxes to schema 2 on open, preserving pending
   and completed request/receipt bytes transactionally and recording explicit
@@ -17,7 +22,7 @@
 
 - Add an explicit bounded pending-delivery driver that sends registered outbox
   bytes through Crawlkit and records receipts before continuing, with safe
-  lost-reply recovery and no automatic capture, CLI or scheduler activation.
+  lost-reply recovery and no automatic capture or scheduler activation.
 
 - Add a private SQLite delivery outbox that stages complete captures as exact bounded parts, resumes them after process exits and advances completed cursors only with matching receipts. No dispatcher, live registration or retention activation is included.
 

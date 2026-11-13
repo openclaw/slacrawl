@@ -122,6 +122,16 @@ func createOutbox(ctx context.Context, path string, registration Registration, b
 // can alter permissions or journal mode. Recognized v1 outboxes are upgraded
 // transactionally; unknown/native archives are refused.
 func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
+	return openOutbox(ctx, path, true)
+}
+
+// OpenCurrentOutbox refuses older schemas before opening writable. Explicit
+// operator delivery commands must not silently upgrade an existing outbox.
+func OpenCurrentOutbox(ctx context.Context, path string) (*Outbox, error) {
+	return openOutbox(ctx, path, false)
+}
+
+func openOutbox(ctx context.Context, path string, allowUpgrade bool) (*Outbox, error) {
 	if err := literalOutboxPath(path); err != nil {
 		return nil, err
 	}
@@ -142,6 +152,9 @@ func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
 		version, err = outboxVersion(ctx, tx)
 		if err != nil {
 			return err
+		}
+		if version != outboxSchemaVersion && !allowUpgrade {
+			return errors.New("outbox schema requires an explicit upgrade outside delivery commands")
 		}
 		state, err := readOutboxStateVersion(ctx, tx, version)
 		if err != nil {

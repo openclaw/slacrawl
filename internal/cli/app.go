@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,7 +83,22 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return normalizeCommandHelp(a.runExport(ctx, rest[1:], format))
 	}
 
-	configPath := global.Config
+	if rest[0] == "delivery" {
+		if global.Config != nil {
+			return errors.New("delivery does not accept --config; supply explicit --db and --scope")
+		}
+		format, err := resolveOutputFormat(global.Format, global.JSON)
+		if err != nil {
+			return err
+		}
+		a.setColorEnabled(format, global.NoColor)
+		return normalizeCommandHelp(a.runDelivery(ctx, rest[1:], format))
+	}
+
+	configPath := ""
+	if global.Config != nil {
+		configPath = *global.Config
+	}
 	if configPath == "" {
 		path, err := config.DefaultConfigPath()
 		if err != nil {
