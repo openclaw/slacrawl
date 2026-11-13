@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add explicit private seed registration, atomic durable staging and resumable
+  delivery through the existing outbox. Only the final matching receipt
+  qualifies the real native head; ambiguous keys retain evidence and block
+  completion. No collector, CLI or scheduler is activated.
+
 - Upgrade recognized delivery outboxes to schema 2 on open, preserving pending
   and completed request/receipt bytes transactionally and recording explicit
   qualified baseline state. Seed staging and delivery remain separate work.

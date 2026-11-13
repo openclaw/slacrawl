@@ -133,7 +133,10 @@ This does not deliver data or qualify an incremental baseline; see
 
 The internal delivery API upgrades recognized version-1 outboxes to version 2
 on open, preserving pending requests and receipts exactly. Older binaries
-reject the upgraded file; seed staging remains unavailable. See
+reject the upgraded file. Explicit library callers can stage a complete private
+seed and resume exact requests through the existing delivery driver; only the
+final verified receipt qualifies its native baseline. Ambiguous keys retain
+evidence but block completion. No CLI or scheduler is enabled. See
 [the outbox contract](SPEC.md#local-delivery-outbox).
 
 ## Keep it current

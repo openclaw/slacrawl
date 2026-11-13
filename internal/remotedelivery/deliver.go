@@ -66,6 +66,13 @@ func (o *Outbox) DeliverPending(ctx context.Context, options DeliveryOptions, li
 		return result, nil
 	}
 	result.CaptureID, result.Status = state.PendingCaptureID, DeliveryPending
+	var seedPlan *remote.SlackSeedPlan
+	if state.PendingKind == "seed" {
+		seedPlan, err = o.seedPlan(ctx, state)
+		if err != nil {
+			return result, deliveryError(ctx, err, ErrDeliveryState)
+		}
+	}
 	r := state.Registration
 	client, err := remote.NewClient(remote.Options{Endpoint: r.Origin, HTTPClient: options.HTTPClient, TokenProvider: options.TokenProvider})
 	if err != nil {
@@ -82,7 +89,16 @@ func (o *Outbox) DeliverPending(ctx context.Context, options DeliveryOptions, li
 			result.Status = DeliveryComplete
 			return result, nil
 		}
-		receipt, err := client.ApplyChanges(ctx, r.App, r.Archive, part.Body)
+		var receipt remote.ChangeReceipt
+		if seedPlan == nil {
+			receipt, err = client.ApplyChanges(ctx, r.App, r.Archive, part.Body)
+		} else if part.Ref.Index == 0 {
+			receipt, err = client.BeginSlackSeed(ctx, r.Archive, seedPlan, part.Body)
+		} else if part.Ref.Index == part.PartCount-1 {
+			receipt, err = client.CompleteSlackSeed(ctx, r.Archive, seedPlan, part.Body)
+		} else {
+			receipt, err = client.ApplySlackSeedChunk(ctx, r.Archive, seedPlan, part.Body)
+		}
 		if err != nil {
 			return result, deliveryError(ctx, err, ErrDeliverySend)
 		}
@@ -108,7 +124,7 @@ func deliveryError(ctx context.Context, cause, safe error) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(safe, err)
 	}
-	for _, err := range []error{context.Canceled, context.DeadlineExceeded} {
+	for _, err := range []error{context.Canceled, context.DeadlineExceeded, ErrSeedBaselineHeld} {
 		if errors.Is(cause, err) {
 			return errors.Join(safe, err)
 		}

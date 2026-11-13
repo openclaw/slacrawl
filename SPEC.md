@@ -344,15 +344,13 @@ Initialization creates a mode-0600 database and mode-0700 missing parent
 directories; a failed initialization retains its file for diagnosis.
 
 The three tables are `binding`, `captures` and `parts`. Version 2 records an
-explicit `baseline_state`; existing registrations migrate as `qualified`. It
-reserves nullable native anchors, seed scope, capture kind and a baseline hold
-for later seed support. This API still creates only qualified delta outboxes
-and refuses unqualified or pending seed state. It does not create/stage seeds
-or qualify a new baseline. Delta limits remain 64 parts and 500 changes per
-part; wider storage constraints do not expand that delivery contract.
+explicit `baseline_state`; existing registrations migrate as `qualified`.
+Seed registrations start `unqualified` with NULL native anchors. Capture kind
+and the same receipt ledger distinguish seed requests from later deltas.
+Delta limits remain 64 parts and 500 changes per part; wider seed storage
+constraints do not expand that delta delivery contract.
 
-A unique partial index
-permits one pending capture. `Stage` calls the private projector and partitions
+A unique partial index permits one pending capture. `Stage` calls the private projector and partitions
 its materialized result outside the write transaction. It then uses
 `BEGIN IMMEDIATE` to recheck the saved baseline and pending state, and atomically
 persist the complete ordered capture: its randomly allocated ID, every exact
@@ -388,10 +386,60 @@ back its receipt. Completed captures, bodies and receipts remain retained;
 pruning, retention activation and reconciliation/reset APIs are separate work.
 The local outbox API does not activate a scheduler or live registration.
 
+### Durable private seed staging
+
+`InitSeedOutbox` exclusively creates an unqualified outbox from explicit
+`SeedRegistration`: service origin/app/archive/binding/profile, physical native
+file identity and `NativeCaptureScope`. It computes the existing source-owned
+scope checksum and stores the derived workspace/channel/user wire scope. There
+is no native cursor until completion. Registration hashes bind consistency;
+they do not grant publication authority or qualify raw-payload provenance.
+
+`Outbox.StageSeed` accepts a fully materialized `NativeSeed`, requires matching
+file/scope identity, and calls `ProjectPrivateSeed` itself. It uses the captured
+real `Through`, including H0, without writing the source or inventing a change.
+A random seed ID fixes the request identities. Six tables remain in profile
+order, including empty tables. Chunks contain only one table, up to 500 rows and
+4 MiB each, with at most 8192 chunks total. The source preserves exact typed
+values and every row, including ambiguous natural keys.
+
+Chunks are encoded first, followed by the manifest and completion request.
+Each descriptor hashes its exact chunk bytes; a table hash covers the ordered
+binary chunk digests. Completion names the exact manifest hash. The same three
+SQLite tables atomically retain the manifest, all chunks and completion before
+any HTTP request. Local part zero is manifest, parts 1..N are chunks 0..N-1,
+and part N+1 is completion. No parallel seed checkpoint or acknowledgment owner
+exists. A positive caller `MaxEncodedBytes` bounds all encoded requests together
+and cannot exceed `(8192+2)*4 MiB`. These materialized payload limits do not bound
+process RSS; callers must also bound native capture. Oversize rows or complete
+seeds fail without partial staging. Existing pending work cannot be replaced.
+
+A NULL key component or duplicate natural-key vector records the immutable
+`ambiguous_keys` hold. Begin/chunks may retain that evidence remotely, but
+`NextPart` refuses the final request and `RecordReceipt` refuses completion even
+if supplied directly. The baseline remains unqualified. Invalid native scalar
+classes or UTF-8 fail projection; no row is silently removed or assigned an
+invented identity. This preflight does not replace independent receiver
+eligibility validation or solve ambiguous keys introduced by later changes.
+
+Only the matching final completion receipt, after all ordered receipts, changes
+`baseline_state` to `qualified` and records H and the final service cursor as both
+initial and saved baseline in one transaction. Intermediate receipts cannot
+qualify it. A failed final write also rolls back that receipt; retry sends the
+same saved bytes and receives the original service receipt. A qualified seed can
+then use ordinary native capture and delta staging. Seed receipts remain valid
+replays after subsequent deltas. Counts and completion do not establish upstream
+freshness or acquisition completeness.
+
+A held attempt has no flag-clearing, reset or replacement API. Retain the outbox
+and receiver evidence, reconcile the native identity ambiguity through its owner,
+then explicitly qualify a new source/binding/outbox. The outbox does not create a
+receiver registration, listener, collector, CLI command or scheduler.
+
 ### Explicit pending delivery
 
 `Outbox.DeliverPending` connects an already registered outbox to the unchanged
-Crawlkit client. It constructs that client from the registration's origin and
+Crawlkit transport. It constructs that client from the registration's origin and
 uses its app/archive; callers supply only trusted in-memory HTTP and token
 adapters. There is no caller-selected endpoint and no stored credential. Crawlkit
 continues to own authenticated transport and redirect policy, including HTTPS
@@ -405,7 +453,10 @@ driver creates no background work. It pins the capture pending at entry, reads
 its exact persisted bytes through `NextPart`, sends each selected part once, and
 durably accepts its matching receipt through `RecordReceipt` before proceeding.
 It neither captures nor stages native data, and holds no SQLite transaction over
-HTTP. A concurrently staged successor is left for a later invocation.
+HTTP. A concurrently staged successor is left for a later invocation. For seed
+captures it decodes the saved manifest once per invocation and reuses indexed
+descriptors while dispatching begin/chunk/completion through the shared client.
+The same 64-request invocation budget applies to larger, resumable seeds.
 
 `DeliveryResult.Status` distinguishes `idle` (no capture pending at entry),
 `complete` (the pinned capture completed), `part_limit` (the part budget ended
@@ -422,10 +473,10 @@ or uncertain local commit is reconciled from the retained outbox; a later explic
 call resumes the same persisted part. Failed calls can therefore undercount
 effects whose acknowledgment was lost. Printable errors expose only a fixed
 operation classification and, when applicable, `context.Canceled` or
-`context.DeadlineExceeded` identity. Driver errors do not wrap private remote or
-SQLite diagnostics, URLs or tokens. Initial native bootstrap, qualified baseline
-registration, credential-selection CLI policy and scheduled activation remain
-separate work.
+`context.DeadlineExceeded` identity. A held seed also preserves the safe
+`ErrSeedBaselineHeld` identity. Driver errors do not wrap private remote or
+SQLite diagnostics, URLs or tokens. Receiver-side source/binding registration,
+credential-selection CLI policy and scheduled activation remain separate work.
 
 ## Search Design
 

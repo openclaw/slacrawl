@@ -9,8 +9,7 @@ import (
 const outboxApplicationID = 0x534c444f // SLDO
 const outboxSchemaVersion = 2
 
-// Seed fields reserve storage for a later API. This version still creates and
-// operates only qualified delta registrations; it cannot bootstrap a baseline.
+// One schema owns qualified delta delivery and unqualified seed staging.
 const outboxTables = `
 create table binding (
  singleton integer primary key check(singleton=1),

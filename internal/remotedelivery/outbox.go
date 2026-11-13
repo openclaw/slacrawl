@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openclaw/crawlkit/remote"
 	crawlstore "github.com/openclaw/crawlkit/store"
@@ -37,9 +38,13 @@ type Registration struct {
 
 // BaselineQualified identifies an explicitly qualified delivery baseline.
 const BaselineQualified = "qualified"
+const BaselineUnqualified = "unqualified"
 
 type OutboxState struct {
 	BaselineState    string
+	PendingKind      string
+	BaselineHold     string
+	seedScope        []byte
 	Registration     Registration
 	Baseline         store.NativeCaptureBaseline
 	ServerCursor     string // last completed capture, not an intermediate part
@@ -52,9 +57,11 @@ type PartRef struct {
 	Index     int
 }
 type PendingPart struct {
-	Ref    PartRef
-	Body   []byte
-	SHA256 string
+	Ref       PartRef
+	Body      []byte
+	SHA256    string
+	Kind      string
+	PartCount int
 }
 
 // Outbox owns a separate private SQLite file. Its owner must keep the pathname
@@ -65,13 +72,18 @@ type Outbox struct{ base *crawlstore.Store }
 // InitOutbox exclusively creates a new file; a failed initialization retains it
 // for diagnosis. It never opens an existing database writable or infers a seed.
 func InitOutbox(ctx context.Context, path string, registration Registration) (*Outbox, error) {
+	if err := validateRegistration(registration); err != nil {
+		return nil, err
+	}
+	anchor, _ := encodeNativeAnchor(registration.Baseline.Cursor)
+	return createOutbox(ctx, path, registration, BaselineQualified, &anchor, nil)
+}
+
+func createOutbox(ctx context.Context, path string, registration Registration, baselineState string, anchor *string, scope []byte) (*Outbox, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := literalOutboxPath(path); err != nil {
-		return nil, err
-	}
-	if err := validateRegistration(registration); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -93,11 +105,10 @@ func InitOutbox(ctx context.Context, path string, registration Registration) (*O
 		if _, err := conn.ExecContext(ctx, outboxSchema); err != nil {
 			return err
 		}
-		anchor, _ := encodeNativeAnchor(registration.Baseline.Cursor)
-		_, err := conn.ExecContext(ctx, `insert into binding values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,'qualified',null)`,
+		_, err := conn.ExecContext(ctx, `insert into binding values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			registration.BindingID, registration.Origin, registration.App, registration.Archive, registration.Profile,
 			registration.Baseline.ScopeSHA256, registration.Baseline.File.Platform, registration.Baseline.File.VolumeID, registration.Baseline.File.FileID,
-			anchor, registration.ServerCursor, anchor, registration.ServerCursor)
+			anchor, registration.ServerCursor, anchor, registration.ServerCursor, baselineState, scope)
 		return err
 	})
 	if err != nil {
@@ -136,7 +147,7 @@ func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
 		if err != nil {
 			return err
 		}
-		if err := validateRegistration(state.Registration); err != nil {
+		if err := validateOutboxRegistration(state); err != nil {
 			return err
 		}
 		// Prepare the parts contract even when there is no pending capture.
@@ -195,38 +206,46 @@ func readOutboxStateVersion(ctx context.Context, q outboxQuery, version int) (Ou
 	var state OutboxState
 	r := &state.Registration
 	var initial, saved sql.NullString
-	baselineState, captureKind := "baseline_state", "kind"
+	baselineState, captureKind, seedScope, hold := "baseline_state", "kind", "seed_scope_json", "baseline_hold"
 	if version == 1 {
-		baselineState, captureKind = "'qualified'", "'changes'"
+		baselineState, captureKind, seedScope, hold = "'qualified'", "'changes'", "null", "''"
 	}
-	err := q.QueryRowContext(ctx, `select binding_id,origin,app,archive,profile,scope_sha256,file_platform,file_volume,file_id,initial_native,initial_server_cursor,saved_native,server_cursor,`+baselineState+` from binding where singleton=1`).Scan(
+	err := q.QueryRowContext(ctx, `select binding_id,origin,app,archive,profile,scope_sha256,file_platform,file_volume,file_id,initial_native,initial_server_cursor,saved_native,server_cursor,`+baselineState+`,`+seedScope+` from binding where singleton=1`).Scan(
 		&r.BindingID, &r.Origin, &r.App, &r.Archive, &r.Profile, &r.Baseline.ScopeSHA256, &r.Baseline.File.Platform, &r.Baseline.File.VolumeID, &r.Baseline.File.FileID,
-		&initial, &r.ServerCursor, &saved, &state.ServerCursor, &state.BaselineState)
-	if err != nil {
-		return OutboxState{}, err
-	}
-	if state.BaselineState != BaselineQualified || !initial.Valid || !saved.Valid {
-		return OutboxState{}, ErrOutboxBaseline
-	}
-	r.Baseline.Cursor, err = decodeNativeAnchor(initial.String)
+		&initial, &r.ServerCursor, &saved, &state.ServerCursor, &state.BaselineState, &state.seedScope)
 	if err != nil {
 		return OutboxState{}, err
 	}
 	state.Baseline = r.Baseline
-	state.Baseline.Cursor, err = decodeNativeAnchor(saved.String)
-	if err != nil {
-		return OutboxState{}, err
-	}
-	if state.Baseline.Cursor.GenerationID != r.Baseline.Cursor.GenerationID || state.Baseline.Cursor.Sequence < r.Baseline.Cursor.Sequence {
+	switch state.BaselineState {
+	case BaselineQualified:
+		if !initial.Valid || !saved.Valid {
+			return OutboxState{}, ErrOutboxBaseline
+		}
+		r.Baseline.Cursor, err = decodeNativeAnchor(initial.String)
+		if err != nil {
+			return OutboxState{}, err
+		}
+		state.Baseline.Cursor, err = decodeNativeAnchor(saved.String)
+		if err != nil {
+			return OutboxState{}, err
+		}
+		if state.Baseline.Cursor.GenerationID != r.Baseline.Cursor.GenerationID || state.Baseline.Cursor.Sequence < r.Baseline.Cursor.Sequence {
+			return OutboxState{}, ErrOutboxBaseline
+		}
+	case BaselineUnqualified:
+		if initial.Valid || saved.Valid || r.ServerCursor != "" || state.ServerCursor != "" || state.seedScope == nil {
+			return OutboxState{}, ErrOutboxBaseline
+		}
+	default:
 		return OutboxState{}, ErrOutboxBaseline
 	}
-	var kind string
-	err = q.QueryRowContext(ctx, `select capture_id,`+captureKind+` from captures where completed=0`).Scan(&state.PendingCaptureID, &kind)
+	err = q.QueryRowContext(ctx, `select capture_id,`+captureKind+`,`+hold+` from captures where completed=0`).Scan(&state.PendingCaptureID, &state.PendingKind, &state.BaselineHold)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return OutboxState{}, err
 	}
-	if state.PendingCaptureID != "" && kind != "changes" {
-		return OutboxState{}, errors.New("seed delivery is not implemented")
+	if state.PendingCaptureID != "" && ((state.PendingKind == "changes" && state.BaselineState != BaselineQualified) || (state.PendingKind == "seed" && state.BaselineState != BaselineUnqualified)) {
+		return OutboxState{}, ErrOutboxBaseline
 	}
 	return state, nil
 }
@@ -265,7 +284,7 @@ func (o *Outbox) Stage(ctx context.Context, capture store.NativeCapture, limits 
 	if state.PendingCaptureID != "" {
 		return "", ErrPendingCapture
 	}
-	if capture.File != state.Baseline.File || capture.ScopeSHA256 != state.Baseline.ScopeSHA256 || capture.From != state.Baseline.Cursor || capture.Through.GenerationID != capture.From.GenerationID {
+	if state.BaselineState != BaselineQualified || capture.File != state.Baseline.File || capture.ScopeSHA256 != state.Baseline.ScopeSHA256 || capture.From != state.Baseline.Cursor || capture.Through.GenerationID != capture.From.GenerationID {
 		return "", ErrOutboxBaseline
 	}
 	if capture.Through.Sequence == capture.From.Sequence {
@@ -331,9 +350,12 @@ func (o *Outbox) NextPart(ctx context.Context) (*PendingPart, error) {
 		if err != nil || state.PendingCaptureID == "" {
 			return err
 		}
-		part = &PendingPart{Ref: PartRef{CaptureID: state.PendingCaptureID}}
-		if err := tx.QueryRowContext(ctx, `select part_index,body,payload_sha256 from parts where capture_id=? and receipt_json is null order by part_index limit 1`, part.Ref.CaptureID).Scan(&part.Ref.Index, &part.Body, &part.SHA256); err != nil {
+		part = &PendingPart{Ref: PartRef{CaptureID: state.PendingCaptureID}, Kind: state.PendingKind}
+		if err := tx.QueryRowContext(ctx, `select p.part_index,p.body,p.payload_sha256,c.part_count from parts p join captures c using(capture_id) where p.capture_id=? and p.receipt_json is null order by p.part_index limit 1`, part.Ref.CaptureID).Scan(&part.Ref.Index, &part.Body, &part.SHA256, &part.PartCount); err != nil {
 			return err
+		}
+		if state.BaselineHold != "" && part.Ref.Index == part.PartCount-1 {
+			return ErrSeedBaselineHeld
 		}
 		if bodySHA256(part.Body) != part.SHA256 {
 			return errors.New("persisted outbox part hash differs")
@@ -354,13 +376,17 @@ func (o *Outbox) RecordReceipt(ctx context.Context, ref PartRef, receipt remote.
 		if err != nil {
 			return err
 		}
-		var digest, from, through, expected string
+		var digest, through, expected, kind, hold string
+		var from sql.NullString
 		var recorded []byte
 		var count int
-		if err := conn.QueryRowContext(ctx, `select p.payload_sha256,p.receipt_json,c.native_from,c.native_through,c.initial_expected_cursor,c.part_count from parts p join captures c using(capture_id) where p.capture_id=? and p.part_index=?`, ref.CaptureID, ref.Index).Scan(&digest, &recorded, &from, &through, &expected, &count); err != nil {
+		if err := conn.QueryRowContext(ctx, `select p.payload_sha256,p.receipt_json,c.native_from,c.native_through,c.initial_expected_cursor,c.part_count,c.kind,c.baseline_hold from parts p join captures c using(capture_id) where p.capture_id=? and p.part_index=?`, ref.CaptureID, ref.Index).Scan(&digest, &recorded, &from, &through, &expected, &count, &kind, &hold); err != nil {
 			return err
 		}
-		batchID := (remote.ChangeBatch{CaptureID: ref.CaptureID, PartIndex: ref.Index}).BatchID()
+		batchID := outboxBatchID(kind, ref.CaptureID, ref.Index, count)
+		if kind == "seed" && hold != "" && ref.Index == count-1 {
+			return ErrSeedBaselineHeld
+		}
 		sequence, err := strconv.ParseInt(receipt.Sequence, 10, 64)
 		if err != nil || sequence <= 0 || strconv.FormatInt(sequence, 10) != receipt.Sequence || receipt.App != state.Registration.App || receipt.Archive != state.Registration.Archive || receipt.BindingID != state.Registration.BindingID || receipt.BatchID != batchID || receipt.Cursor != batchID || receipt.PayloadSHA256 != digest {
 			return errors.New("receipt does not match the persisted outbox part")
@@ -406,7 +432,12 @@ func (o *Outbox) RecordReceipt(ctx context.Context, ref PartRef, receipt remote.
 		if _, err := conn.ExecContext(ctx, `update captures set completed=1 where capture_id=?`, ref.CaptureID); err != nil {
 			return err
 		}
-		result, err := conn.ExecContext(ctx, `update binding set saved_native=?,server_cursor=? where singleton=1 and saved_native=? and server_cursor=?`, through, receipt.Cursor, from, expected)
+		var result sql.Result
+		if kind == "seed" {
+			result, err = conn.ExecContext(ctx, `update binding set baseline_state='qualified',initial_native=?,initial_server_cursor=?,saved_native=?,server_cursor=? where singleton=1 and baseline_state='unqualified' and server_cursor=?`, through, receipt.Cursor, through, receipt.Cursor, expected)
+		} else {
+			result, err = conn.ExecContext(ctx, `update binding set saved_native=?,server_cursor=? where singleton=1 and baseline_state='qualified' and saved_native=? and server_cursor=?`, through, receipt.Cursor, from, expected)
+		}
 		if err != nil {
 			return err
 		}
@@ -421,7 +452,7 @@ func (o *Outbox) RecordReceipt(ctx context.Context, ref PartRef, receipt remote.
 	})
 }
 
-func validateRegistration(r Registration) error {
+func validateRegistrationTarget(r Registration) error {
 	u, err := url.Parse(r.Origin)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("outbox requires an explicit service origin without credentials, query or fragment")
@@ -431,6 +462,22 @@ func validateRegistration(r Registration) error {
 	}
 	if !lowerHex(r.Baseline.ScopeSHA256, 32) || r.Baseline.File.Platform == "" || r.Baseline.File.VolumeID == "" || r.Baseline.File.FileID == "" {
 		return ErrOutboxBaseline
+	}
+	for _, value := range []string{r.Archive, r.BindingID} {
+		if !outboxIdentifier(value) {
+			return errors.New("invalid outbox archive/binding identifier")
+		}
+	}
+	return nil
+}
+
+func outboxIdentifier(value string) bool {
+	return value != "" && len(value) <= 128 && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
+}
+
+func validateRegistration(r Registration) error {
+	if err := validateRegistrationTarget(r); err != nil {
+		return err
 	}
 	anchor, err := encodeNativeAnchor(r.Baseline.Cursor)
 	if err != nil {
