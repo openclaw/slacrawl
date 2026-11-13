@@ -162,6 +162,13 @@ local observations and closes the transaction before returning. It writes no
 acquisition or delivery cursor. Only Darwin/Linux device-and-inode identity is
 currently supported; other platforms, symlinks and identity mismatches fail.
 
+The archive owner must keep the pathname bound to one physical file throughout
+capture. Concurrent SQLite writes are supported; renaming or replacing the
+database requires stopping capture first. Before/after pathname checks detect
+persistent replacement but do not bind SQLite's opened handle against a transient
+swap away and back. That unsupported local-owner race is an accepted limitation;
+these checks are not a security boundary against a process controlling the path.
+
 The caller supplies an explicitly authorized single-workspace/channel scope and
 a qualified baseline containing file identity, scope SHA256 and the journal's
 generation/sequence/entry anchor. The API does not create that baseline or verify

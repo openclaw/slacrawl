@@ -114,6 +114,9 @@ func NativeArchiveFileIdentity(path string) (NativeFileIdentity, error) {
 
 // CaptureNativeChanges owns one read transaction and returns a bounded,
 // materialized observation. No acquisition or delivery progress is written.
+// The archive owner must keep path bound to one physical file during the call.
+// SQLite writes are supported; concurrent rename/replacement is not. Path checks
+// detect persistent replacement, not a transient swap away and back.
 func CaptureNativeChanges(ctx context.Context, path string, request NativeCaptureRequest) (NativeCapture, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		return NativeCapture{}, errors.New("native capture requires a context deadline")
