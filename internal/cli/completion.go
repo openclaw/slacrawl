@@ -191,8 +191,9 @@ _slacrawl()
             case "${words[i+1]}" in
                 init) COMPREPLY=( $(compgen -W "--db --scope --outbox --origin --archive --binding --format --json --help -h" -- "${cur}") ) ;;
                 stage-seed) COMPREPLY=( $(compgen -W "--db --scope --outbox --max-rows --max-native-bytes --max-encoded-bytes --timeout --format --json --help -h" -- "${cur}") ) ;;
+                stage-changes) COMPREPLY=( $(compgen -W "--db --scope --outbox --max-events --max-native-bytes --max-encoded-bytes --timeout --format --json --help -h" -- "${cur}") ) ;;
                 deliver) COMPREPLY=( $(compgen -W "--outbox --max-parts --timeout --token-env --format --json --help -h" -- "${cur}") ) ;;
-                *) COMPREPLY=( $(compgen -W "init stage-seed deliver --help -h" -- "${cur}") ) ;;
+                *) COMPREPLY=( $(compgen -W "init stage-seed stage-changes deliver --help -h" -- "${cur}") ) ;;
             esac
             ;;
         publish)
@@ -352,11 +353,12 @@ _slacrawl() {
           ;;
         delivery)
           if (( CURRENT == 3 )); then
-            _values 'delivery subcommand' init stage-seed deliver
+            _values 'delivery subcommand' init stage-seed stage-changes deliver
           else
             case $words[3] in
               init) _arguments '--db[native archive]:path:_files' '--scope[private scope]:path:_files' '--outbox[new outbox]:path:_files' '--origin[service origin]:URL:' '--archive[archive ID]:ID:' '--binding[binding ID]:ID:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
               stage-seed) _arguments '--db[native archive]:path:_files' '--scope[private scope]:path:_files' '--outbox[outbox]:path:_files' '--max-rows[row bound]:count:' '--max-native-bytes[native byte bound]:bytes:' '--max-encoded-bytes[encoded byte bound]:bytes:' '--timeout[deadline]:duration:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
+              stage-changes) _arguments '--db[native archive]:path:_files' '--scope[private scope]:path:_files' '--outbox[outbox]:path:_files' '--max-events[journal interval bound]:count:' '--max-native-bytes[native byte bound]:bytes:' '--max-encoded-bytes[encoded byte bound]:bytes:' '--timeout[deadline]:duration:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
               deliver) _arguments '--outbox[outbox]:path:_files' '--max-parts[request bound]:count:' '--timeout[deadline]:duration:' '--token-env[token environment variable]:name:' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]' ;;
             esac
           fi

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add bounded `delivery stage-changes` from the latest receipt-qualified native
+  baseline, preserving no-progress no-ops and empty projected progress without
+  syncing, migrating or advancing cursors before delivery receipts.
+
 - Add explicit `delivery init`, `stage-seed`, and `deliver` operator commands
   with bounded private scope/capture, environment-only service credentials and
   resumable exact pending requests. They bypass config discovery and refuse

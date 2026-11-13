@@ -140,11 +140,13 @@ evidence but block completion. No scheduler is enabled. See
 [the outbox contract](SPEC.md#local-delivery-outbox).
 
 Explicit operator commands are available as `slacrawl delivery init`,
-`stage-seed`, and `deliver`. They require a separately qualified private scope,
+`stage-seed`, `stage-changes`, and `deliver`. They require a separately qualified private scope,
 explicit native/outbox paths and bounded operations; only `deliver` contacts the
 registered service using `CRAWL_REMOTE_TOKEN` (or `--token-env`). They neither
 sync nor migrate the source/outbox and reject `--config`. See
 [the command and scope contract](SPEC.md#operator-delivery-commands) before use.
+Incremental staging uses the latest receipt-qualified baseline; unchanged H is
+a no-op, while excluded changes still require an empty part and receipt.
 
 ## Keep it current
 

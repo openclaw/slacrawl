@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openclaw/crawlkit/remote"
 	crawlstore "github.com/openclaw/crawlkit/store"
@@ -256,7 +258,7 @@ func TestDeliveryCLIScopeIsExplicitBoundedAndStrict(t *testing.T) {
 }
 
 func TestDeliveryCLIHelpAndFormats(t *testing.T) {
-	for _, command := range []string{"init", "stage-seed", "deliver"} {
+	for _, command := range []string{"init", "stage-seed", "stage-changes", "deliver"} {
 		var output bytes.Buffer
 		app := &App{Stdout: &output, Stderr: &output}
 		require.NoError(t, app.Run(context.Background(), []string{"delivery", command, "--help"}))
@@ -291,4 +293,199 @@ func TestDeliveryCLIStagedHoldIsVisibleAndNotQualified(t *testing.T) {
 	require.Contains(t, output.String(), `"baseline_hold": "ambiguous_keys"`)
 	require.Contains(t, output.String(), `"native_anchor"`)
 	require.ErrorIs(t, app.Run(context.Background(), deliveryStageArgs(db, scope, outbox)), remotedelivery.ErrPendingCapture)
+}
+
+func deliveryChangesArgs(db, scope, outbox string) []string {
+	args := deliveryStageArgs(db, scope, outbox)
+	for i, arg := range args {
+		if arg == "stage-seed" {
+			args[i] = "stage-changes"
+		}
+		if arg == "--max-rows" {
+			args[i] = "--max-events"
+		}
+	}
+	return args
+}
+
+func TestDeliveryCLIChangesUseLatestCompletedBaseline(t *testing.T) {
+	db, scope, outbox, app, output := deliveryCLIFixture(t)
+	ctx := context.Background()
+	var calls atomic.Int32
+	// Each invocation receives the exact persisted pending bodies. The client and
+	// receipt owner supply the protocol validation; this peer checks CLI routing.
+	type request struct {
+		body    []byte
+		path    string
+		receipt remote.ChangeReceipt
+	}
+	var queue []request
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		mu.Lock()
+		defer mu.Unlock()
+		require.NotEmpty(t, queue)
+		next := queue[0]
+		queue = queue[1:]
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, "POST", r.Method)
+		require.Equal(t, next.path, r.URL.Path)
+		require.Equal(t, "Bearer changes-token-canary", r.Header.Get("Authorization"))
+		require.Equal(t, next.body, body)
+		require.NoError(t, json.NewEncoder(w).Encode(next.receipt))
+	}))
+	defer server.Close()
+	app.httpClient = server.Client()
+	t.Setenv(remote.DefaultTokenEnv, "changes-token-canary")
+	readState := func() remotedelivery.OutboxState {
+		o, err := remotedelivery.OpenCurrentOutbox(ctx, outbox)
+		require.NoError(t, err)
+		state, err := o.State(ctx)
+		require.NoError(t, err)
+		require.NoError(t, o.Close())
+		return state
+	}
+	var serviceSequence int
+	queuePending := func() [][]byte {
+		state := readState()
+		ro, err := crawlstore.OpenReadOnly(ctx, outbox)
+		require.NoError(t, err)
+		rows, err := ro.DB().Query(`select body from parts where capture_id=? order by part_index`, state.PendingCaptureID)
+		require.NoError(t, err)
+		var bodies [][]byte
+		for rows.Next() {
+			var body []byte
+			require.NoError(t, rows.Scan(&body))
+			bodies = append(bodies, body)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.NoError(t, ro.Close())
+		mu.Lock()
+		defer mu.Unlock()
+		require.Empty(t, queue)
+		for i, body := range bodies {
+			path := "/v1/apps/slacrawl/archives/fixture/changes"
+			id := (remote.ChangeBatch{CaptureID: state.PendingCaptureID, PartIndex: i}).BatchID()
+			if state.PendingKind == "seed" {
+				suffix := strconv.Itoa(i - 1)
+				path = "/v1/apps/slacrawl/archives/fixture/seeds/" + state.PendingCaptureID + "/chunks/" + suffix
+				if i == 0 {
+					suffix = "begin"
+					path = "/v1/apps/slacrawl/archives/fixture/seeds"
+				}
+				if i == len(bodies)-1 {
+					suffix = "complete"
+					path = "/v1/apps/slacrawl/archives/fixture/seeds/" + state.PendingCaptureID + "/complete"
+				}
+				id = "seed1:" + state.PendingCaptureID + ":" + suffix
+			}
+			serviceSequence++
+			queue = append(queue, request{body, path, remote.ChangeReceipt{App: "slacrawl", Archive: "fixture", BindingID: "fixture-binding", BatchID: id, Cursor: id, Sequence: strconv.Itoa(serviceSequence), PayloadSHA256: fmt.Sprintf("%x", sha256.Sum256(body))}})
+		}
+		return bodies
+	}
+	anchor := func(cursor store.NativeCursor) string {
+		return "slacrawl-native-v1:" + cursor.GenerationID + ":" + strconv.FormatInt(cursor.Sequence, 10) + ":" + cursor.EntryID
+	}
+	require.NoError(t, app.Run(ctx, deliveryInitArgs(db, scope, outbox, server.URL)))
+	require.ErrorIs(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)), remotedelivery.ErrOutboxBaseline)
+	require.NoError(t, app.Run(ctx, deliveryStageArgs(db, scope, outbox)))
+	queuePending()
+	require.NoError(t, app.Run(ctx, deliveryArgs(outbox, 64)))
+	seeded := readState()
+	require.Equal(t, remotedelivery.BaselineQualified, seeded.BaselineState)
+	saved := seeded
+	for _, bound := range []struct{ flag, value string }{{"--max-events", "0"}, {"--max-encoded-bytes", "268435457"}} {
+		args := deliveryChangesArgs(db, scope, outbox)
+		for i := range args {
+			if args[i] == bound.flag {
+				args[i+1] = bound.value
+			}
+		}
+		require.ErrorContains(t, app.Run(ctx, args), "bounds")
+		require.Empty(t, readState().PendingCaptureID)
+	}
+	for cycle := 1; cycle <= 2; cycle++ {
+		st, err := store.Open(db)
+		require.NoError(t, err)
+		require.NoError(t, st.UpsertMessage(ctx, store.Message{ChannelID: "C1", TS: "1710000000.000100", WorkspaceID: "T1", UserID: "U1", Text: fmt.Sprintf("private-change-canary-%d", cycle), SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: time.Unix(1710000000+int64(cycle), 0).UTC()}, nil))
+		require.NoError(t, st.Close())
+		nativeBefore, err := os.ReadFile(db)
+		require.NoError(t, err)
+		callsBefore := calls.Load()
+		output.Reset()
+		require.NoError(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)))
+		require.Equal(t, callsBefore, calls.Load())
+		nativeAfter, err := os.ReadFile(db)
+		require.NoError(t, err)
+		require.Equal(t, nativeBefore, nativeAfter)
+		var staged deliveryOutput
+		require.NoError(t, json.Unmarshal(output.Bytes(), &staged))
+		require.Equal(t, "staged", staged.Status)
+		require.Positive(t, staged.EventsRead)
+		require.NotContains(t, output.String(), "canary")
+		pending := readState()
+		require.Equal(t, saved.Baseline, pending.Baseline)
+		require.Equal(t, saved.ServerCursor, pending.ServerCursor)
+		require.ErrorIs(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)), remotedelivery.ErrPendingCapture)
+		bodies := queuePending()
+		require.Len(t, bodies, 1)
+		batch, err := remote.DecodeChangeBatch(bodies[0])
+		require.NoError(t, err)
+		require.Equal(t, anchor(saved.Baseline.Cursor), batch.NativeFrom)
+		require.Equal(t, saved.ServerCursor, batch.ExpectedCursor)
+		require.NotEmpty(t, batch.Changes)
+		require.NoError(t, app.Run(ctx, deliveryArgs(outbox, 64)))
+		saved = readState()
+		require.Equal(t, batch.NativeThrough, anchor(saved.Baseline.Cursor))
+		require.NotEqual(t, seeded.Baseline.Cursor, saved.Baseline.Cursor)
+	}
+	// At unchanged H, no part or capture is created and no HTTP occurs.
+	before, err := os.ReadFile(outbox)
+	require.NoError(t, err)
+	callsBefore := calls.Load()
+	output.Reset()
+	require.NoError(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)))
+	require.Contains(t, output.String(), `"status": "no_native_progress"`)
+	require.NotContains(t, output.String(), `"capture_id"`)
+	after, err := os.ReadFile(outbox)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.Equal(t, callsBefore, calls.Load())
+	// Workspace users were not admitted. Their journal event still advances H,
+	// requiring a durable empty part and a receipt rather than a local cursor skip.
+	st, err := store.Open(db)
+	require.NoError(t, err)
+	require.NoError(t, st.UpsertUser(ctx, store.User{ID: "U1", WorkspaceID: "T1", Name: "private-user-canary", RawJSON: "{}", UpdatedAt: time.Unix(1710000010, 0).UTC()}))
+	require.NoError(t, st.Close())
+	require.NoError(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)))
+	bodies := queuePending()
+	require.Len(t, bodies, 1)
+	empty, err := remote.DecodeChangeBatch(bodies[0])
+	require.NoError(t, err)
+	require.Empty(t, empty.Changes)
+	require.Equal(t, anchor(saved.Baseline.Cursor), empty.NativeFrom)
+	require.NotEqual(t, empty.NativeFrom, empty.NativeThrough)
+	require.Equal(t, saved.Baseline, readState().Baseline)
+	require.NoError(t, app.Run(ctx, deliveryArgs(outbox, 64)))
+	saved = readState()
+	require.Equal(t, empty.NativeThrough, anchor(saved.Baseline.Cursor))
+	// Make the qualified cursor genuinely older than the retained floor. The CLI
+	// propagates reconciliation refusal; it must not clamp/reseed or migrate.
+	st, err = store.Open(db)
+	require.NoError(t, err)
+	require.NoError(t, st.UpsertUser(ctx, store.User{ID: "U1", WorkspaceID: "T1", Name: "changed", RawJSON: "{}", UpdatedAt: time.Unix(1710000020, 0).UTC()}))
+	_, err = st.DB().Exec(`update native_change_state set floor_sequence=(select max(sequence) from native_changes),floor_entry_id=(select entry_id from native_changes order by sequence desc limit 1)`)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	before, err = os.ReadFile(outbox)
+	require.NoError(t, err)
+	require.ErrorIs(t, app.Run(ctx, deliveryChangesArgs(db, scope, outbox)), store.ErrNativeBaseline)
+	after, err = os.ReadFile(outbox)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.Equal(t, saved.Baseline, readState().Baseline)
 }

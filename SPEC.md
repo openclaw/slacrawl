@@ -438,7 +438,8 @@ receiver registration, listener, collector or scheduler.
 
 ### Operator delivery commands
 
-`delivery init`, `delivery stage-seed` and `delivery deliver` route before
+`delivery init`, `delivery stage-seed`, `delivery stage-changes` and
+`delivery deliver` route before
 personal config discovery, release notifications and automatic archive opening.
 They reject `--config`, including an explicitly empty value. There is no default
 workspace, channel enumeration, source synchronization, schema migration,
@@ -454,6 +455,15 @@ absolute regular file; source ownership must satisfy capture's stable-path rule.
   It materializes one read-only native seed, closes its transaction, then stages
   all exact requests. The byte limits bound logical scalar/metadata and encoded
   payloads, not process RSS. Encoded bytes cannot exceed `(8192+2)*4 MiB`.
+- `stage-changes --db PATH --scope PATH --outbox PATH --max-events N
+  --max-native-bytes N --max-encoded-bytes N --timeout D` requires a qualified
+  baseline and no pending capture. It uses the latest completed outbox baseline,
+  not the initial seed anchor. All bounds/deadline are positive; encoded bytes
+  cannot exceed `64*4 MiB`. `max-events` bounds the complete `(saved,H]` native
+  journal interval, including excluded events, not the projected row count.
+  Capture closes its native read transaction before the existing `Stage` owner
+  projects and atomically persists all parts. Staging makes no HTTP/credential
+  call and leaves the completed native/service cursors unchanged.
 - `deliver --outbox PATH --max-parts N --timeout D [--token-env NAME]` resumes
   persisted requests against the stored endpoint, without reading the native
   archive or scope file. The part bound is 1..64 and the deadline is positive.
@@ -495,7 +505,20 @@ A failed delivery reports bounded progress and an error while retaining exact
 pending bytes. A held seed reports `ambiguous_keys` and fails without clearing
 its hold. After an uncertain stage or output failure, inspect the retained
 outbox through its owner before retrying; never delete/recreate it to retry.
-No force/reset/rebind or delta acquisition command is provided.
+`stage-changes` returns successful `status=no_native_progress` at unchanged H,
+without creating a capture, part or receipt. When H advances but the admitted
+private projection is empty, it stages one empty changes part; its matching
+receipt must still advance the baseline. Incremental output reports native
+`events_read`, materialized `rows` and `removals` counts when nonzero, not remote
+effect counts. A staged anchor is not the latest completed baseline until receipt.
+
+Changed generation/file/scope/admission, a cursor below the retained floor, an
+incorrect or missing entry anchor, interval gaps, unsupported schema or
+uninterpretable data cause reconciliation refusal. An over-budget interval fails
+whole; the CLI never clamps the cursor, invents progress, retries with larger
+bounds or automatically reseeds. Existing retained journal data can be delivered
+consistently even when acquisition is old; no progress does not prove freshness.
+No force/reset/rebind or upstream acquisition command is provided.
 
 ### Explicit pending delivery
 
