@@ -56,34 +56,13 @@ func ProjectPrivateArchive(capture store.NativeCapture) ([]remote.Change, error)
 		if err != nil {
 			return nil, err
 		}
-		columns := strings.Fields(layout.columns)
-		excluded := strings.Fields(layout.excluded)
-		if len(row.Columns) != len(row.Values) || len(row.Columns) != len(columns)+len(excluded) {
-			return nil, errors.New("private projection native column count differs")
+		positions, err := privateColumnPositions(layout, row.Columns)
+		if err != nil {
+			return nil, err
 		}
-		positions := make(map[string]int, len(row.Columns))
-		for i, column := range row.Columns {
-			if _, duplicate := positions[column]; duplicate {
-				return nil, errors.New("private projection has duplicate native columns")
-			}
-			positions[column] = i
-		}
-		for _, column := range excluded {
-			if _, exists := positions[column]; !exists {
-				return nil, errors.New("private projection excluded native column is missing")
-			}
-		}
-		change := remote.Change{Table: string(row.Table), Operation: "upsert"}
-		for _, column := range columns {
-			position, exists := positions[column]
-			if !exists {
-				return nil, errors.New("private projection required native column is missing or replaced")
-			}
-			value, err := projectPrivateValue(row.Values[position], strings.Contains(" "+layout.integers+" ", " "+column+" "))
-			if err != nil {
-				return nil, err
-			}
-			change.Row = append(change.Row, value)
+		change, err := projectPrivateRow(layout, positions, row.Values)
+		if err != nil {
+			return nil, err
 		}
 		keys := strings.Fields(layout.keys)
 		if len(row.Key.Values) != len(keys) {
@@ -93,10 +72,6 @@ func ProjectPrivateArchive(capture store.NativeCapture) ([]remote.Change, error)
 			if row.Key.Values[i] != row.Values[positions[key]] {
 				return nil, errors.New("private projection key differs from row")
 			}
-		}
-		change.Key, err = projectPrivateKey(row.Key, len(keys))
-		if err != nil {
-			return nil, err
 		}
 		changes = append(changes, change)
 	}
@@ -115,6 +90,46 @@ func ProjectPrivateArchive(capture store.NativeCapture) ([]remote.Change, error)
 		changes = append(changes, remote.Change{Table: string(removal.Table), Operation: "remove", Key: key})
 	}
 	return changes, nil
+}
+
+func privateColumnPositions(layout privateTable, columns []string) (map[string]int, error) {
+	if len(columns) != len(strings.Fields(layout.columns))+len(strings.Fields(layout.excluded)) {
+		return nil, errors.New("private projection native column count differs")
+	}
+	positions := make(map[string]int, len(columns))
+	for i, column := range columns {
+		if _, duplicate := positions[column]; duplicate {
+			return nil, errors.New("private projection has duplicate native columns")
+		}
+		positions[column] = i
+	}
+	for _, column := range strings.Fields(layout.columns + " " + layout.excluded) {
+		if _, exists := positions[column]; !exists {
+			return nil, errors.New("private projection required native column is missing or replaced")
+		}
+	}
+	return positions, nil
+}
+
+func projectPrivateRow(layout privateTable, positions map[string]int, values []store.NativeValue) (remote.Change, error) {
+	if len(values) != len(positions) {
+		return remote.Change{}, errors.New("private projection native column count differs")
+	}
+	change := remote.Change{Table: string(layout.table), Operation: "upsert"}
+	for _, column := range strings.Fields(layout.columns) {
+		value, err := projectPrivateValue(values[positions[column]], strings.Contains(" "+layout.integers+" ", " "+column+" "))
+		if err != nil {
+			return remote.Change{}, err
+		}
+		change.Row = append(change.Row, value)
+	}
+	var key store.NativeKey
+	for _, column := range strings.Fields(layout.keys) {
+		key.Values = append(key.Values, values[positions[column]])
+	}
+	var err error
+	change.Key, err = projectPrivateKey(key, len(key.Values))
+	return change, err
 }
 
 func privateLayout(table store.NativeTable) (privateTable, error) {

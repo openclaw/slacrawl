@@ -503,24 +503,34 @@ func readNativeCaptureRow(ctx context.Context, tx *sql.Tx, table nativeChangeTab
 	if err := tx.QueryRowContext(ctx, "select *"+suffix, args...).Scan(ptrs...); err != nil {
 		return NativeCaptureRow{}, false, err
 	}
+	row.Values, _, err = decodeNativeValues(values)
+	return row, err == nil, err
+}
+
+func decodeNativeValues(values []any) ([]NativeValue, int64, error) {
+	decoded := make([]NativeValue, 0, len(values))
+	var size int64
 	for _, value := range values {
 		scalar := NativeValue{}
 		switch typed := value.(type) {
 		case nil:
 			scalar.Kind = NativeNull
+			size++
 		case int64:
 			scalar.Kind = NativeInteger
 			scalar.Integer = typed
+			size += 9
 		case string:
 			if !utf8.ValidString(typed) {
-				return NativeCaptureRow{}, false, ErrNativeData
+				return nil, 0, ErrNativeData
 			}
 			scalar.Kind = NativeText
 			scalar.Text = typed
+			size += 1 + int64(len(typed))
 		default:
-			return NativeCaptureRow{}, false, ErrNativeData
+			return nil, 0, ErrNativeData
 		}
-		row.Values = append(row.Values, scalar)
+		decoded = append(decoded, scalar)
 	}
-	return row, true, nil
+	return decoded, size, nil
 }

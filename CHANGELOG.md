@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add bounded read-only native seed capture at one journal head and a pure
+  six-table private projection, preserving empty-table schemas and native
+  values without fabricating progress or activating delivery.
+
 - Add an explicit bounded pending-delivery driver that sends registered outbox
   bytes through Crawlkit and records receipts before continuing, with safe
   lost-reply recovery and no automatic capture, CLI or scheduler activation.

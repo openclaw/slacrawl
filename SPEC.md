@@ -221,6 +221,50 @@ serialization. Capture establishes neither historical completeness nor successfu
 delivery. The private projection and local outbox below supply delivery data and
 durability contracts; binding activation and the receiver remain separate work.
 
+### Bounded native seed capture
+
+`store.CaptureNativeSeed` reads the current six content tables at one real native
+journal head H. It requires an explicitly selected physical file, the existing
+single-workspace/channel admission scope and its checksum, positive `MaxRows`
+and `MaxBytes`, and a context deadline. It uses one read-only transaction for
+schema 9/journal validation, channel admission, head selection and all table
+reads. The stable-path ownership precondition above also applies. Concurrent
+SQLite writers can continue; their later changes are outside this snapshot.
+
+The fully materialized `NativeSeed` returns local file identity, scope checksum,
+H's exact generation/sequence/entry anchor, and six ordered tables with native
+columns and typed rows. H may be zero after upgrading a populated pre-journal
+archive. Capturing a seed neither appends a synthetic journal entry nor invents
+a `From` cursor. It writes no source data, schema, acquisition or delivery state.
+
+The tables are `workspaces`, `channels`, `users`, `messages`, `message_files`
+and `message_mentions`, in that order. Workspace/channel selection and explicit
+workspace-user opt-in match native incremental capture. Mentions with a foreign
+message parent are excluded; a missing parent can use the admitted channel.
+Users without opt-in and every other empty table retain their native columns.
+Rows use binary native-key ordering with a local rowid tie-breaker, preserving
+multiple nullable-key rows without exporting rowid. Retained deletion fields
+remain observations; absence does not invent a removal or historical evidence.
+
+Before loading row bodies, the reader checks scoped counts and scalar sizes
+across all six tables. Loading also checks actual row counts and byte usage.
+The byte bound covers native scalar payloads, column-name bytes once per table
+and the existing channel-admission byte accounting: NULL costs one byte,
+integers nine, text one plus its UTF-8 byte length. It is a logical data bound,
+not a process RSS or encoded wire-size guarantee. Invalid UTF-8, unexpected
+SQLite storage classes, changed admission, limits and cancellation return no
+partial seed. Native NULL, empty text, exact int64 values, NUL, raw JSON and
+timestamp spelling follow the same decoder as incremental capture.
+
+`remotedelivery.ProjectPrivateSeed` applies the private profile below, requiring
+all six tables in order and validating each native layout even when empty. It
+returns upserts only and shares the existing column/scalar projection owner.
+File identity, admission facts and the native anchor are not row payload fields.
+Neither API serializes a seed manifest, stages durable chunks, initializes an
+outbox or sends data. A later verified service completion receipt must qualify
+the seed and H before they can become an incremental delivery baseline. A seed
+does not prove acquisition coverage, freshness or successful central import.
+
 ### Private archive service projection
 
 `remotedelivery.ProjectPrivateArchive` is a pure translation from an already

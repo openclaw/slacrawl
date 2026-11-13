@@ -126,6 +126,11 @@ and sequence anchors in `status --json`. This is the foundation for later
 incremental delivery; no delivery worker or journal compaction is enabled. See
 [the journal contract](SPEC.md#native-change-journal).
 
+Library callers can capture a bounded, read-only six-table native seed at one
+consistent journal head and project it through the private archive profile.
+This does not deliver data or qualify an incremental baseline; see
+[native seed capture](SPEC.md#bounded-native-seed-capture).
+
 ## Keep it current
 
 Run an incremental API refresh after the first sync:
