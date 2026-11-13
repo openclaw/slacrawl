@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded read-only native capture for explicitly registered Slack archive scopes, preserving typed local rows and removal observations while rejecting changed baselines, admission or limits. No delivery worker, live upgrade or network activation is included.
+
 - Record transactional native change keys and removals in SQLite schema 9, expose journal generation/sequence metadata in status JSON, and invalidate delivery baselines after repair or exact share restore. Delivery workers and journal compaction remain deferred.
 
 - Fetch channel thread replies during bot-only API sync, preserving bot provenance, retained retry work and partial workspace coverage; configured user credentials keep priority without bot fallback.

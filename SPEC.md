@@ -154,6 +154,65 @@ reconciliation contract. Journal writes add SQLite/WAL storage proportional to
 actual native changes, including routine acquisition timestamp updates. It does
 not establish acquisition completeness, current freshness or successful delivery.
 
+### Bounded local native capture
+
+`store.CaptureNativeChanges` opens an existing absolute regular archive file
+read-only and owns one SQLite read transaction. It returns fully materialized
+local observations and closes the transaction before returning. It writes no
+acquisition or delivery cursor. Only Darwin/Linux device-and-inode identity is
+currently supported; other platforms, symlinks and identity mismatches fail.
+
+The caller supplies an explicitly authorized single-workspace/channel scope and
+a qualified baseline containing file identity, scope SHA256 and the journal's
+generation/sequence/entry anchor. The API does not create that baseline or verify
+an external delivery receipt. Hashes and anchors prove consistency, not authority.
+Workspace metadata and selected channels/messages/files/mentions are included.
+Workspace users require explicit opt-in; sync-state rows require exact registered
+source/entity-type/entity-ID keys. Acquisition DM defaults grant nothing here.
+
+`NativeChannelAdmissionSHA256` hashes version 1 plus stored `id`, `workspace_id`,
+`kind`, `is_private`, `is_shared` and these raw channel facts:
+
+- required `id` and all six explicit booleans: `is_channel`, `is_group`, `is_im`,
+  `is_mpim`, `is_private`, `is_shared`;
+- optional `channel_id`, `workspace_id`, `team_id`, `context_team_id`, preserving
+  field absence versus a present empty value. Nonempty identities must match the
+  registered channel/workspace; a channel identity cannot be empty.
+
+Stored kind/privacy/shared facts must agree with the native flags. Unknown kinds,
+missing/null/uninterpretable flags, contradictory types, foreign identities,
+invalid UTF-8 and duplicate raw object keys (case-insensitive) fail. Old or sparse
+Desktop rows need explicit local reconciliation; capture does not guess missing
+facts. Name/topic/timestamp and other raw payload changes do not alone invalidate
+admission. `NativeCaptureScopeSHA256` binds the sorted unique channel admissions,
+workspace, user opt-in and sorted exact sync-state keys. A changed or missing
+registered channel requires scope reconciliation rather than implicit expansion
+or inferred removal of its contents.
+
+Capture validates required journal structures, generation, floor/head and the
+exact saved entry anchor in its read snapshot. It reads the entire `(saved,H]`
+interval or fails, including gaps among unselected events, never returning partial
+progress. Positive `MaxEvents`,
+`MaxBytes` and a context deadline are required. The byte budget counts admission
+facts, scanned journal fields and materialized native column names/scalars; it is
+a logical input/result budget, not an RSS or wire-size promise. Text is counted
+as UTF-8 bytes, integer scalars as nine bytes and NULL as one byte. SQLite length
+queries reject oversized bodies before loading them. Table read plans are reused
+within a capture only. No compaction or network operation occurs.
+
+Repeated keys coalesce into their current row at `H`. A hard delete or old-scope
+move supplies an explicit removal observation; delete/reinsert in the same scope
+returns the current row. Foreign ownership is filtered before materializing row
+bodies. Missing rows without matching removal evidence fail. Native string IDs,
+NULL versus empty, integer precision, timestamp spelling and valid UTF-8 including
+NUL survive capture; unexpected storage classes or invalid UTF-8 fail.
+
+`NativeCapture` is **not a service payload**. Native raw JSON and media/cache paths
+remain local captured data. File identities and archive paths also stay local.
+A future egress owner must explicitly select/translate allowed columns before
+serialization. Capture establishes neither historical completeness nor successful
+delivery; the outbox, service projection and receiver remain separate work.
+
 ## Search Design
 
 V1 search mode is `fts`.
