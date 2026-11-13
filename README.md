@@ -131,6 +131,11 @@ consistent journal head and project it through the private archive profile.
 This does not deliver data or qualify an incremental baseline; see
 [native seed capture](SPEC.md#bounded-native-seed-capture).
 
+The internal delivery API upgrades recognized version-1 outboxes to version 2
+on open, preserving pending requests and receipts exactly. Older binaries
+reject the upgraded file; seed staging remains unavailable. See
+[the outbox contract](SPEC.md#local-delivery-outbox).
+
 ## Keep it current
 
 Run an incremental API refresh after the first sync:

@@ -35,7 +35,11 @@ type Registration struct {
 	ServerCursor                             string
 }
 
+// BaselineQualified identifies an explicitly qualified delivery baseline.
+const BaselineQualified = "qualified"
+
 type OutboxState struct {
+	BaselineState    string
 	Registration     Registration
 	Baseline         store.NativeCaptureBaseline
 	ServerCursor     string // last completed capture, not an intermediate part
@@ -90,7 +94,7 @@ func InitOutbox(ctx context.Context, path string, registration Registration) (*O
 			return err
 		}
 		anchor, _ := encodeNativeAnchor(registration.Baseline.Cursor)
-		_, err := conn.ExecContext(ctx, `insert into binding values(1,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		_, err := conn.ExecContext(ctx, `insert into binding values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,'qualified',null)`,
 			registration.BindingID, registration.Origin, registration.App, registration.Archive, registration.Profile,
 			registration.Baseline.ScopeSHA256, registration.Baseline.File.Platform, registration.Baseline.File.VolumeID, registration.Baseline.File.FileID,
 			anchor, registration.ServerCursor, anchor, registration.ServerCursor)
@@ -104,7 +108,8 @@ func InitOutbox(ctx context.Context, path string, registration Registration) (*O
 }
 
 // OpenOutbox recognizes an existing file read-only before any writable helper
-// can alter permissions or journal mode. Unknown/native archives are refused.
+// can alter permissions or journal mode. Recognized v1 outboxes are upgraded
+// transactionally; unknown/native archives are refused.
 func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
 	if err := literalOutboxPath(path); err != nil {
 		return nil, err
@@ -120,21 +125,14 @@ func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
+	var version int
 	err = readonly.WithTx(ctx, func(tx *sql.Tx) error {
-		var appID, version, tableCount int
-		if err := tx.QueryRowContext(ctx, `pragma application_id`).Scan(&appID); err != nil {
+		var err error
+		version, err = outboxVersion(ctx, tx)
+		if err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
-			return err
-		}
-		if err := tx.QueryRowContext(ctx, `select count(*) from sqlite_schema where type='table' and name not like 'sqlite_%'`).Scan(&tableCount); err != nil {
-			return err
-		}
-		if appID != outboxApplicationID || version != outboxSchemaVersion || tableCount != 3 {
-			return errors.New("file is not a supported delivery outbox")
-		}
-		state, err := readOutboxState(ctx, tx)
+		state, err := readOutboxStateVersion(ctx, tx, version)
 		if err != nil {
 			return err
 		}
@@ -156,7 +154,14 @@ func OpenOutbox(ctx context.Context, path string) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Outbox{base: base}, nil
+	o := &Outbox{base: base}
+	if version == 1 {
+		if err := o.upgrade(ctx); err != nil {
+			_ = base.Close()
+			return nil, err
+		}
+	}
+	return o, nil
 }
 
 func literalOutboxPath(path string) error {
@@ -183,30 +188,45 @@ type outboxQuery interface {
 }
 
 func readOutboxState(ctx context.Context, q outboxQuery) (OutboxState, error) {
+	return readOutboxStateVersion(ctx, q, outboxSchemaVersion)
+}
+
+func readOutboxStateVersion(ctx context.Context, q outboxQuery, version int) (OutboxState, error) {
 	var state OutboxState
 	r := &state.Registration
-	var initial, saved string
-	err := q.QueryRowContext(ctx, `select binding_id,origin,app,archive,profile,scope_sha256,file_platform,file_volume,file_id,initial_native,initial_server_cursor,saved_native,server_cursor from binding where singleton=1`).Scan(
+	var initial, saved sql.NullString
+	baselineState, captureKind := "baseline_state", "kind"
+	if version == 1 {
+		baselineState, captureKind = "'qualified'", "'changes'"
+	}
+	err := q.QueryRowContext(ctx, `select binding_id,origin,app,archive,profile,scope_sha256,file_platform,file_volume,file_id,initial_native,initial_server_cursor,saved_native,server_cursor,`+baselineState+` from binding where singleton=1`).Scan(
 		&r.BindingID, &r.Origin, &r.App, &r.Archive, &r.Profile, &r.Baseline.ScopeSHA256, &r.Baseline.File.Platform, &r.Baseline.File.VolumeID, &r.Baseline.File.FileID,
-		&initial, &r.ServerCursor, &saved, &state.ServerCursor)
+		&initial, &r.ServerCursor, &saved, &state.ServerCursor, &state.BaselineState)
 	if err != nil {
 		return OutboxState{}, err
 	}
-	r.Baseline.Cursor, err = decodeNativeAnchor(initial)
+	if state.BaselineState != BaselineQualified || !initial.Valid || !saved.Valid {
+		return OutboxState{}, ErrOutboxBaseline
+	}
+	r.Baseline.Cursor, err = decodeNativeAnchor(initial.String)
 	if err != nil {
 		return OutboxState{}, err
 	}
 	state.Baseline = r.Baseline
-	state.Baseline.Cursor, err = decodeNativeAnchor(saved)
+	state.Baseline.Cursor, err = decodeNativeAnchor(saved.String)
 	if err != nil {
 		return OutboxState{}, err
 	}
 	if state.Baseline.Cursor.GenerationID != r.Baseline.Cursor.GenerationID || state.Baseline.Cursor.Sequence < r.Baseline.Cursor.Sequence {
 		return OutboxState{}, ErrOutboxBaseline
 	}
-	err = q.QueryRowContext(ctx, `select capture_id from captures where completed=0`).Scan(&state.PendingCaptureID)
+	var kind string
+	err = q.QueryRowContext(ctx, `select capture_id,`+captureKind+` from captures where completed=0`).Scan(&state.PendingCaptureID, &kind)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return OutboxState{}, err
+	}
+	if state.PendingCaptureID != "" && kind != "changes" {
+		return OutboxState{}, errors.New("seed delivery is not implemented")
 	}
 	return state, nil
 }

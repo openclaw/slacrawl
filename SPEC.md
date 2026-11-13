@@ -333,10 +333,25 @@ Only literal absolute regular file paths are supported, not SQLite URIs,
 physical file while open. `OpenOutbox` first recognizes the schema and registration
 read-only, before a writable helper can change permissions or journal mode.
 It rejects unknown/native archives instead of initializing or migrating them.
+A recognized version-1 delivery outbox upgrades to version 2 on open, in one
+`FULL`/`BEGIN IMMEDIATE` transaction. The constrained tables are rebuilt and
+existing body/receipt BLOBs, hashes, IDs, completed flags and cursor values are
+copied without JSON decoding or re-encoding. A failed migration rolls back the
+schema and data; concurrent openers recheck the version under the write lock.
+Version-1 binaries reject version-2 outboxes. Stop older outbox users before
+upgrading; there is no downgrade or mixed-version write-through contract.
 Initialization creates a mode-0600 database and mode-0700 missing parent
 directories; a failed initialization retains its file for diagnosis.
 
-The three tables are `binding`, `captures` and `parts`. A unique partial index
+The three tables are `binding`, `captures` and `parts`. Version 2 records an
+explicit `baseline_state`; existing registrations migrate as `qualified`. It
+reserves nullable native anchors, seed scope, capture kind and a baseline hold
+for later seed support. This API still creates only qualified delta outboxes
+and refuses unqualified or pending seed state. It does not create/stage seeds
+or qualify a new baseline. Delta limits remain 64 parts and 500 changes per
+part; wider storage constraints do not expand that delivery contract.
+
+A unique partial index
 permits one pending capture. `Stage` calls the private projector and partitions
 its materialized result outside the write transaction. It then uses
 `BEGIN IMMEDIATE` to recheck the saved baseline and pending state, and atomically

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade recognized delivery outboxes to schema 2 on open, preserving pending
+  and completed request/receipt bytes transactionally and recording explicit
+  qualified baseline state. Seed staging and delivery remain separate work.
+
 - Add bounded read-only native seed capture at one journal head and a pure
   six-table private projection, preserving empty-table schemas and native
   values without fabricating progress or activating delivery.
