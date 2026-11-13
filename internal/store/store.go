@@ -51,10 +51,6 @@ func Open(path string) (*Store, error) {
 			_ = base.Close()
 			return nil, err
 		}
-		if err := writeSchemaVersion(db, schemaVersion); err != nil {
-			_ = base.Close()
-			return nil, err
-		}
 	} else if currentVersion < schemaVersion {
 		if err := migrateSchema(db, currentVersion); err != nil {
 			_ = base.Close()
@@ -65,6 +61,10 @@ func Open(path string) (*Store, error) {
 			_ = base.Close()
 			return nil, err
 		}
+	}
+	if err := initializeNativeChanges(db, currentVersion == 0); err != nil {
+		_ = base.Close()
+		return nil, err
 	}
 	if err := repairPendingSearchIndex(context.Background(), db); err != nil {
 		_ = base.Close()

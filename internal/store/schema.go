@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 const PlaceholderUserRawJSON = `{"slacrawl_provider_placeholder":true}`
 
 const (
@@ -389,6 +389,12 @@ func migrateSchema(db *sql.DB, currentVersion int) error {
 		}
 		currentVersion = 8
 	}
+	if currentVersion < 9 {
+		if err := ensureNativeChanges(context.Background(), tx); err != nil {
+			return fmt.Errorf("migrate sqlite schema to v9: %w", err)
+		}
+		currentVersion = 9
+	}
 	if currentVersion != schemaVersion {
 		return fmt.Errorf("no migration path from sqlite schema version %d to %d", currentVersion, schemaVersion)
 	}
@@ -588,13 +594,6 @@ func requireSchemaColumns(q schemaQueryer, table string, required []string) erro
 		if !columns[column] {
 			return fmt.Errorf("sqlite schema table %s missing column %s", table, column)
 		}
-	}
-	return nil
-}
-
-func writeSchemaVersion(db *sql.DB, version int) error {
-	if _, err := db.Exec(fmt.Sprintf("pragma user_version = %d", version)); err != nil {
-		return fmt.Errorf("write sqlite schema version: %w", err)
 	}
 	return nil
 }

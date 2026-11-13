@@ -340,6 +340,11 @@ func importLocked(ctx context.Context, s *store.Store, opts Options, restore boo
 	if err := store.RebuildSearchIndexesInTransaction(ctx, tx); err != nil {
 		return Manifest{}, fmt.Errorf("rebuild imported search index: %w", err)
 	}
+	if restore {
+		if err := store.ResetNativeChangesInTransaction(ctx, tx); err != nil {
+			return Manifest{}, fmt.Errorf("reset restored native journal: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Manifest{}, err
 	}

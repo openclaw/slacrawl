@@ -9,6 +9,7 @@ import (
 
 	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/slacrawl/internal/config"
+	"github.com/openclaw/slacrawl/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +57,9 @@ func TestManifestStatusExecutesNormalizedContract(t *testing.T) {
 	app := &App{Stdout: &stdout, Stderr: &stdout}
 	ctx := context.Background()
 	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "init", "--db", filepath.Join(dir, "archive.db")}))
+	st, err := store.Open(filepath.Join(dir, "archive.db"))
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
 	stdout.Reset()
 	argv := controlManifest(configPath).Commands["status"].Argv
 	args := append([]string{"--config", configPath}, argv[1:]...)
@@ -64,6 +68,12 @@ func TestManifestStatusExecutesNormalizedContract(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &normalized))
 	require.Equal(t, control.SchemaVersion, normalized["schema_version"])
 	require.Equal(t, "slacrawl", normalized["app_id"])
+	feed, ok := normalized["native_changes"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(1), feed["contract_version"])
+	require.Len(t, feed["generation_id"], 32)
+	require.Equal(t, feed["floor_sequence"], feed["head_sequence"])
+	require.Equal(t, feed["floor_entry_id"], feed["head_entry_id"])
 
 	stdout.Reset()
 	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "status"}))
@@ -71,4 +81,5 @@ func TestManifestStatusExecutesNormalizedContract(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &legacy))
 	require.Equal(t, float64(0), legacy["messages"])
 	require.NotContains(t, legacy, "schema_version")
+	require.Equal(t, feed, legacy["native_changes"])
 }

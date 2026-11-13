@@ -50,7 +50,11 @@ func (s *Store) status(ctx context.Context, includeFacts bool) (Status, APIThrea
 
 func readStatus(ctx context.Context, dbtx storedb.DBTX, includeFacts bool) (Status, APIThreadCoverageFacts, error) {
 	q := storedb.New(dbtx)
-	status := Status{}
+	feed, err := readNativeChangeStatus(ctx, dbtx)
+	if err != nil {
+		return Status{}, APIThreadCoverageFacts{}, err
+	}
+	status := Status{NativeChanges: feed}
 	countWorkspaces, err := q.CountWorkspaces(ctx)
 	if err != nil {
 		return Status{}, APIThreadCoverageFacts{}, err

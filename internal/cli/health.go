@@ -235,7 +235,10 @@ func (a *App) runStatus(ctx context.Context, configPath string, args []string, f
 		}
 	}
 	if *jsonOut {
-		return a.writeJSON(controlStatus("slacrawl", configPath, cfg, status, shareState))
+		return a.writeJSON(struct {
+			control.Status
+			NativeChanges *store.NativeChangeStatus `json:"native_changes,omitempty"`
+		}{controlStatus("slacrawl", configPath, cfg, status, shareState), status.NativeChanges})
 	}
 	return a.writeOutput("Status", statusResponse{Status: status, ArchiveProfile: archiveProfile, Share: shareState}, format, true)
 }

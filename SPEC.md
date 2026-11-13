@@ -91,6 +91,8 @@ Tables:
 - `message_mentions`
 - `embedding_jobs`
 - `message_fts`
+- `native_changes`
+- `native_change_state`
 
 `channels.kind` values include:
 
@@ -104,6 +106,53 @@ Tables:
 Optional later:
 
 - `message_embeddings`
+
+### Native change journal
+
+Schema 9 journals committed inserts, updates and hard deletes for `workspaces`,
+`channels`, `users`, `messages`, `message_files`, `message_mentions` and
+`sync_state`. SQLite triggers capture direct writes and acquisition checkpoints
+in the same transaction as the native rows. A rejected write or rollback leaves
+no change entry. NULL-safe updates emit only when a stored value changes;
+`updated_at` changes count. Key or explicit workspace changes emit an old-key
+removal followed by the new row observation. Threads remain message rows.
+
+`native_changes` contains `sequence` (SQLite AUTOINCREMENT), random `entry_id`,
+`table_name`, `operation` (`i`, `u`, `d`), typed `key_json`, optional
+`workspace_id` and `recorded_at`. Keys preserve native strings and SQL NULL.
+There are no row bodies, raw payloads or checkpoint values. Mention workspace
+context comes from its retained parent or channel and can be NULL. Sync-state
+scope must be interpreted from its native composite key; no workspace is guessed.
+The journal is private local metadata, not permission to export any record.
+A tombstone is a row update; a hard delete is an explicit removal. Neither proves
+an upstream Slack deletion. `message_events` remains separate retained history;
+FTS, event heads and embedding jobs are derived and are not journaled.
+
+The singleton `native_change_state` binds contract version 1, random generation,
+floor sequence and floor entry anchor. `status --json` and legacy status JSON
+include additive `native_changes` metadata with that floor and the current head
+sequence/entry anchor. An empty generation uses the floor anchor as its head.
+Version 8 and older read-only archives omit this metadata until writable upgrade.
+Status validates journal structures in its read snapshot and reports repair
+errors instead of certifying a broken journal. Writable open repairs missing or
+changed journal structures transactionally and rotates the generation. Valid old
+entries remain below the new floor; malformed journal tables alone are rebuilt.
+Native archive rows and acquisition state are not replaced by journal repair.
+
+Upgrade establishes a baseline, not invented historical events. Exact share
+restore rotates the generation and floor in the restore transaction; ordinary
+merge produces native changes without replacing the generation. The journal and
+state are excluded from share export and rejected as incoming snapshot tables.
+Generation changes require a future consumer to reconcile a consistent local
+snapshot. Sequence plus entry anchor distinguishes divergent copies; sequence
+alone is not a sufficient delivery cursor.
+
+This foundation does not implement capture, delivery cursors, an outbox, HTTP
+workers or compaction. No timer or row deletion runs. Seven-day retention is a
+proposal only; activation needs a measured storage budget and an explicit gap
+reconciliation contract. Journal writes add SQLite/WAL storage proportional to
+actual native changes, including routine acquisition timestamp updates. It does
+not establish acquisition completeness, current freshness or successful delivery.
 
 ## Search Design
 

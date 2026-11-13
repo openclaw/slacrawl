@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -1193,7 +1194,7 @@ func TestHistoryMigrationInvalidatesOnlyPreV8APICoverage(t *testing.T) {
 	defer func() { require.NoError(t, s.Close()) }()
 	var version int
 	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
-	require.Equal(t, 8, version)
+	require.Equal(t, schemaVersion, version)
 	var expected [][5]string
 	for _, row := range before {
 		if row[1] != "history_coverage_v1" || (row[0] != "api-bot" && row[0] != "api-user") {
@@ -1222,7 +1223,7 @@ func TestHistoryMigrationInvalidatesOnlyPreV8APICoverage(t *testing.T) {
 }
 
 func TestHistoryMigrationOpenVersions(t *testing.T) {
-	t.Run("read-only v7 then writable v8", func(t *testing.T) {
+	t.Run("read-only v7 then writable current", func(t *testing.T) {
 		path := historyMigrationV7Fixture(t)
 		db, err := sql.Open("sqlite", path)
 		require.NoError(t, err)
@@ -1242,7 +1243,7 @@ func TestHistoryMigrationOpenVersions(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, s.Close()) }()
 		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
-		require.Equal(t, 8, version)
+		require.Equal(t, schemaVersion, version)
 	})
 	t.Run("fresh empty", func(t *testing.T) {
 		s, err := Open(filepath.Join(t.TempDir(), "empty.db"))
@@ -1250,7 +1251,7 @@ func TestHistoryMigrationOpenVersions(t *testing.T) {
 		defer func() { require.NoError(t, s.Close()) }()
 		var version int
 		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
-		require.Equal(t, 8, version)
+		require.Equal(t, schemaVersion, version)
 		require.Empty(t, historyMigrationRows(t, s.DB()))
 	})
 	t.Run("nonempty unversioned legacy", func(t *testing.T) {
@@ -1269,7 +1270,7 @@ insert into sync_state values ('provider:test', 'cursor', 'opaque', 'preserved',
 		defer func() { require.NoError(t, s.Close()) }()
 		var version int
 		require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
-		require.Equal(t, 8, version)
+		require.Equal(t, schemaVersion, version)
 		require.Contains(t, historyMigrationRows(t, s.DB()), [5]string{"provider:test", "cursor", "opaque", "preserved", "old"})
 		var targeted int
 		require.NoError(t, s.DB().QueryRow(`select count(*) from sync_state where entity_type = 'history_coverage_v1'`).Scan(&targeted))
@@ -1280,11 +1281,11 @@ insert into sync_state values ('provider:test', 'cursor', 'opaque', 'preserved',
 			path := historyMigrationV7Fixture(t)
 			db, err := sql.Open("sqlite", path)
 			require.NoError(t, err)
-			_, err = db.Exec(`pragma user_version = 9`)
+			_, err = db.Exec(fmt.Sprintf("pragma user_version = %d", schemaVersion+1))
 			require.NoError(t, err)
 			before := historyMigrationRows(t, db)
 			_, err = opener(path)
-			require.ErrorContains(t, err, "database schema version 9 is newer than this slacrawl build supports")
+			require.ErrorContains(t, err, fmt.Sprintf("database schema version %d is newer than this slacrawl build supports", schemaVersion+1))
 			require.Equal(t, before, historyMigrationRows(t, db))
 			require.NoError(t, db.Close())
 		})
@@ -1314,7 +1315,7 @@ func TestHistoryMigrationRollbackAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, s.Close()) }()
 	require.NoError(t, s.DB().QueryRow(`pragma user_version`).Scan(&version))
-	require.Equal(t, 8, version)
+	require.Equal(t, schemaVersion, version)
 	var targeted int
 	require.NoError(t, s.DB().QueryRow(`select count(*) from sync_state where entity_type = 'history_coverage_v1' and source_name in ('api-bot', 'api-user')`).Scan(&targeted))
 	require.Zero(t, targeted)

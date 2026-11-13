@@ -39,9 +39,10 @@ func TestSDKArchiveUpgrade(t *testing.T) {
 	st, err := store.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	// Reopening must preserve every logical row, raw byte, rowid, sequence,
-	// schema object and FTS row before any new ingestion.
-	require.Equal(t, sha256.Sum256(archiveSQL), sha256.Sum256([]byte(sdkArchiveDump(t, st.DB()))))
+	// Schema 9 adds only the local journal. Preserve every v8 logical row, raw
+	// byte, rowid, sequence, schema object and FTS row before new ingestion.
+	require.Equal(t, [][]any{{int64(9)}}, sdkArchiveRows(t, st.DB(), "PRAGMA user_version").values)
+	require.Equal(t, sha256.Sum256(archiveSQL), sha256.Sum256([]byte(sdkArchiveV8Dump(t, st.DB()))))
 	configPath := filepath.Join(fixture, "config.toml")
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
@@ -254,11 +255,12 @@ func sdkArchiveLiteral(t *testing.T, value any) string {
 	}
 }
 
-// Dump public schema and logical rows, never writable_schema or FTS shadow
-// tables. Preserve explicit rowids; restore FTS through its ordinary insert API.
-func sdkArchiveDump(t *testing.T, db *sql.DB) string {
+// Project the original v8 schema and rows, excluding only the additive local
+// journal introduced in v9. Keep the old fixture unchanged and retain byte-level
+// coverage of original objects, explicit rowids and FTS contents.
+func sdkArchiveV8Dump(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	schema := sdkArchiveRows(t, db, "SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'message_fts_%' ORDER BY type,name")
+	schema := sdkArchiveRows(t, db, "SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'message_fts_%' AND name NOT IN ('native_changes','native_change_state') AND name NOT GLOB 'native_changes_*' ORDER BY type,name")
 	var out strings.Builder
 	out.WriteString("-- Actual slacrawl v0.10.6 Go sources; slack-go v0.33.0; SQLite schema 8.\n-- Producer af7814cc2f246d6a29998465e5416c6f0927e136 has identical Go/mod/sum to v0.10.6.\n-- Generated offline by real Client.Sync (old-a, old-b), config.Save and store.Open.\n-- Tables, rowids, raw bytes, event keys, heads, sync state and FTS were old-writer roundtrip-verified.\nBEGIN;\n")
 	for _, object := range schema.values {
@@ -298,7 +300,7 @@ func sdkArchiveDump(t *testing.T, db *sql.DB) string {
 		}
 	}
 	out.WriteString("DELETE FROM sqlite_sequence;\n")
-	for _, row := range sdkArchiveRows(t, db, "SELECT name,seq FROM sqlite_sequence ORDER BY name").values {
+	for _, row := range sdkArchiveRows(t, db, "SELECT name,seq FROM sqlite_sequence WHERE name <> 'native_changes' ORDER BY name").values {
 		fmt.Fprintf(&out, "INSERT INTO sqlite_sequence (name,seq) VALUES (%s,%s);\n", sdkArchiveLiteral(t, row[0]), sdkArchiveLiteral(t, row[1]))
 	}
 	for _, object := range schema.values {
@@ -306,7 +308,6 @@ func sdkArchiveDump(t *testing.T, db *sql.DB) string {
 			out.WriteString(object[2].(string) + ";\n")
 		}
 	}
-	version := sdkArchiveRows(t, db, "PRAGMA user_version")
-	fmt.Fprintf(&out, "PRAGMA user_version=%v;\nCOMMIT;\n", version.values[0][0])
+	out.WriteString("PRAGMA user_version=8;\nCOMMIT;\n")
 	return out.String()
 }

@@ -155,12 +155,13 @@ type MessageFile struct {
 }
 
 type Status struct {
-	Workspaces  int       `json:"workspaces"`
-	Channels    int       `json:"channels"`
-	Users       int       `json:"users"`
-	Messages    int       `json:"messages"`
-	LastSyncAt  time.Time `json:"last_sync_at"`
-	ThreadState string    `json:"thread_state"`
+	NativeChanges *NativeChangeStatus `json:"native_changes,omitempty"`
+	Workspaces    int                 `json:"workspaces"`
+	Channels      int                 `json:"channels"`
+	Users         int                 `json:"users"`
+	Messages      int                 `json:"messages"`
+	LastSyncAt    time.Time           `json:"last_sync_at"`
+	ThreadState   string              `json:"thread_state"`
 }
 
 type MessageRow struct {
