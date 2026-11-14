@@ -38,6 +38,7 @@ func TestAPIIncrementalCLIRejectsAmbiguousAdmissionBeforeOpeningStore(t *testing
 			dir := t.TempDir()
 			cfg := config.Default()
 			cfg.DBPath, cfg.CacheDir, cfg.LogDir = filepath.Join(dir, "missing.db"), filepath.Join(dir, "cache"), filepath.Join(dir, "logs")
+			cfg.Share.RepoPath = filepath.Join(dir, "share")
 			if tc.share {
 				cfg.Share.Remote, cfg.Share.AutoUpdate = "https://example.invalid/archive.git", true
 			}
@@ -73,6 +74,7 @@ func TestAPIIncrementalCLIRequiresCoverageAndResumesPendingRange(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DBPath, cfg.CacheDir, cfg.LogDir = filepath.Join(dir, "archive.db"), filepath.Join(dir, "cache"), filepath.Join(dir, "logs")
+	cfg.Share.RepoPath = filepath.Join(dir, "share")
 	cfg.Share.Remote, cfg.Share.AutoUpdate = "", false
 	cfg.Slack.Desktop.Enabled, cfg.Slack.User.Enabled, cfg.Slack.App.Enabled = false, false, false
 	cfg.Slack.Bot.TokenEnv = "SLACRAWL_INCREMENTAL_BOT"

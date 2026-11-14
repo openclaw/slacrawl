@@ -576,6 +576,15 @@ admission. Observe completed source/service cursors and journal results after
 activation; timer firing alone does not prove freshness. Retain failed outboxes
 and reconcile through their existing owners rather than deleting/recreating them.
 
+### Scheduled acquisition
+
+`operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates
+for the explicit API `sync --incremental` profile. They use a separately qualified
+native source/configuration, provider credentials, workspace/channel set and
+persistent acquisition lock. They do not replace or activate a collector.
+See [scheduled incremental acquisition](docs/configuration.md#scheduled-incremental-acquisition)
+for admission, bounded execution, relationship to delivery and freshness proof.
+
 ### Explicit pending delivery
 
 `Outbox.DeliverPending` connects an already registered outbox to the unchanged

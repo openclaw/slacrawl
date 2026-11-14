@@ -1,0 +1,26 @@
+[Unit]
+Description=Acquire qualified slacrawl source %i incrementally
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=slacrawl
+Group=slacrawl
+WorkingDirectory=/var/lib/slacrawl/%i
+EnvironmentFile=/etc/slacrawl/acquire-%i.env
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/slacrawl/%i/acquire.lock /usr/local/bin/slacrawl --config /etc/slacrawl/acquire-%i.toml --json sync --source bot --workspace ${SLACRAWL_WORKSPACE} --channels ${SLACRAWL_CHANNELS} --incremental --auto-join=false --with-media=false --concurrency 1
+TimeoutStartSec=4min
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/slacrawl/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal

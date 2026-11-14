@@ -205,6 +205,57 @@ separately reviewed recovery preserves them. Do not lower `user_version` or
 attempt an in-place downgrade. A data-only snapshot readable by an older binary
 does not make old-version syncing or opening an upgraded database safe.
 
+## Scheduled incremental acquisition
+
+`operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates.
+They run the qualified `sync --incremental` profile above with one worker and
+without channel joining or media downloads. They do not install themselves or
+bootstrap history. Keep the current collector until its exact replacement is
+qualified and the writer transition is separately approved.
+
+Each instance runs as `slacrawl` in `/var/lib/slacrawl/<instance>`. Before
+installation, qualify its existing `native.sqlite`, local API completion state,
+source identity and current channel membership. The root-owned, group-readable
+`/etc/slacrawl/acquire-<instance>.toml` must set `db_path` to that exact native
+file, with `cache_dir`, `log_dir` and `[share].repo_path` inside the instance
+directory. Even with sharing disabled, runtime setup creates the share path's
+parent; leaving its home-derived default can fail under the service sandbox.
+Set `[share].auto_update = false` and leave `[share].remote` empty; this collector
+must not import a Git snapshot.
+Use the existing approved token environment names in its Slack/workspace config.
+The `bot` alias still uses the normal bot-first/user-fallback API selection;
+qualify the actual selected identity and its own local completion records.
+
+The root-owned mode-0600 `/etc/slacrawl/acquire-<instance>.env` supplies those
+provider credentials plus:
+
+- `SLACRAWL_WORKSPACE`: the single qualified workspace ID.
+- `SLACRAWL_CHANNELS`: the explicit comma-separated admitted channel IDs.
+
+Keep provider credentials separate from the archive publisher token used by
+`slacrawl-delivery@.service`. Tokens stay in environment/configuration and never
+appear in the unit's command line. Missing scope, an incompatible config, or an
+unqualified history checkpoint fails through the existing CLI admission.
+
+The persistent `acquire.lock` serializes acquisition for this instance; manual
+sync must take the same lock. Do not map two instances to one database or let
+an older collector write it concurrently. Delivery has its own `delivery.lock`
+and can read committed native changes through the existing snapshot contract.
+Acquisition does not depend on archive availability, and its success does not
+imply delivery success. Measure both source and service watermarks.
+
+The timer runs two minutes after boot and five minutes after completion, with
+up to15seconds jitter. The service has a four-minute execution limit,30-second
+stop limit,512MiB memory cap and one-core CPU quota. These are bounded starting
+settings: qualify the actual source workload and host capacity before activation.
+Repeated timeout requires investigation; do not reset checkpoints or silently
+increase limits. No immediate restart loop is configured.
+
+Validate exact units with `systemd-analyze verify --man=no` before installation.
+Enable only after configuration, credentials, coverage, writer ownership and
+recovery are qualified. Inspect completed history horizons and service-visible
+watermarks across real cycles; a timer firing does not prove freshness.
+
 ## Workspace Selection
 
 `workspace_id` remains the default CLI workspace.

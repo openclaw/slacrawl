@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add inactive per-source Linux acquisition timers using qualified incremental
+  API sync, explicit scope, separate provider credentials and persistent locking.
+  Installation, source admission and activation remain separate steps.
+
 - Add explicit API `sync --incremental` for qualified local history. Missing
   checkpoints and unbounded pending backfills are refused; failed incremental
   intervals resume without advancing coverage. Scheduled callers must select
