@@ -75,7 +75,8 @@ jobs:
   test:
     if: always()
     needs: test-platform
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
     steps:
       - name: Require every test platform
         env:
