@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add explicit API `sync --incremental` for qualified local history. Missing
+  checkpoints and unbounded pending backfills are refused; failed incremental
+  intervals resume without advancing coverage. Scheduled callers must select
+  a workspace/channels and disable sharing, joining and media downloads.
+
 - Add inactive per-source Linux delivery service/timer templates with explicit
   measured limits, persistent locking and publisher-only credentials.
   Installation and activation remain separate operator steps.

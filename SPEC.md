@@ -678,6 +678,7 @@ Expected flags:
 - `--since <timestamp>`
 - `--full`
 - `--latest-only`
+- `--incremental` for API-only qualified local history; explicit workspace/channels, no automatic sharing, joining, media, Full/Since/LatestOnly or limit
 - `--limit <messages>` for bounded external-provider validation imports
 - `--concurrency <n>`
 - `--auto-join=<bool>`

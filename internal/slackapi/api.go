@@ -52,6 +52,7 @@ type SyncOptions struct {
 	Since            string
 	Full             bool
 	LatestOnly       bool
+	Incremental      bool
 	Concurrency      int
 	AutoJoin         *bool
 	enforceRetention bool

@@ -19,6 +19,8 @@ const APIHistoryEntityType = "history_coverage_v1"
 
 var ErrAPIHistorySuperseded = errors.New("API history attempt was superseded; retry the selected scope")
 
+var ErrAPIHistoryUnqualified = errors.New("incremental sync requires local completed history; qualify the selected source and channel before scheduling")
+
 // Since is the exact normalized invocation bound, separate from ordinary/Full.
 type APIHistoryScope struct {
 	SourceName  string
@@ -40,6 +42,7 @@ type APIHistoryState struct {
 type APIHistoryOptions struct {
 	Full             bool
 	RestoreRequested bool
+	RequireComplete  bool
 }
 
 type APIHistoryAttempt struct {
@@ -85,6 +88,9 @@ func (s *Store) BeginAPIHistory(ctx context.Context, scope APIHistoryScope, opts
 	if err != nil {
 		return APIHistoryAttempt{}, err
 	}
+	if opts.RequireComplete && (opts.Full || opts.RestoreRequested || scope.Since != "") {
+		return APIHistoryAttempt{}, errors.New("incremental history cannot use Full, Since or restore permission")
+	}
 	if _, err := apiHistoryTimestamp(horizon); err != nil {
 		return APIHistoryAttempt{}, err
 	}
@@ -100,6 +106,11 @@ func (s *Store) BeginAPIHistory(ctx context.Context, scope APIHistoryScope, opts
 	state, err := loadAPIHistory(ctx, queries, scope.SourceName, key)
 	if err != nil {
 		return APIHistoryAttempt{}, err
+	}
+	// Keep admission with bound selection so a missing checkpoint cannot turn
+	// a scheduled incremental run into a first-time or pending full crawl.
+	if opts.RequireComplete && (!state.Complete || (state.Pending != nil && *state.Pending == "")) {
+		return APIHistoryAttempt{}, ErrAPIHistoryUnqualified
 	}
 	oldest := ""
 	switch {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	since := fs.String("since", "", "oldest slack ts or RFC3339 timestamp")
 	full := fs.Bool("full", false, "full sync")
 	latestOnly := fs.Bool("latest-only", false, "skip first-time historical backfills")
+	incremental := fs.Bool("incremental", false, "require local completed API history and resume only qualified intervals")
 	limit := fs.Int("limit", 0, "maximum provider messages (validation imports only)")
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
@@ -57,6 +59,22 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	if err != nil {
 		return err
 	}
+	if *incremental {
+		if resolvedSource != syncer.SourceAPI || strings.TrimSpace(*workspaceID) == "" || len(csv(*channels)) == 0 ||
+			*full || flagWasSet(fs, "since") || *latestOnly || *autoJoin || *withMedia || flagWasSet(fs, "limit") {
+			return errors.New("--incremental requires API source, explicit --workspace and --channels, --auto-join=false and --with-media=false, without --full, --since, --latest-only or --limit")
+		}
+		if cfg.ShareEnabled() && cfg.Share.AutoUpdate {
+			return errors.New("--incremental requires automatic Git-share updates to be disabled")
+		}
+		info, err := os.Stat(cfg.DBPath)
+		if err != nil {
+			return fmt.Errorf("--incremental requires an existing native archive: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			return errors.New("--incremental requires an existing nonempty native archive file")
+		}
+	}
 	runOptions := syncer.Options{
 		Source:       resolvedSource,
 		WorkspaceID:  resolvedWorkspaceID,
@@ -69,6 +87,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 		Since:       normalizedSince,
 		Full:        *full,
 		LatestOnly:  *latestOnly,
+		Incremental: *incremental,
 		Limit:       *limit,
 		Concurrency: *concurrency,
 		AutoJoin:    boolPtr(*autoJoin),

@@ -87,6 +87,11 @@ work across restarts and token changes. Explicit `--since` and Tail repair leave
 that backlog alone. See [Retained API threads](docs/configuration.md#retained-api-threads)
 for scope and partial-coverage behavior.
 
+For recurring API acquisition, `sync --incremental` requires explicit workspace
+and channels, disabled joining/media and no automatic Git-share imports. It
+refuses missing local history checkpoints instead of starting a backfill; see
+[qualified incremental acquisition](docs/configuration.md#archive-schema-upgrades).
+
 External provider v1 sync rejects `[sync].include_dms = false` before reading its
 checkpoint or launching the adapter. Use API sync or a supported Slack workspace
 JSON export when excluding DMs. Omitted/true retain provider intake behavior.

@@ -107,6 +107,40 @@ local completion checkpoints; interrupted scans retain their pending interval.
 `--latest-only` selects previously observed channels; it does not bound the
 history interval or request count.
 
+For a scheduled acquisition that must not start a historical scan, use the
+explicit incremental mode against an already qualified local archive:
+
+```sh
+slacrawl --config /path/to/config.toml sync --source bot \
+  --workspace T01234567 --channels C01234567 \
+  --incremental --auto-join=false --with-media=false
+```
+
+`--incremental` requires an API source and explicit workspace/channel selection.
+It rejects `--full`, `--since`, `--latest-only`, `--limit`, channel joining,
+media downloads and enabled automatic Git-share imports. Existing token
+selection still determines the primary API source; changing from bot to user
+requires that source's own local checkpoints.
+
+Each selected history attempt must have a locally completed ordinary checkpoint.
+Missing, imported or incomplete initial history cannot start a backfill. An
+unbounded pending Full attempt is also refused. Admission is checked in the
+same native transaction that chooses the request interval. A qualified retry
+keeps its pending interval, while a new interval uses the existing one-hour
+overlap from the last completed horizon. Completed pages survive failure; only
+complete history/reply traversal advances the checkpoint. Empty successful
+intervals advance their requested horizon too.
+
+This mode does not manufacture coverage from retained messages, initialize an
+archive, upgrade an installed collector, install a schedule or claim a fresh
+workspace. Normal writable-open schema behavior still applies, so qualify the
+native schema, exact configuration and sole acquisition owner before use.
+Refused history keeps its checkpoint unchanged, although preceding successful
+metadata or other channel writes can remain. Channel catalogs, users and the
+existing retained-thread backlog are still refreshed; this is not a constant
+request-count promise or full edit/deletion event feed. Do not replace a missing
+checkpoint with a rolling `--since` window or enable another collector.
+
 API history acquires its current lower bound, upper request horizon and a fresh
 attempt generation in one archive transaction. The exact primary source,
 workspace, channel and normalized `--since` identify the scope. A newer attempt

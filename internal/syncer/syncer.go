@@ -58,6 +58,7 @@ type Options struct {
 	Since           string
 	Full            bool
 	LatestOnly      bool
+	Incremental     bool
 	Limit           int
 	Concurrency     int
 	AutoJoin        *bool
@@ -82,7 +83,7 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 	apiOptions := slackapi.SyncOptions{
 		WorkspaceID: opts.WorkspaceID, Channels: opts.Channels,
 		ExcludeChannels: opts.ExcludeChannels, Since: opts.Since,
-		Full: opts.Full, LatestOnly: opts.LatestOnly,
+		Full: opts.Full, LatestOnly: opts.LatestOnly, Incremental: opts.Incremental,
 		Concurrency: opts.Concurrency, AutoJoin: opts.AutoJoin,
 	}
 

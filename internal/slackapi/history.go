@@ -664,7 +664,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 }
 
 func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions) ([]slack.Channel, store.APIHistoryOptions, error) {
-	options := store.APIHistoryOptions{Full: opts.Full, RestoreRequested: !opts.enforceRetention && (opts.Since != "" || opts.Full)}
+	options := store.APIHistoryOptions{Full: opts.Full, RestoreRequested: !opts.enforceRetention && (opts.Since != "" || opts.Full), RequireComplete: opts.Incremental}
 	if opts.Since != "" || opts.Full || !opts.LatestOnly {
 		return channels, options, nil
 	}
