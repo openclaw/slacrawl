@@ -129,6 +129,8 @@ slacrawl --json status
 
 Use `--format text`, `--format json`, or `--format log` on commands that support structured output. Color turns off when stdout is not a TTY; `--no-color` and `NO_COLOR=1` force plain output.
 
+`metadata` also accepts `--format` after the command, such as `slacrawl metadata --format=json`. Its `--json` flag takes precedence over `--format`.
+
 Schema 9 retains a private, key-only native change journal and exposes its generation
 and sequence anchors in `status --json`. This is the foundation for later
 incremental delivery; no delivery worker or journal compaction is enabled. See
