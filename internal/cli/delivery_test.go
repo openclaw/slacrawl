@@ -258,7 +258,7 @@ func TestDeliveryCLIScopeIsExplicitBoundedAndStrict(t *testing.T) {
 }
 
 func TestDeliveryCLIHelpAndFormats(t *testing.T) {
-	for _, command := range []string{"init", "stage-seed", "stage-changes", "deliver"} {
+	for _, command := range []string{"init", "stage-seed", "stage-changes", "deliver", "cycle"} {
 		var output bytes.Buffer
 		app := &App{Stdout: &output, Stderr: &output}
 		require.NoError(t, app.Run(context.Background(), []string{"delivery", command, "--help"}))

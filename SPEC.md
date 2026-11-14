@@ -438,8 +438,8 @@ receiver registration, listener, collector or scheduler.
 
 ### Operator delivery commands
 
-`delivery init`, `delivery stage-seed`, `delivery stage-changes` and
-`delivery deliver` route before
+`delivery init`, `delivery stage-seed`, `delivery stage-changes`,
+`delivery deliver` and `delivery cycle` route before
 personal config discovery, release notifications and automatic archive opening.
 They reject `--config`, including an explicitly empty value. There is no default
 workspace, channel enumeration, source synchronization, schema migration,
@@ -471,6 +471,18 @@ absolute regular file; source ownership must satisfy capture's stable-path rule.
   variable `CRAWL_REMOTE_TOKEN`; no Slack/MCP token fallback, argument containing
   the token value, credential persistence or new config section exists.
 
+- `cycle --db PATH --scope PATH --outbox PATH --max-events N
+  --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D
+  [--token-env NAME]` resumes persisted requests, captures one bounded native
+  interval from the latest completed baseline, then delivers it. All phases
+  share one deadline; each drain allows at most `max-parts` requests. A failed
+  or part-limited resume stops before opening the native archive or scope file.
+  A pending seed may finish, but the cycle never creates or stages a new seed.
+  An idle unqualified outbox fails capture rather than initializing itself.
+  Scope/admission checks remain those of `stage-changes`. Unchanged H produces
+  no capture; advancing empty checkpoints still require delivery. Use one
+  external source/outbox lock; this command installs no schedule.
+
 Existing outboxes use `OpenCurrentOutbox`: older schemas are refused during
 read-only recognition, before writable opening. The library's existing
 `OpenOutbox` upgrade contract is unchanged; upgrades require a separate explicit
@@ -500,6 +512,12 @@ receiver setup, spelling the wire anchor as
 rows, paths, full admission facts and credentials. Initialization/staging is not
 baseline qualification. Only the recorded final receipt qualifies it; even that
 does not establish source freshness or complete acquisition.
+
+Cycle output includes a `phase` field (`resume`, `capture`, `deliver`) and one
+record per attempted phase. A failed capture reports `status=failed`; a failed
+send retains the existing delivery status and durable receipt count. Successful
+earlier phases remain committed if a later phase fails. Bounds are per phase,
+while the positive timeout bounds the entire cycle, including capture.
 
 A failed delivery reports bounded progress and an error while retaining exact
 pending bytes. A held seed reports `ambiguous_keys` and fails without clearing

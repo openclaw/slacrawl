@@ -44,6 +44,7 @@ type deliveryAnchor struct {
 }
 type deliveryOutput struct {
 	Status           string          `json:"status"`
+	Phase            string          `json:"phase,omitempty"`
 	BaselineState    string          `json:"baseline_state,omitempty"`
 	CaptureID        string          `json:"capture_id,omitempty"`
 	BaselineHold     string          `json:"baseline_hold,omitempty"`
@@ -56,12 +57,12 @@ type deliveryOutput struct {
 
 func (a *App) runDelivery(ctx context.Context, args []string, format OutputFormat) error {
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
-		_, err := io.WriteString(a.Stdout, "Usage: slacrawl delivery <init|stage-seed|stage-changes|deliver> [flags]\n\n  init       --db PATH --scope PATH --outbox NEW_PATH --origin URL --archive ID --binding ID\n  stage-seed --db PATH --scope PATH --outbox PATH --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D\n  stage-changes --db PATH --scope PATH --outbox PATH --max-events N --max-native-bytes N --max-encoded-bytes N --timeout D\n  deliver    --outbox PATH --max-parts N --timeout D [--token-env NAME]\n\nExplicit private delivery only. No config discovery, source sync or schema upgrade.\n")
+		_, err := io.WriteString(a.Stdout, "Usage: slacrawl delivery <init|stage-seed|stage-changes|deliver|cycle> [flags]\n\n  init       --db PATH --scope PATH --outbox NEW_PATH --origin URL --archive ID --binding ID\n  stage-seed --db PATH --scope PATH --outbox PATH --max-rows N --max-native-bytes N --max-encoded-bytes N --timeout D\n  stage-changes --db PATH --scope PATH --outbox PATH --max-events N --max-native-bytes N --max-encoded-bytes N --timeout D\n  deliver    --outbox PATH --max-parts N --timeout D [--token-env NAME]\n  cycle      --db PATH --scope PATH --outbox PATH --max-events N --max-native-bytes N --max-encoded-bytes N --max-parts N --timeout D [--token-env NAME]\n\nExplicit private delivery only. No config discovery, source sync or schema upgrade.\n")
 		return err
 	}
 	command := args[0]
-	if command != "init" && command != "stage-seed" && command != "stage-changes" && command != "deliver" {
-		return errors.New("unknown delivery subcommand: use init, stage-seed, stage-changes, or deliver")
+	if command != "init" && command != "stage-seed" && command != "stage-changes" && command != "deliver" && command != "cycle" {
+		return errors.New("unknown delivery subcommand: use init, stage-seed, stage-changes, deliver, or cycle")
 	}
 	fs := flag.NewFlagSet("delivery "+command, flag.ContinueOnError)
 	outboxPath := fs.String("outbox", "", "absolute private outbox path (required)")
@@ -70,7 +71,7 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 	var db, scopePath, origin, archive, binding, tokenEnv string
 	var maxRows, maxNativeBytes, maxEncodedBytes int64
 	var maxParts, maxEvents int
-	staging := command == "stage-seed" || command == "stage-changes"
+	staging := command == "stage-seed" || command == "stage-changes" || command == "cycle"
 	var timeout time.Duration
 	if command != "deliver" {
 		fs.StringVar(&db, "db", "", "absolute existing native archive (required)")
@@ -81,7 +82,7 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 		fs.StringVar(&origin, "origin", "", "registered service origin (required)")
 		fs.StringVar(&archive, "archive", "", "registered archive ID (required)")
 		fs.StringVar(&binding, "binding", "", "registered binding ID (required)")
-	case "stage-seed", "stage-changes":
+	case "stage-seed", "stage-changes", "cycle":
 		if command == "stage-seed" {
 			fs.Int64Var(&maxRows, "max-rows", 0, "positive total native row limit (required)")
 		} else {
@@ -89,7 +90,8 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 		}
 		fs.Int64Var(&maxNativeBytes, "max-native-bytes", 0, "positive native scalar/metadata byte limit, not RSS (required)")
 		fs.Int64Var(&maxEncodedBytes, "max-encoded-bytes", 0, "positive total encoded request byte limit (required)")
-	case "deliver":
+	}
+	if command == "deliver" || command == "cycle" {
 		fs.IntVar(&maxParts, "max-parts", 0, "request limit, 1..64 (required)")
 		fs.StringVar(&tokenEnv, "token-env", remote.DefaultTokenEnv, "environment variable holding the service token")
 	}
@@ -115,10 +117,10 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 	if command == "stage-seed" {
 		maxPartsForStage = remote.MaxSeedChunks + 2
 	}
-	if staging && (maxNativeBytes <= 0 || maxEncodedBytes <= 0 || maxEncodedBytes > int64(remote.MaxChangeBytes)*int64(maxPartsForStage) || (command == "stage-seed" && maxRows <= 0) || (command == "stage-changes" && maxEvents <= 0)) {
+	if staging && (maxNativeBytes <= 0 || maxEncodedBytes <= 0 || maxEncodedBytes > int64(remote.MaxChangeBytes)*int64(maxPartsForStage) || (command == "stage-seed" && maxRows <= 0) || ((command == "stage-changes" || command == "cycle") && maxEvents <= 0)) {
 		return errors.New("staging requires positive event/row, native-byte and encoded-byte bounds within the documented per-command maximum")
 	}
-	if command == "deliver" && (maxParts < 1 || maxParts > remote.MaxChangeParts || strings.TrimSpace(tokenEnv) == "") {
+	if (command == "deliver" || command == "cycle") && (maxParts < 1 || maxParts > remote.MaxChangeParts || strings.TrimSpace(tokenEnv) == "") {
 		return errors.New("deliver requires --max-parts 1..64 and a nonempty token environment variable name")
 	}
 	format, err := resolveOutputFormat(*formatFlag, *jsonOut)
@@ -133,14 +135,11 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	var scope store.NativeCaptureScope
-	if command != "deliver" {
-		scope, err = readDeliveryScope(ctx, scopePath)
+	if command == "init" {
+		scope, err := readDeliveryScope(ctx, scopePath)
 		if err != nil {
 			return deliveryCommandError("read scope", err)
 		}
-	}
-	if command == "init" {
 		file, err := store.NativeArchiveFileIdentity(db)
 		if err != nil {
 			return deliveryCommandError("identify native archive", err)
@@ -154,84 +153,140 @@ func (a *App) runDelivery(ctx context.Context, args []string, format OutputForma
 		}
 		return a.writeOutput("Delivery", deliveryOutput{Status: "initialized", BaselineState: remotedelivery.BaselineUnqualified}, format, false)
 	}
-	outbox, err := remotedelivery.OpenCurrentOutbox(ctx, *outboxPath)
+	request := deliveryRequest{
+		outbox: *outboxPath, db: db, scopePath: scopePath, tokenEnv: tokenEnv,
+		seed:     store.NativeSeedLimits{MaxRows: maxRows, MaxBytes: maxNativeBytes},
+		capture:  store.NativeCaptureLimits{MaxEvents: maxEvents, MaxBytes: maxNativeBytes},
+		stage:    remotedelivery.StageLimits{MaxEncodedBytes: maxEncodedBytes},
+		delivery: remotedelivery.DeliveryLimits{MaxParts: maxParts, MaxDuration: timeout},
+	}
+	if command != "cycle" {
+		output, err := a.executeDelivery(ctx, command, request)
+		if output.Status != "" {
+			if writeErr := a.writeOutput("Delivery", output, format, false); writeErr != nil {
+				return writeErr
+			}
+		}
+		return err
+	}
+	for _, phase := range []string{"resume", "capture", "deliver"} {
+		operation := "deliver"
+		if phase == "capture" {
+			operation = "stage-changes"
+		}
+		var output deliveryOutput
+		err := ctx.Err()
+		if err == nil {
+			output, err = a.executeDelivery(ctx, operation, request)
+		}
+		if output.Status == "" {
+			output.Status = "failed"
+		}
+		output.Phase = phase
+		if writeErr := a.writeOutput("Delivery", output, format, false); writeErr != nil {
+			return writeErr
+		}
+		if err != nil {
+			return err
+		}
+		// The part limit is successful bounded progress, not permission to capture.
+		if output.Status == string(remotedelivery.DeliveryPartLimit) {
+			return nil
+		}
+	}
+	return nil
+}
+
+type deliveryRequest struct {
+	outbox, db, scopePath, tokenEnv string
+	seed                            store.NativeSeedLimits
+	capture                         store.NativeCaptureLimits
+	stage                           remotedelivery.StageLimits
+	delivery                        remotedelivery.DeliveryLimits
+}
+
+func (a *App) executeDelivery(ctx context.Context, command string, request deliveryRequest) (deliveryOutput, error) {
+	staging := command == "stage-seed" || command == "stage-changes"
+	var scope store.NativeCaptureScope
+	if staging {
+		var err error
+		scope, err = readDeliveryScope(ctx, request.scopePath)
+		if err != nil {
+			return deliveryOutput{}, deliveryCommandError("read scope", err)
+		}
+	}
+	outbox, err := remotedelivery.OpenCurrentOutbox(ctx, request.outbox)
 	if err != nil {
-		return deliveryCommandError("open current-schema outbox; upgrades require a separate explicit operation", err)
+		return deliveryOutput{}, deliveryCommandError("open current-schema outbox; upgrades require a separate explicit operation", err)
 	}
 	defer outbox.Close()
 	state, err := outbox.State(ctx)
 	if err != nil {
-		return deliveryCommandError("read outbox state", err)
+		return deliveryOutput{}, deliveryCommandError("read outbox state", err)
 	}
 	output := deliveryOutput{}
 	if staging {
 		if state.PendingCaptureID != "" {
-			return remotedelivery.ErrPendingCapture
+			return deliveryOutput{}, remotedelivery.ErrPendingCapture
 		}
 		digest, err := store.NativeCaptureScopeSHA256(scope)
 		if err != nil {
-			return deliveryCommandError("validate scope", err)
+			return deliveryOutput{}, deliveryCommandError("validate scope", err)
 		}
 		requiredBaseline := remotedelivery.BaselineUnqualified
 		if command == "stage-changes" {
 			requiredBaseline = remotedelivery.BaselineQualified
 		}
 		if state.BaselineState != requiredBaseline || digest != state.Baseline.ScopeSHA256 {
-			return remotedelivery.ErrOutboxBaseline
+			return deliveryOutput{}, remotedelivery.ErrOutboxBaseline
 		}
 		var through store.NativeCursor
 		output.Status = "staged"
 		if command == "stage-seed" {
-			seed, err := store.CaptureNativeSeed(ctx, db, store.NativeSeedRequest{File: state.Baseline.File, Scope: scope, ScopeSHA256: digest, Limits: store.NativeSeedLimits{MaxRows: maxRows, MaxBytes: maxNativeBytes}})
+			seed, err := store.CaptureNativeSeed(ctx, request.db, store.NativeSeedRequest{File: state.Baseline.File, Scope: scope, ScopeSHA256: digest, Limits: request.seed})
 			if err != nil {
-				return deliveryCommandError("capture native seed", err)
+				return deliveryOutput{}, deliveryCommandError("capture native seed", err)
 			}
-			output.CaptureID, err = outbox.StageSeed(ctx, seed, remotedelivery.StageLimits{MaxEncodedBytes: maxEncodedBytes})
+			output.CaptureID, err = outbox.StageSeed(ctx, seed, request.stage)
 			if err != nil {
-				return deliveryCommandError("stage seed; reconcile retained outbox before retry", err)
+				return deliveryOutput{}, deliveryCommandError("stage seed; reconcile retained outbox before retry", err)
 			}
 			through = seed.Through
 			for _, table := range seed.Tables {
 				output.Rows += int64(len(table.Rows))
 			}
 		} else {
-			capture, err := store.CaptureNativeChanges(ctx, db, store.NativeCaptureRequest{Scope: scope, ScopeSHA256: digest, Baseline: state.Baseline, Limits: store.NativeCaptureLimits{MaxEvents: maxEvents, MaxBytes: maxNativeBytes}})
+			capture, err := store.CaptureNativeChanges(ctx, request.db, store.NativeCaptureRequest{Scope: scope, ScopeSHA256: digest, Baseline: state.Baseline, Limits: request.capture})
 			if err != nil {
-				return deliveryCommandError("capture native changes", err)
+				return deliveryOutput{}, deliveryCommandError("capture native changes", err)
 			}
-			output.CaptureID, err = outbox.Stage(ctx, capture, remotedelivery.StageLimits{MaxEncodedBytes: maxEncodedBytes})
+			output.CaptureID, err = outbox.Stage(ctx, capture, request.stage)
 			if errors.Is(err, remotedelivery.ErrNoNativeProgress) {
 				output.Status = "no_native_progress"
 			} else if err != nil {
-				return deliveryCommandError("stage changes; reconcile retained outbox before retry", err)
+				return deliveryOutput{}, deliveryCommandError("stage changes; reconcile retained outbox before retry", err)
 			}
 			through, output.EventsRead, output.Rows, output.Removals = capture.Through, capture.EventsRead, int64(len(capture.Rows)), len(capture.Removals)
 		}
 		output.NativeAnchor = &deliveryAnchor{through.GenerationID, strconv.FormatInt(through.Sequence, 10), through.EntryID}
 	} else {
-		result, err := outbox.DeliverPending(ctx, remotedelivery.DeliveryOptions{HTTPClient: a.httpClient, TokenProvider: remote.EnvTokenProvider{Name: tokenEnv}}, remotedelivery.DeliveryLimits{MaxParts: maxParts, MaxDuration: timeout})
+		result, err := outbox.DeliverPending(ctx, remotedelivery.DeliveryOptions{HTTPClient: a.httpClient, TokenProvider: remote.EnvTokenProvider{Name: request.tokenEnv}}, request.delivery)
 		output.Status, output.CaptureID, output.ReceiptsRecorded = string(result.Status), result.CaptureID, result.ReceiptsRecorded
 		if err != nil {
 			// Partial receipts remain durable. Do not present the pre-call baseline as
 			// current after an uncertain effect; report only the driver's bounded result.
-			if writeErr := a.writeOutput("Delivery", output, format, false); writeErr != nil {
-				return writeErr
-			}
-			return deliveryCommandError("deliver pending requests", err)
+			return output, deliveryCommandError("deliver pending requests", err)
 		}
 	}
 	state, err = outbox.State(ctx)
 	if err != nil {
-		return deliveryCommandError("read resulting outbox state; retained state owns recovery", err)
+		return deliveryOutput{}, deliveryCommandError("read resulting outbox state; retained state owns recovery", err)
 	}
 	output.BaselineState, output.BaselineHold = state.BaselineState, state.BaselineHold
-	if err := a.writeOutput("Delivery", output, format, false); err != nil {
-		return err
-	}
 	if state.BaselineHold != "" {
-		return remotedelivery.ErrSeedBaselineHeld
+		return output, remotedelivery.ErrSeedBaselineHeld
 	}
-	return nil
+	return output, nil
 }
 
 func readDeliveryScope(ctx context.Context, path string) (store.NativeCaptureScope, error) {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add bounded `delivery cycle` to resume saved requests, capture one incremental
+  native interval and deliver it under one deadline, with phase results and
+  retained partial progress. No collector or schedule is activated.
+
 - Add bounded `delivery stage-changes` from the latest receipt-qualified native
   baseline, preserving no-progress no-ops and empty projected progress without
   syncing, migrating or advancing cursors before delivery receipts.
