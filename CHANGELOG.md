@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept `metadata --format=json` and `metadata --format json`, preserving `--json` precedence and format validation. Thanks @SebTardif.
+- Build and test with Go 1.27.4 to fix GO-2026-6859 in net/http, including the pinned Docker build image; retain the Go 1.27.0 minimum.
+
 - Add inactive per-source Linux acquisition timers using qualified incremental
   API sync, explicit scope, separate provider credentials and persistent locking.
   Installation, source admission and activation remain separate steps.
