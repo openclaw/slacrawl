@@ -271,7 +271,10 @@ func TestSeedOutboxProcessExit(t *testing.T) {
 
 func TestSeedOutboxCrashReplayAndFinalRollback(t *testing.T) {
 	peer, server := newSeedPeer(t)
-	st, source, request, ctx := projectionFixture(t)
+	st, source, request, _ := projectionFixture(t)
+	// Durable inserts, subprocess exits, and replay need more than the small fixture budget under -race.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	writeCaptureMessages(t, st, ctx, 501)
 	sr := seedRequest(request)
 	o, path := seedOutbox(t, ctx, server.URL, sr)
