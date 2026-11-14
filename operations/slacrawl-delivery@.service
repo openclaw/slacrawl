@@ -1,0 +1,25 @@
+[Unit]
+Description=Deliver qualified slacrawl source %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=slacrawl
+Group=slacrawl
+WorkingDirectory=/var/lib/slacrawl/%i
+EnvironmentFile=/etc/slacrawl/delivery-%i.env
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/slacrawl/%i/delivery.lock /usr/local/bin/slacrawl delivery cycle --db /var/lib/slacrawl/%i/native.sqlite --scope /var/lib/slacrawl/%i/scope.json --outbox /var/lib/slacrawl/%i/outbox.sqlite --max-events ${SLACRAWL_MAX_EVENTS} --max-native-bytes ${SLACRAWL_MAX_NATIVE_BYTES} --max-encoded-bytes ${SLACRAWL_MAX_ENCODED_BYTES} --max-parts ${SLACRAWL_MAX_PARTS} --token-env SLACRAWL_PUBLISHER_TOKEN --timeout 90s --json
+TimeoutStartSec=120s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/slacrawl/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal

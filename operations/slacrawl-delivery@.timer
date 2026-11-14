@@ -1,0 +1,12 @@
+[Unit]
+Description=Deliver qualified slacrawl source %i every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=15s
+AccuracySec=1s
+Unit=slacrawl-delivery@%i.service
+
+[Install]
+WantedBy=timers.target

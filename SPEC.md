@@ -538,6 +538,44 @@ bounds or automatically reseeds. Existing retained journal data can be delivered
 consistently even when acquisition is old; no progress does not prove freshness.
 No force/reset/rebind or upstream acquisition command is provided.
 
+### Scheduled delivery
+
+`operations/slacrawl-delivery@.service` and `.timer` are inactive Linux templates.
+They do not install themselves or initialize, migrate, collect or change scope.
+Before installation, qualify the native source and outbox, delivery credentials,
+resource limits and restart/recovery behavior on the intended host. Retain the
+existing collector until a separately approved cutover.
+
+An instance uses the `slacrawl` user/group and `/var/lib/slacrawl/<instance>` for
+`native.sqlite`, `outbox.sqlite` and a persistent `delivery.lock`. Keep the
+qualified `scope.json` there too, readable only by the service owner.
+The root-owned mode-0600 `/etc/slacrawl/delivery-<instance>.env` supplies
+`SLACRAWL_PUBLISHER_TOKEN` and these measured positive limits:
+
+- `SLACRAWL_MAX_EVENTS` for `--max-events`.
+- `SLACRAWL_MAX_NATIVE_BYTES` for `--max-native-bytes`.
+- `SLACRAWL_MAX_ENCODED_BYTES` for `--max-encoded-bytes`.
+- `SLACRAWL_MAX_PARTS` for `--max-parts`.
+
+Missing, invalid or excessive limits fail CLI admission; no automatic limit
+increase occurs. The token is read by name, never expanded into command-line
+arguments. Keep provider acquisition credentials separate from this publisher
+credential. Slack acquisition and its authorized membership/scope remain with
+the existing collector; this timer does not contact the Slack API.
+
+The timer runs two minutes after boot, then five minutes after completion with
+up to15seconds jitter. The service has a90-second CLI deadline,120-second
+process timeout,512MiB memory cap and one-core CPU quota. Its persistent flock
+also covers manual cycles: operators must use the same lock. Exit75 reports
+contention; do not delete the lock file or configure competing instances for
+one source/outbox. No restart loop is configured.
+
+Validate exact units with `systemd-analyze verify --man=no` before installation.
+Installing/enabling an instance requires separate source/credential/capacity
+admission. Observe completed source/service cursors and journal results after
+activation; timer firing alone does not prove freshness. Retain failed outboxes
+and reconcile through their existing owners rather than deleting/recreating them.
+
 ### Explicit pending delivery
 
 `Outbox.DeliverPending` connects an already registered outbox to the unchanged

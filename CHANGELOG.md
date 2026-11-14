@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add inactive per-source Linux delivery service/timer templates with explicit
+  measured limits, persistent locking and publisher-only credentials.
+  Installation and activation remain separate operator steps.
+
 - Add bounded `delivery cycle` to resume saved requests, capture one incremental
   native interval and deliver it under one deadline, with phase results and
   retained partial progress. No collector or schedule is activated.

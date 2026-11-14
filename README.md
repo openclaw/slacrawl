@@ -149,7 +149,9 @@ Incremental staging uses the latest receipt-qualified baseline; unchanged H is
 a no-op, while excluded changes still require an empty part and receipt. The
 cycle resumes pending requests before capture and stops on failed or incomplete
 resume. Use an external source/outbox lock when scheduling; the command itself
-does not install or enable a timer.
+does not install or enable a timer. Inactive Linux units under
+`operations/` require separate source, limit and credential qualification before
+installation.
 
 ## Keep it current
 
