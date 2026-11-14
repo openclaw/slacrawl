@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run the aggregate test-status CI job on a single-CPU Ubuntu container with a two-minute limit, preserving platform failure propagation.
+
 - Accept `metadata --format=json` and `metadata --format json`, preserving `--json` precedence and format validation. Thanks @SebTardif.
 - Build and test with Go 1.27.4 to fix GO-2026-6859 in net/http, including the pinned Docker build image; retain the Go 1.27.0 minimum.
 
