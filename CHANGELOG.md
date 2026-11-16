@@ -2,29 +2,36 @@
 
 ## Unreleased
 
-- Keep platform-test Go build caches separate from other CI jobs so Linux race build outputs can be retained.
+## 0.11.0 - 2026-11-15
 
-- Run the aggregate test-status CI job on a single-CPU Ubuntu container with a two-minute limit, preserving platform failure propagation.
+**Highlights:** Add bounded, resumable archive delivery and incremental API sync, fetch bot-only thread replies, and fix the Go net/http security vulnerability.
 
-- Accept `metadata --format=json` and `metadata --format json`, preserving `--json` precedence and format validation. Thanks @SebTardif.
-- Build and test with Go 1.27.4 to fix GO-2026-6859 in net/http, including the pinned Docker build image; retain the Go 1.27.0 minimum.
-
-- Add inactive per-source Linux acquisition timers using qualified incremental
-  API sync, explicit scope, separate provider credentials and persistent locking.
-  Installation, source admission and activation remain separate steps.
+- Add bounded `delivery cycle` to resume saved requests, capture one incremental
+  native interval and deliver it under one deadline, with phase results and
+  retained partial progress. No collector or schedule is activated.
 
 - Add explicit API `sync --incremental` for qualified local history. Missing
   checkpoints and unbounded pending backfills are refused; failed incremental
   intervals resume without advancing coverage. Scheduled callers must select
   a workspace/channels and disable sharing, joining and media downloads.
 
+- Fetch channel thread replies during bot-only API sync, preserving bot provenance, retained retry work and partial workspace coverage; configured user credentials keep priority without bot fallback.
+
+- Accept `metadata --format=json` and `metadata --format json`, preserving `--json` precedence and format validation. Thanks @SebTardif.
+
+- Build and test with Go 1.27.4 to fix GO-2026-6859 in net/http, including the pinned Docker build image; retain the Go 1.27.0 minimum.
+
+- Keep platform-test Go build caches separate from other CI jobs so Linux race build outputs can be retained.
+
+- Run the aggregate test-status CI job on a single-CPU Ubuntu container with a two-minute limit, preserving platform failure propagation.
+
+- Add inactive per-source Linux acquisition timers using qualified incremental
+  API sync, explicit scope, separate provider credentials and persistent locking.
+  Installation, source admission and activation remain separate steps.
+
 - Add inactive per-source Linux delivery service/timer templates with explicit
   measured limits, persistent locking and publisher-only credentials.
   Installation and activation remain separate operator steps.
-
-- Add bounded `delivery cycle` to resume saved requests, capture one incremental
-  native interval and deliver it under one deadline, with phase results and
-  retained partial progress. No collector or schedule is activated.
 
 - Add bounded `delivery stage-changes` from the latest receipt-qualified native
   baseline, preserving no-progress no-ops and empty projected progress without
@@ -60,9 +67,8 @@
 
 - Record transactional native change keys and removals in SQLite schema 9, expose journal generation/sequence metadata in status JSON, and invalidate delivery baselines after repair or exact share restore. Delivery workers and journal compaction remain deferred.
 
-- Fetch channel thread replies during bot-only API sync, preserving bot provenance, retained retry work and partial workspace coverage; configured user credentials keep priority without bot fallback.
-
 - Update the Slack SDK to 0.35.0 with an offline upgrade regression that preserves existing archive rows, raw history, search results and configuration; an explicitly false `display_as_bot` field can add one serialization-only history event on the first sync. Thanks @dependabot.
+
 - Run TruffleHog 3.99.8 for secret scanning, matching the pinned action version. Thanks @dependabot.
 
 ## 0.10.6 - 2026-11-06
