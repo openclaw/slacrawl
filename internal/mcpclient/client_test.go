@@ -118,7 +118,9 @@ func TestStdioClientIgnoresLateCanceledResponse(t *testing.T) {
 	_, err = client.CallToolText(ctx, "slow", nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
-	text, err := client.CallToolText(context.Background(), "fast", nil)
+	fastCtx, fastCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer fastCancel()
+	text, err := client.CallToolText(fastCtx, "fast", nil)
 	require.NoError(t, err)
 	require.Equal(t, "ok", text)
 }
@@ -203,6 +205,7 @@ func TestMCPStdioHelperProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	encoder := json.NewEncoder(os.Stdout)
+	var lateID json.RawMessage
 	for scanner.Scan() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -229,9 +232,14 @@ func TestMCPStdioHelperProcess(t *testing.T) {
 				require.NoError(t, err)
 				text = strings.Repeat("x", 128<<10)
 			case "slow":
-				time.Sleep(75 * time.Millisecond)
-				text = "late"
+				lateID = request.ID
+				continue
 			case "fast":
+				// The next request arrives only after the slow call has canceled.
+				require.NotEmpty(t, lateID)
+				lateResult := map[string]any{"content": []map[string]any{{"type": "text", "text": "late"}}}
+				require.NoError(t, encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": lateID, "result": lateResult}))
+				lateID = nil
 				text = "ok"
 			case "env":
 				text = fmt.Sprintf(`{"allowed":%q,"secret":%q}`, os.Getenv("SLACRAWL_ALLOWED_ENV"), os.Getenv("SLACRAWL_FAKE_SECRET"))
