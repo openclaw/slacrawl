@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep platform-test Go build caches separate from other CI jobs so Linux race build outputs can be retained.
+
 - Run the aggregate test-status CI job on a single-CPU Ubuntu container with a two-minute limit, preserving platform failure propagation.
 
 - Accept `metadata --format=json` and `metadata --format json`, preserving `--json` precedence and format validation. Thanks @SebTardif.

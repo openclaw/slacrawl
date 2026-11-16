@@ -64,6 +64,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
+          # Keep race build outputs separate from the other Linux jobs.
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/ci.yml
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
