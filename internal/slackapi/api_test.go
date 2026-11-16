@@ -426,8 +426,10 @@ func TestSyncSkipsChannelsTheBotCannotRead(t *testing.T) {
 }
 
 func TestSyncUsesConfiguredConcurrencyForChannelHistory(t *testing.T) {
-	server := newConcurrentHistorySlackServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	server := newConcurrentHistorySlackServer(t, ctx)
 	defer server.Close()
+	defer cancel()
 
 	client := NewWithOptions(config.Tokens{
 		Bot: "xoxb-test",
@@ -437,7 +439,7 @@ func TestSyncUsesConfiguredConcurrencyForChannelHistory(t *testing.T) {
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()
 
-	err := client.Sync(context.Background(), st, SyncOptions{Concurrency: 2})
+	err := client.Sync(ctx, st, SyncOptions{Concurrency: 2})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, server.maxConcurrentHistory(), 2)
 
@@ -1218,9 +1220,10 @@ func newReadableThreadSlackServer(t *testing.T) *mockSlackServer {
 	return mock
 }
 
-func newConcurrentHistorySlackServer(t *testing.T) *mockSlackServer {
+func newConcurrentHistorySlackServer(t *testing.T, ctx context.Context) *mockSlackServer {
 	t.Helper()
 	mock := &mockSlackServer{counts: map[string]int{}, lastOld: map[string]string{}}
+	bothHistoryStarted := make(chan struct{})
 	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -1236,14 +1239,25 @@ func newConcurrentHistorySlackServer(t *testing.T) *mockSlackServer {
 			mock.activeHistory++
 			if mock.activeHistory > mock.maxHistory {
 				mock.maxHistory = mock.activeHistory
+				if mock.maxHistory == 2 {
+					close(bothHistoryStarted)
+				}
 			}
 			mock.mu.Unlock()
-			time.Sleep(150 * time.Millisecond)
+			defer func() {
+				mock.mu.Lock()
+				mock.activeHistory--
+				mock.mu.Unlock()
+			}()
+			select {
+			case <-bothHistoryStarted:
+			case <-ctx.Done():
+				return
+			case <-r.Context().Done():
+				return
+			}
 			values := mustFormValues(r)
 			channel := values.Get("channel")
-			mock.mu.Lock()
-			mock.activeHistory--
-			mock.mu.Unlock()
 			//nolint:gosec // Test server echoes controlled query values.
 			_, _ = fmt.Fprintf(w, `{"ok":true,"messages":[{"type":"message","channel":"%s","user":"U123","text":"msg-%s","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":""}}`, channel, channel)
 		case "/users.list":
