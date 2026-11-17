@@ -288,6 +288,9 @@ func (c *Client) postSlackForm(ctx context.Context, token string, method string,
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests && resp.Header.Get("Retry-After") != "" {
 		seconds, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64)
+		if err == nil && (seconds < 0 || seconds > int64((1<<63-1)/time.Second)) {
+			err = errors.New("retry delay is outside the supported duration range")
+		}
 		if err != nil {
 			return nil, &nativeDiagnosticError{method: method, phase: "rate-limit header", cause: err}
 		}
