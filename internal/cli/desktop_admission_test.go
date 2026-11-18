@@ -106,7 +106,7 @@ func TestDesktopSentRetentionAcrossCLIPaths(t *testing.T) {
 	} {
 		for _, setting := range []string{"", "false", "true"} {
 			t.Run(route.name+"/dms="+setting, func(t *testing.T) {
-				cfg, path := desktopDMConfig(t, setting, "false")
+				cfg, path := desktopDMBaseConfig(t, setting, "false")
 				for _, workspace := range []string{"T1", "T2"} {
 					publicID, dmID := "CDRAFTONLY", "CDMONLY"
 					if workspace == "T2" {
@@ -226,7 +226,7 @@ func TestDesktopAdmissionHumanOmissions(t *testing.T) {
 	}
 }
 
-func desktopDMConfig(t *testing.T, setting, drafts string) (config.Config, string) {
+func desktopDMBaseConfig(t *testing.T, setting, drafts string) (config.Config, string) {
 	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is required for desktop fixtures")
@@ -236,6 +236,12 @@ func desktopDMConfig(t *testing.T, setting, drafts string) (config.Config, strin
 		cfg.Sync.IncludeDMs = new(setting == "true")
 	}
 	require.NoError(t, cfg.Save(path))
+	return cfg, path
+}
+
+func desktopDMConfig(t *testing.T, setting, drafts string) (config.Config, string) {
+	t.Helper()
+	cfg, path := desktopDMBaseConfig(t, setting, drafts)
 	for _, workspace := range []string{"T1", "T2"} {
 		publicID, dmID := "CDRAFTONLY", "CDMONLY"
 		if workspace == "T2" {
