@@ -20,6 +20,14 @@ import (
 )
 
 func TestDesktopDMPolicyAcrossCLIPaths(t *testing.T) {
+	// Reuse only serialized bytes; each case still writes its own fixture files.
+	fixture, _ := desktopDMConfig(t, "", "")
+	payloads := make(map[string][]byte, 2)
+	for _, workspace := range []string{"T1", "T2"} {
+		payload, err := os.ReadFile(filepath.Join(fixture.Slack.Desktop.Path, "IndexedDB", "https_app.slack.com_0.indexeddb.blob", workspace))
+		require.NoError(t, err)
+		payloads[workspace] = payload
+	}
 	for _, route := range []struct {
 		name       string
 		args       []string
@@ -34,7 +42,10 @@ func TestDesktopDMPolicyAcrossCLIPaths(t *testing.T) {
 		for _, setting := range []string{"", "false", "true"} {
 			for _, drafts := range []string{"", "false", "true"} {
 				t.Run(fmt.Sprintf("%s/dms=%s/drafts=%s", route.name, setting, drafts), func(t *testing.T) {
-					cfg, path := desktopDMConfig(t, setting, drafts)
+					cfg, path := desktopDMBaseConfig(t, setting, drafts)
+					for _, workspace := range []string{"T1", "T2"} {
+						writeDesktopDMPayload(t, cfg.Slack.Desktop.Path, workspace, payloads[workspace])
+					}
 					server := newCLIFanoutSlackServer(t, map[string]string{"xoxb-draft-one": "T1", "xoxb-draft-two": "T2"})
 					defer server.Close()
 					ctx, cancel := context.WithCancel(context.Background())
@@ -265,6 +276,11 @@ func writeDesktopDMBlob(t *testing.T, root, workspace string, value any) {
 	cmd.Stdin = strings.NewReader(string(body))
 	payload, err := cmd.Output()
 	require.NoError(t, err)
+	writeDesktopDMPayload(t, root, workspace, payload)
+}
+
+func writeDesktopDMPayload(t *testing.T, root, workspace string, payload []byte) {
+	t.Helper()
 	dir := filepath.Join(root, "IndexedDB", "https_app.slack.com_0.indexeddb.blob")
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, workspace), payload, 0o600))
