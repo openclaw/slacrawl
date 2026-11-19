@@ -35,11 +35,15 @@ func outboxFixture(t *testing.T) (*store.Store, string, store.NativeCaptureReque
 
 func writeCaptureMessages(t *testing.T, st *store.Store, ctx context.Context, count int) {
 	t.Helper()
+	writes := make([]store.MessageWrite, 0, count)
 	for i := range count {
 		message := fixtureMessage()
 		message.TS = fmt.Sprintf("1710000000.%06d", i+1)
-		require.NoError(t, st.UpsertMessage(ctx, message, nil))
+		writes = append(writes, store.MessageWrite{Message: message})
 	}
+	result, err := st.ApplyWriteBatch(ctx, store.WriteBatch{Messages: writes})
+	require.NoError(t, err)
+	require.Equal(t, count, result.MessagesWritten)
 }
 
 func readBatch(t *testing.T, part *remotedelivery.PendingPart) remote.ChangeBatch {
