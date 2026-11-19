@@ -20,14 +20,7 @@ import (
 )
 
 func TestDesktopDMPolicyAcrossCLIPaths(t *testing.T) {
-	// Reuse only serialized bytes; each case still writes its own fixture files.
-	fixture, _ := desktopDMConfig(t, "", "")
-	payloads := make(map[string][]byte, 2)
-	for _, workspace := range []string{"T1", "T2"} {
-		payload, err := os.ReadFile(filepath.Join(fixture.Slack.Desktop.Path, "IndexedDB", "https_app.slack.com_0.indexeddb.blob", workspace))
-		require.NoError(t, err)
-		payloads[workspace] = payload
-	}
+	payloads := desktopDMPayloads(t)
 	for _, route := range []struct {
 		name       string
 		args       []string
@@ -42,10 +35,7 @@ func TestDesktopDMPolicyAcrossCLIPaths(t *testing.T) {
 		for _, setting := range []string{"", "false", "true"} {
 			for _, drafts := range []string{"", "false", "true"} {
 				t.Run(fmt.Sprintf("%s/dms=%s/drafts=%s", route.name, setting, drafts), func(t *testing.T) {
-					cfg, path := desktopDMBaseConfig(t, setting, drafts)
-					for _, workspace := range []string{"T1", "T2"} {
-						writeDesktopDMPayload(t, cfg.Slack.Desktop.Path, workspace, payloads[workspace])
-					}
+					cfg, path := desktopDMConfigFromPayloads(t, setting, drafts, payloads)
 					server := newCLIFanoutSlackServer(t, map[string]string{"xoxb-draft-one": "T1", "xoxb-draft-two": "T2"})
 					defer server.Close()
 					ctx, cancel := context.WithCancel(context.Background())
@@ -213,9 +203,10 @@ func TestDesktopSentRetentionAcrossCLIPaths(t *testing.T) {
 }
 
 func TestDesktopAdmissionHumanOmissions(t *testing.T) {
+	payloads := desktopDMPayloads(t)
 	for _, decoder := range []string{"available", "unavailable", "partial"} {
 		t.Run(decoder, func(t *testing.T) {
-			cfg, path := desktopDMConfig(t, "false", "false")
+			cfg, path := desktopDMConfigFromPayloads(t, "false", "false", payloads)
 			if decoder == "unavailable" {
 				t.Setenv("PATH", t.TempDir())
 			}
@@ -235,6 +226,28 @@ func TestDesktopAdmissionHumanOmissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func desktopDMPayloads(t *testing.T) map[string][]byte {
+	t.Helper()
+	// Reuse only serialized bytes; each case still writes its own fixture files.
+	fixture, _ := desktopDMConfig(t, "", "")
+	payloads := make(map[string][]byte, 2)
+	for _, workspace := range []string{"T1", "T2"} {
+		payload, err := os.ReadFile(filepath.Join(fixture.Slack.Desktop.Path, "IndexedDB", "https_app.slack.com_0.indexeddb.blob", workspace))
+		require.NoError(t, err)
+		payloads[workspace] = payload
+	}
+	return payloads
+}
+
+func desktopDMConfigFromPayloads(t *testing.T, setting, drafts string, payloads map[string][]byte) (config.Config, string) {
+	t.Helper()
+	cfg, path := desktopDMBaseConfig(t, setting, drafts)
+	for _, workspace := range []string{"T1", "T2"} {
+		writeDesktopDMPayload(t, cfg.Slack.Desktop.Path, workspace, payloads[workspace])
+	}
+	return cfg, path
 }
 
 func desktopDMBaseConfig(t *testing.T, setting, drafts string) (config.Config, string) {
@@ -287,6 +300,7 @@ func writeDesktopDMPayload(t *testing.T, root, workspace string, payload []byte)
 }
 
 func TestDesktopReadMarkersAcrossCLIPaths(t *testing.T) {
+	payloads := desktopDMPayloads(t)
 	for _, route := range []struct {
 		name       string
 		args       []string
@@ -299,7 +313,7 @@ func TestDesktopReadMarkersAcrossCLIPaths(t *testing.T) {
 		{"hybrid", []string{"sync", "--source", "hybrid", "--workspace", "T1"}, 1},
 	} {
 		t.Run(route.name, func(t *testing.T) {
-			cfg, path := desktopDMConfig(t, "", "false")
+			cfg, path := desktopDMConfigFromPayloads(t, "", "false", payloads)
 			db, err := leveldb.OpenFile(filepath.Join(cfg.Slack.Desktop.Path, "Local Storage", "leveldb"), nil)
 			require.NoError(t, err)
 			for _, marker := range []struct{ workspace, channel, ts string }{{"T1", "CDRAFTONLY", "11"}, {"T2", "CPUBLIC2", "22"}} {
