@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject negative or overflowing native API retry delays instead of retrying with a negative or wrapped duration.
+
 ## 0.11.0 - 2026-11-15
 
 **Highlights:** Add bounded, resumable archive delivery and incremental API sync, fetch bot-only thread replies, and fix the Go net/http security vulnerability.

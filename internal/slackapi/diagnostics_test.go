@@ -23,6 +23,56 @@ import (
 
 const nativeDiagnosticCanary = "native-diagnostic-canary"
 
+func TestNativeRetryAfterDurationRange(t *testing.T) {
+	const maxSeconds = int64((1<<63 - 1) / time.Second)
+	for _, tt := range []struct {
+		name    string
+		header  string
+		invalid bool
+		want    time.Duration
+	}{
+		{name: "negative", header: "-1", invalid: true},
+		{name: "minimum integer", header: "-9223372036854775808", invalid: true},
+		{name: "first overflow", header: strconv.FormatInt(maxSeconds+1, 10), invalid: true},
+		{name: "maximum integer", header: "9223372036854775807", invalid: true},
+		{name: "zero", header: "0"},
+		{name: "normal", header: "2", want: 2 * time.Second},
+		{name: "maximum duration", header: strconv.FormatInt(maxSeconds, 10), want: time.Duration(maxSeconds) * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, sleeps := 0, 0
+			client := NewWithOptions(config.Tokens{}, "https://fixture.invalid/", &http.Client{Transport: primaryOwnerRoundTrip(func(r *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header:     http.Header{"Retry-After": {tt.header}},
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    r,
+				}, nil
+			})})
+			client.sleep = func(_ context.Context, delay time.Duration) error {
+				sleeps++
+				require.Equal(t, tt.want, delay)
+				return nil
+			}
+			_, err := client.authTest(t.Context(), "fixture-token")
+			if tt.invalid {
+				require.EqualError(t, err, "slack auth.test rate-limit header failed")
+				var diagnostic *nativeDiagnosticError
+				require.ErrorAs(t, err, &diagnostic)
+				require.Equal(t, 1, calls)
+				require.Zero(t, sleeps)
+				return
+			}
+			var limited *slack.RateLimitedError
+			require.ErrorAs(t, err, &limited)
+			require.Equal(t, tt.want, limited.RetryAfter)
+			require.Equal(t, 3, calls)
+			require.Equal(t, 2, sleeps)
+		})
+	}
+}
+
 func TestNativeDecodeDiagnosticsOmitPayload(t *testing.T) {
 	for _, method := range []string{"auth.test", "conversations.info", "conversations.join", "conversations.list", "users.list", "conversations.history", "conversations.replies"} {
 		for _, success := range []bool{false, true} {
