@@ -52,11 +52,15 @@ end;
 
 const messageEventHeadsSchema = messageEventHeadsTableSchema + messageEventHeadTriggerSchema
 
-const schema = `
+const schemaPragmas = `
 pragma foreign_keys = on;
 pragma journal_mode = wal;
 pragma busy_timeout = 5000;
+`
 
+const schema = schemaPragmas + schemaObjects
+
+const schemaObjects = `
 create table if not exists workspaces (
   id text primary key,
   name text not null,

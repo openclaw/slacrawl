@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Create fresh SQLite schemas in one transaction to reduce initialization work
+  and roll back new schema objects if setup fails.
+
 - Reduce repeated schema lookups when validating the native change journal on
   archive opens, status reads and captures, preserving journal repair checks.
 

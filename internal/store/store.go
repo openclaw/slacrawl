@@ -47,7 +47,7 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	if currentVersion == 0 {
-		if _, err := db.Exec(schema); err != nil {
+		if err := createSchema(db); err != nil {
 			_ = base.Close()
 			return nil, err
 		}
@@ -82,6 +82,23 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	return &Store{db: db, q: storedb.New(db), ftsRowIDAligned: true}, nil
+}
+
+func createSchema(db *sql.DB) error {
+	// Journal mode must be set before the transaction. Keep schema creation
+	// atomic so a later DDL failure cannot leave a partially initialized archive.
+	if _, err := db.Exec(schemaPragmas); err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(schemaObjects); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func OpenReadOnly(path string) (*Store, error) {
