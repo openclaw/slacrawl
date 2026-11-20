@@ -49,9 +49,24 @@ func TestSDKArchiveUpgrade(t *testing.T) {
 	require.NoError(t, cfg.Save(filepath.Join(dir, "config.toml")))
 	wantConfig, err := os.ReadFile(configPath)
 	require.NoError(t, err)
+	// Preserve the historical input; saving now adds explicit local-mode defaults.
+	const remoteDefaults = `[remote]
+mode = 'local'
+endpoint = ''
+archive = ''
+token_env = 'CRAWL_REMOTE_TOKEN'
+stale_after = ''
+
+[remote.auth]
+token_source = ''
+keyring_service = ''
+keyring_account = ''
+
+`
+	wantSavedConfig := strings.Replace(string(wantConfig), "[slack]\n", remoteDefaults+"[slack]\n", 1)
 	gotConfig, err := os.ReadFile(filepath.Join(dir, "config.toml"))
 	require.NoError(t, err)
-	require.Equal(t, string(wantConfig), string(gotConfig))
+	require.Equal(t, wantSavedConfig, string(gotConfig))
 	require.Equal(t, "TSDKFIXTURE", cfg.WorkspaceID)
 	require.Equal(t, 1, cfg.Sync.Concurrency)
 	require.True(t, cfg.Sync.FullHistory)

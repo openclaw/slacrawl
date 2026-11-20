@@ -128,10 +128,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	// imports. Unsupported commands fail rather than silently reading old SQLite.
 	if _, err := os.Stat(configPath); err == nil {
 		cfg, err := loadConfig(configPath)
-		if err != nil {
-			return err
-		}
-		if cfg.Remote.Mode == "cloud" && rest[0] != "messages" {
+		// Let the command parse help and arguments before reporting config errors.
+		if err == nil && cfg.Remote.Mode == "cloud" && rest[0] != "messages" {
 			return errors.New("command is not supported in cloud mode; no local SQLite fallback")
 		}
 	}
