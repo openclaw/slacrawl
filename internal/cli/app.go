@@ -124,6 +124,17 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	a.outputFormat = outputFormat
 	a.setColorEnabled(outputFormat, global.NoColor)
 
+	// Cloud selection must precede notification, local archive creation and share
+	// imports. Unsupported commands fail rather than silently reading old SQLite.
+	if _, err := os.Stat(configPath); err == nil {
+		cfg, err := loadConfig(configPath)
+		if err != nil {
+			return err
+		}
+		if cfg.Remote.Mode == "cloud" && rest[0] != "messages" {
+			return errors.New("command is not supported in cloud mode; no local SQLite fallback")
+		}
+	}
 	a.maybeNotifyRelease(ctx, rest)
 
 	switch rest[0] {

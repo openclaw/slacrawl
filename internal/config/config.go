@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	crawlconfig "github.com/openclaw/crawlkit/config"
+	"github.com/openclaw/crawlkit/remote"
 )
 
 const (
@@ -21,17 +22,18 @@ const (
 var runtimeGOOS = runtime.GOOS
 
 type Config struct {
-	Version     int          `toml:"version"`
-	WorkspaceID string       `toml:"workspace_id"`
-	Workspaces  []Workspace  `toml:"workspaces"`
-	Providers   []Provider   `toml:"providers"`
-	DBPath      string       `toml:"db_path"`
-	CacheDir    string       `toml:"cache_dir"`
-	LogDir      string       `toml:"log_dir"`
-	Slack       SlackConfig  `toml:"slack"`
-	Sync        SyncConfig   `toml:"sync"`
-	Search      SearchConfig `toml:"search"`
-	Share       ShareConfig  `toml:"share"`
+	Remote      remote.Config `toml:"remote"`
+	Version     int           `toml:"version"`
+	WorkspaceID string        `toml:"workspace_id"`
+	Workspaces  []Workspace   `toml:"workspaces"`
+	Providers   []Provider    `toml:"providers"`
+	DBPath      string        `toml:"db_path"`
+	CacheDir    string        `toml:"cache_dir"`
+	LogDir      string        `toml:"log_dir"`
+	Slack       SlackConfig   `toml:"slack"`
+	Sync        SyncConfig    `toml:"sync"`
+	Search      SearchConfig  `toml:"search"`
+	Share       ShareConfig   `toml:"share"`
 }
 
 type Provider struct {
@@ -219,6 +221,17 @@ func (c Config) Save(path string) error {
 }
 
 func (c *Config) Normalize() error {
+	c.Remote.Normalize()
+	if c.Remote.Mode != remote.ModeLocal && c.Remote.Mode != remote.ModeCloud {
+		return errors.New("remote.mode must be local or cloud; no SQLite fallback is supported")
+	}
+	if c.Remote.Mode == remote.ModeCloud && (c.Remote.Endpoint == "" || c.Remote.Archive == "") {
+		return errors.New("remote cloud mode requires endpoint and archive")
+	}
+	if c.Remote.Auth.TokenSource != "" {
+		return errors.New("remote reads use the explicitly configured token_env")
+	}
+
 	if c.Version == 0 {
 		c.Version = 1
 	}

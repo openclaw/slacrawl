@@ -95,12 +95,22 @@ func (a *App) runMessages(ctx context.Context, configPath string, args []string,
 		return nil
 	}
 	var parsed slacrawlMessagesArgs
-	if err := parseKongArgs(&parsed, normalizeSingleDashLongFlags(args, "workspace", "channel", "author", "limit"), "slacrawl messages", a.Stdout, a.Stderr); err != nil {
+	if err := parseKongArgs(&parsed, normalizeSingleDashLongFlags(args, "workspace", "channel", "author", "limit", "thread"), "slacrawl messages", a.Stdout, a.Stderr); err != nil {
 		return err
 	}
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
+	}
+	if cfg.Remote.Mode == "cloud" {
+		results, err := remoteMessages(ctx, cfg, parsed)
+		if err != nil {
+			return err
+		}
+		return a.writeOutput("Messages", results, format, false)
+	}
+	if parsed.Thread != "" {
+		return errors.New("--thread requires cloud mode")
 	}
 	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
@@ -186,6 +196,7 @@ type slacrawlSearchArgs struct {
 }
 
 type slacrawlMessagesArgs struct {
+	Thread    string `help:"Exact thread root timestamp (cloud mode)."`
 	Workspace string `help:"Workspace id."`
 	Channel   string `help:"Channel id."`
 	Author    string `help:"User id."`
@@ -326,6 +337,7 @@ Flags:
   -workspace string  workspace id
   -channel string    channel id
   -author string     user id
+  -thread string     exact thread root timestamp (cloud mode)
   -limit int         row limit (default 50)
 `)
 }

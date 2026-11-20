@@ -1421,3 +1421,29 @@ path = ""
 repair_every = "30m"
 desktop_refresh_every = "5m"
 ```
+
+## PostgreSQL message reader
+
+Select a remote reader explicitly; it never downloads a SQLite copy:
+
+```toml
+[remote]
+mode = "cloud"
+endpoint = "https://archive.example.test"
+archive = "slack-source"
+token_env = "SLACK_ARCHIVE_READER_TOKEN"
+```
+
+The token is a reader credential, separate from acquisition publisher and Slack
+provider credentials. `messages --workspace T1 --channel C1 --limit 50` reads the
+current completed source pin. `messages --workspace T1 --channel C1 --thread
+1700000000.000000` selects that exact root and retained replies. List and thread
+results retain native field names, labels and mention display behavior. A query
+stays pinned across byte-limited pages, and limits are 1 through 500 rows.
+This is retained thread reading, not a claim that reply collection is complete.
+
+Cloud mode currently supports only `messages` (including `--thread`). Search,
+FTS syntax, TUI, analytics, status and other local commands fail explicitly; they
+do not open SQLite, import a Git share or fall back when the API is unavailable.
+Use `remote.mode = "local"` for explicit existing local workflows. The separate
+`acquire` command continues to use its explicit publisher API arguments.

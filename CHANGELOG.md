@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add explicit PostgreSQL message list and retained-thread reads with pinned
+  pagination; cloud mode refuses unsupported commands and SQLite fallback.
+
 - Switch the inactive acquisition service template to PostgreSQL-owned `acquire`,
   with separate provider/publisher credentials and bounded server-checkpoint resume.
   The scheduled scope is channel message creations, not full Slack synchronization.

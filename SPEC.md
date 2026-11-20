@@ -1560,3 +1560,16 @@ incomplete runs; retries resume its exact identity/cursor without local journals
 Existing rows retain their exact richer fields; an actual message edit requires
 an independent refresh owner. This contract does not establish thread traversal,
 edit/delete synchronization or full upstream history coverage.
+
+### PostgreSQL message reads
+
+`remote.mode = "cloud"` binds native `messages` to one configured API archive
+and reader token environment name. Exact list filters and thread-root selection
+execute in PostgreSQL; the CLI never scans raw source tables. Descending timestamp
+and channel ordering, immutable pagination pins, joined labels and mention display
+match the native message projection. `--thread` requires explicit workspace and
+channel. This reads existing replies without claiming collection completeness.
+
+Only message reads are supported in this mode. Other normal commands, including
+SQLite FTS search, fail before local archive or share initialization. API failure
+never selects local state. Local mode remains explicit and unchanged.
