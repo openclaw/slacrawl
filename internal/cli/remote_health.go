@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openclaw/crawlkit/remote"
 	"github.com/openclaw/slacrawl/internal/config"
 )
 
@@ -31,7 +30,7 @@ func (a *App) runRemoteHealth(ctx context.Context, cfg config.Config, command st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	client, err := remote.NewClientFromConfig(cfg.Remote, remote.Options{})
+	client, err := newRemoteClient(cfg)
 	if err != nil {
 		return err
 	}

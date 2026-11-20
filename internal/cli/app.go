@@ -124,6 +124,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	a.outputFormat = outputFormat
 	a.setColorEnabled(outputFormat, global.NoColor)
 
+	if rest[0] == "remote" {
+		return a.runRemote(ctx, configPath, rest[1:], outputFormat)
+	}
+
 	// Cloud selection must precede notification, local archive creation and share
 	// imports. Unsupported commands fail rather than silently reading old SQLite.
 	if _, err := os.Stat(configPath); err == nil {

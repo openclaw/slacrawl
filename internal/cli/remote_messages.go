@@ -17,7 +17,7 @@ func remoteMessages(ctx context.Context, cfg config.Config, flags slacrawlMessag
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	client, err := remote.NewClientFromConfig(cfg.Remote, remote.Options{})
+	client, err := newRemoteClient(cfg)
 	if err != nil {
 		return nil, err
 	}

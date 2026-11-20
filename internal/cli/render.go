@@ -75,6 +75,7 @@ func (a *App) printHelp() {
 	b.WriteString("  --no-color        Disable ANSI color in text output.\n\n")
 	b.WriteString(colorize(ansiCyan, "Commands:"))
 	b.WriteByte('\n')
+	b.WriteString("  remote     Log in with a GitHub token, inspect identity or archive status.\n")
 	b.WriteString("  metadata   Print crawlkit control metadata.\n")
 	b.WriteString("  check-update Check for a newer slacrawl release.\n")
 	b.WriteString("  init       Create a starter config.\n")

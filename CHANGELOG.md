@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add native remote login with an explicitly selected GitHub token, storing the
+  returned session in the OS keyring. Remote identity, status and message reads
+  resolve that session without opening SQLite or falling back to local data.
+
 - Read cloud-mode status and doctor results from the archive API, preserving
   its snapshot, capabilities and coverage warnings without opening SQLite.
 

@@ -164,6 +164,29 @@ does not install or enable a timer. Inactive Linux units under
 `operations/` require separate source, limit and credential qualification before
 installation.
 
+## Read a cloud archive
+
+Exchange a local GitHub credential for an archive session. Only the explicitly
+named environment variable is read; the returned session is stored in the OS
+keyring, bound to the endpoint, archive and selected config. Config promotion is
+atomic; a failed save preserves the previous session. Existing local settings remain.
+
+```sh
+slacrawl --config cloud.toml remote login --endpoint https://archive.example.com \
+  --archive SOURCE --github-token-env GITHUB_TOKEN
+slacrawl --config cloud.toml remote whoami --json
+slacrawl --config cloud.toml remote status --json
+slacrawl --config cloud.toml messages --channel CHANNEL --limit 50
+slacrawl --config cloud.toml messages --channel CHANNEL --thread TIMESTAMP
+```
+
+Cloud `status`, `doctor` and message reads use the configured session. Explicit
+`remote.auth.token_source = "keyring"` never falls back to an environment token
+if the keyring is unavailable. Existing environment-token configs remain valid.
+Cloud search and unsupported local commands fail explicitly; they do not open
+SQLite. Login grants only the permissions returned by the existing archive API.
+Acquisition still takes its separately selected publisher token via `--token-env`.
+
 ## Collect directly into PostgreSQL
 
 For an already admitted and explicitly prepared PostgreSQL Slack source:

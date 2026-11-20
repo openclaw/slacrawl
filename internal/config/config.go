@@ -228,8 +228,10 @@ func (c *Config) Normalize() error {
 	if c.Remote.Mode == remote.ModeCloud && (c.Remote.Endpoint == "" || c.Remote.Archive == "") {
 		return errors.New("remote cloud mode requires endpoint and archive")
 	}
-	if c.Remote.Auth.TokenSource != "" {
-		return errors.New("remote reads use the explicitly configured token_env")
+	switch c.Remote.Auth.TokenSource {
+	case "", "env", "keyring", "none":
+	default:
+		return errors.New("remote.auth.token_source must be env, keyring, or none")
 	}
 
 	if c.Version == 0 {
