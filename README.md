@@ -87,10 +87,11 @@ work across restarts and token changes. Explicit `--since` and Tail repair leave
 that backlog alone. See [Retained API threads](docs/configuration.md#retained-api-threads)
 for scope and partial-coverage behavior.
 
-Inactive [Linux acquisition templates](docs/configuration.md#scheduled-incremental-acquisition)
-are available under `operations/`; installation and source qualification are separate.
+Inactive [Linux acquisition templates](docs/configuration.md#scheduled-postgresql-acquisition)
+run PostgreSQL-owned `acquire` under `operations/`; installation and source
+qualification are separate. They cover message creations only.
 
-For recurring API acquisition, `sync --incremental` requires explicit workspace
+For local SQLite API acquisition, `sync --incremental` requires explicit workspace
 and channels, disabled joining/media and no automatic Git-share imports. It
 refuses missing local history checkpoints instead of starting a backfill; see
 [qualified incremental acquisition](docs/configuration.md#archive-schema-upgrades).

@@ -579,11 +579,14 @@ and reconcile through their existing owners rather than deleting/recreating them
 ### Scheduled acquisition
 
 `operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates
-for the explicit API `sync --incremental` profile. They use a separately qualified
-native source/configuration, provider credentials, workspace/channel set and
-persistent acquisition lock. They do not replace or activate a collector.
-See [scheduled incremental acquisition](docs/configuration.md#scheduled-incremental-acquisition)
-for admission, bounded execution, relationship to delivery and freshness proof.
+for the SQLite-free `acquire` command. Each instance uses one admitted channel,
+an explicit `api-bot` or `api-user` identity, separate provider/publisher credentials
+and a persistent source acquisition lock. The server owns checkpoints and resumes
+unfinished runs; the first horizon requires manual qualification. The template
+allows 20 pages and a 90-second CLI deadline, with a 120-second systemd bound.
+It covers message creations only, not replies, edits, deletes or metadata refresh.
+See [scheduled PostgreSQL acquisition](docs/configuration.md#scheduled-postgresql-acquisition)
+for admission, writer cutover, bounded execution and freshness proof.
 
 ### Explicit pending delivery
 

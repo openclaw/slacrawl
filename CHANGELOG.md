@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Switch the inactive acquisition service template to PostgreSQL-owned `acquire`,
+  with separate provider/publisher credentials and bounded server-checkpoint resume.
+  The scheduled scope is channel message creations, not full Slack synchronization.
+
 - Collect channel message creations directly through a prepared PostgreSQL API,
   with resumable server checkpoints, full raw fields and retained enrichment.
   Bot and user-token horizons remain separate; no local SQLite is opened.

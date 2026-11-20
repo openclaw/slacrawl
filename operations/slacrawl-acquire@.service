@@ -1,5 +1,5 @@
 [Unit]
-Description=Acquire qualified slacrawl source %i incrementally
+Description=Acquire PostgreSQL-owned Slack channel %i
 Wants=network-online.target
 After=network-online.target
 
@@ -9,8 +9,9 @@ User=slacrawl
 Group=slacrawl
 WorkingDirectory=/var/lib/slacrawl/%i
 EnvironmentFile=/etc/slacrawl/acquire-%i.env
-ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/slacrawl/%i/acquire.lock /usr/local/bin/slacrawl --config /etc/slacrawl/acquire-%i.toml --json sync --source bot --workspace ${SLACRAWL_WORKSPACE} --channels ${SLACRAWL_CHANNELS} --incremental --auto-join=false --with-media=false --concurrency 1
-TimeoutStartSec=4min
+EnvironmentFile=/etc/slacrawl/provider-%i.env
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code=75 /var/lib/slacrawl/%i/acquire.lock /usr/local/bin/slacrawl --config /etc/slacrawl/acquire-%i.toml --json acquire --origin ${SLACRAWL_ORIGIN} --archive ${SLACRAWL_ARCHIVE} --workspace ${SLACRAWL_WORKSPACE} --channel ${SLACRAWL_CHANNEL} --source ${SLACRAWL_SOURCE} --token-env SLACRAWL_PUBLISHER_TOKEN --max-pages 20 --timeout 90s
+TimeoutStartSec=120s
 TimeoutStopSec=30s
 KillMode=control-group
 UMask=0077
