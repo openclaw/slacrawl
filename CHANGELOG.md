@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Read cloud-mode status and doctor results from the archive API, preserving
+  its snapshot, capabilities and coverage warnings without opening SQLite.
+
 - Keep command help and argument validation available when the config file is malformed.
 
 - Add explicit PostgreSQL message list and retained-thread reads with pinned

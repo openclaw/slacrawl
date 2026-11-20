@@ -1570,6 +1570,11 @@ and channel ordering, immutable pagination pins, joined labels and mention displ
 match the native message projection. `--thread` requires explicit workspace and
 channel. This reads existing replies without claiming collection completeness.
 
-Only message reads are supported in this mode. Other normal commands, including
-SQLite FTS search, fail before local archive or share initialization. API failure
-never selects local state. Local mode remains explicit and unchanged.
+`status` and `doctor` read the archive API's status, preserving its snapshot,
+capabilities and coverage warnings. They do not inspect local Slack credentials,
+desktop caches or SQLite. Doctor describes archive connectivity and reported
+state; it does not certify upstream completeness.
+
+Other normal commands, including SQLite FTS search, fail before local archive or
+share initialization. API failure never selects local state. Local mode remains
+explicit and unchanged.

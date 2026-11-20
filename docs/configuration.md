@@ -1442,8 +1442,11 @@ results retain native field names, labels and mention display behavior. A query
 stays pinned across byte-limited pages, and limits are 1 through 500 rows.
 This is retained thread reading, not a claim that reply collection is complete.
 
-Cloud mode currently supports only `messages` (including `--thread`). Search,
-FTS syntax, TUI, analytics, status and other local commands fail explicitly; they
-do not open SQLite, import a Git share or fall back when the API is unavailable.
+Cloud mode supports `messages` (including `--thread`), `status` and `doctor`.
+Status and doctor report the archive API's snapshot, capabilities and coverage
+warnings; they do not inspect local Slack credentials or certify upstream
+completeness. Search, FTS syntax, TUI, analytics and other local commands fail
+explicitly; they do not open SQLite, import a Git share or fall back when the API
+is unavailable.
 Use `remote.mode = "local"` for explicit existing local workflows. The separate
 `acquire` command continues to use its explicit publisher API arguments.

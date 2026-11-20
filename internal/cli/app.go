@@ -129,8 +129,14 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if _, err := os.Stat(configPath); err == nil {
 		cfg, err := loadConfig(configPath)
 		// Let the command parse help and arguments before reporting config errors.
-		if err == nil && cfg.Remote.Mode == "cloud" && rest[0] != "messages" {
-			return errors.New("command is not supported in cloud mode; no local SQLite fallback")
+		if err == nil && cfg.Remote.Mode == "cloud" {
+			switch rest[0] {
+			case "status", "doctor":
+				return a.runRemoteHealth(ctx, cfg, rest[0], rest[1:], outputFormat)
+			case "messages":
+			default:
+				return errors.New("command is not supported in cloud mode; no local SQLite fallback")
+			}
 		}
 	}
 	a.maybeNotifyRelease(ctx, rest)

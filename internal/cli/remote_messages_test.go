@@ -76,7 +76,19 @@ func TestMessagesPostgresHTTP(t *testing.T) {
 			t.Fatalf("PostgreSQL/native rows differ\nactual %#v\nexpected %#v", actual, expected)
 		}
 	}
-	for _, command := range []string{"search", "tui", "status", "files", "sync", "sql", "users", "channels"} {
+	for _, command := range []string{"status", "doctor"} {
+		var out bytes.Buffer
+		app := New()
+		app.Stdout, app.Stderr = &out, io.Discard
+		if e = app.Run(ctx, []string{"--config", file, command, "--json"}); e != nil {
+			t.Fatal(e)
+		}
+		var status remote.Status
+		if e = json.Unmarshal(out.Bytes(), &status); e != nil || status.App != "slacrawl" || status.Archive != "message-reader" || status.ActiveSnapshotID == "" || len(status.Warnings) == 0 {
+			t.Fatalf("PostgreSQL health differs: %s (%v)", out.Bytes(), e)
+		}
+	}
+	for _, command := range []string{"search", "tui", "files", "sync", "sql", "users", "channels"} {
 		app := New()
 		app.Stdout = io.Discard
 		app.Stderr = io.Discard
