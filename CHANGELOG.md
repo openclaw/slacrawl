@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Collect channel message creations directly through a prepared PostgreSQL API,
+  with resumable server checkpoints, full raw fields and retained enrichment.
+  Bot and user-token horizons remain separate; no local SQLite is opened.
+
 ## 0.11.0 - 2026-11-15
 
 **Highlights:** Add bounded, resumable archive delivery and incremental API sync, fetch bot-only thread replies, and fix the Go net/http security vulnerability.

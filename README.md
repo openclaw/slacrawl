@@ -163,6 +163,35 @@ does not install or enable a timer. Inactive Linux units under
 `operations/` require separate source, limit and credential qualification before
 installation.
 
+## Collect directly into PostgreSQL
+
+For an already admitted and explicitly prepared PostgreSQL Slack source:
+
+```sh
+slacrawl --json acquire --origin https://archive.example.com --archive SOURCE \
+  --workspace WORKSPACE --channel CHANNEL --source api-bot \
+  --since 2026-11-19T00:00:00Z --until 2026-11-20T00:00:00Z \
+  --max-pages 20 --timeout 10m
+```
+
+The publisher token comes from `CRAWL_REMOTE_TOKEN` (or `--token-env`). Slack
+credentials use the existing `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN` configuration.
+Select `api-bot` or `api-user` explicitly; there is no credential fallback.
+An explicit global `--config` can supply existing workspace credential mappings.
+This command does not discover or open a local archive, outbox, cache or notifier.
+
+The first channel/API-class interval requires `--since`. Later invocations use
+its server checkpoint. Interrupted runs resume their original window and cursor;
+conflicting explicit flags are rejected. A bounded result retains unfinished
+work in PostgreSQL. Transport uncertainty stops the command: rerun the same
+scope to reconcile server state, rather than generating a replacement request.
+
+Only completed runs become visible. Existing message revisions and richer file
+fields are preserved through the scoped API lookup. Changed message revisions
+stop with an explicit refresh requirement. This is channel message-creation
+collection: it does not traverse replies or certify edits, deletions, historical
+completeness, or visibility under a different token class. No schedule is enabled.
+
 ## Keep it current
 
 Run an incremental API refresh after the first sync:

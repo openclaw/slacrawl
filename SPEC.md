@@ -1535,3 +1535,25 @@ internal/store/storedb/   # generated sqlc wrappers
 internal/search/
 internal/syncer/
 ```
+
+
+## PostgreSQL-owned channel acquisition
+
+The explicit `acquire` command operates independently of local SQLite. It uses
+an already prepared source's publisher API for run identities, current-row
+lookups, atomic pages and per-channel/API-class checkpoints. Native Slack HTTP
+and message normalization remain owned by the existing Slack client.
+
+Run/state/page requests use `slack-acquisition/v1`, preserving complete typed
+message, file and mention rows and original provider JSON. Each provider page
+must fit 500 changes and a 4 MiB request; metadata lookups fit 128 KiB. Oversized,
+limited, missing, or inconsistent pages fail without completing coverage.
+Slack requests are bounded to 4 MiB and the overall invocation deadline.
+
+A run starts with an explicit UTC microsecond interval; subsequent channel runs
+start at its completed horizon. `api-bot` and `api-user` progress are separate.
+Only terminal complete pages publish. The server retains uncertain writes and
+incomplete runs; retries resume its exact identity/cursor without local journals.
+Existing rows retain their exact richer fields; an actual message edit requires
+an independent refresh owner. This contract does not establish thread traversal,
+edit/delete synchronization or full upstream history coverage.

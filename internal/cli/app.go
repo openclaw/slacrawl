@@ -83,6 +83,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return normalizeCommandHelp(a.runExport(ctx, rest[1:], format))
 	}
 
+	if rest[0] == "acquire" {
+		format, err := resolveOutputFormat(global.Format, global.JSON)
+		if err != nil {
+			return err
+		}
+		a.setColorEnabled(format, global.NoColor)
+		return normalizeCommandHelp(a.runAcquire(ctx, rest[1:], global.Config, format))
+	}
+
 	if rest[0] == "delivery" {
 		if global.Config != nil {
 			return errors.New("delivery does not accept --config; supply explicit --db and --scope")
