@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reduce repeated schema lookups when validating the native change journal on
+  archive opens, status reads and captures, preserving journal repair checks.
+
 - Add native remote login with an explicitly selected GitHub token, storing the
   returned session in the OS keyring. Remote identity, status and message reads
   resolve that session without opening SQLite or falling back to local data.
