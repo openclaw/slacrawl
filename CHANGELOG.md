@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep command help and argument validation available when the config file is malformed.
+
 - Add explicit PostgreSQL message list and retained-thread reads with pinned
   pagination; cloud mode refuses unsupported commands and SQLite fallback.
 
