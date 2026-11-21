@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update Crawlkit, Slack API, SQLite, terminal and Go support dependencies, and keep the TruffleHog action and scanner pinned together at 3.99.9. Thanks @dependabot.
+
 - Create fresh SQLite schemas in one transaction to reduce initialization work
   and roll back new schema objects if setup fails.
 
