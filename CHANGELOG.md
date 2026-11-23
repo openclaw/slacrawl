@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Scan release tags with CodeQL instead of every main push, retaining PR and
+  weekly scans and documenting exact-commit recovery for the release gate.
+
 ## 0.12.0 - 2026-11-26
 
 **Highlights:** Add PostgreSQL-owned Slack acquisition and cloud reads, native remote login through the OS keyring, and faster SQLite archive initialization and validation.

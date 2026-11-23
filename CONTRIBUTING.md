@@ -73,7 +73,22 @@ formula's archive checksums, and opens the next `Unreleased` changelog PR.
 Homebrew handoff uses the repository's `HOMEBREW_TAP_TOKEN` secret and must
 succeed before the release workflow completes.
 
-Validate the release-preparation commit without creating tags, releases, or Homebrew updates:
+CodeQL runs on every PR, `v*` tag push, and weekly on `main`. It does not run on
+every `main` push. The release gate requires a successful `analyze` check on the
+exact release commit. A PR merge commit or an earlier scheduled scan at a
+different SHA does not qualify.
+
+For an untagged dry run, use a successful CodeQL scan of the current `main` SHA.
+If that SHA has no successful scan, dispatch CodeQL on `main` and wait for its
+`analyze` job to succeed. Confirm that `main` still points to the scanned commit
+before starting the dry run; if it advanced, qualify the new head first.
+
+```bash
+gh workflow run codeql.yml --repo openclaw/slacrawl --ref main
+```
+
+Then validate that release-preparation commit without creating tags, releases,
+or Homebrew updates:
 
 ```bash
 gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z -f dry_run=true
@@ -91,6 +106,19 @@ git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=.github/release-allowed-sign
 git push origin refs/tags/vX.Y.Z
 gh workflow run release-unified.yml --repo openclaw/slacrawl -f version=X.Y.Z
 ```
+
+Pushing the version tag starts CodeQL at the frozen release SHA. The shared
+release gate waits up to 15 minutes for required checks on that SHA. If the scan
+fails or the gate times out, rerun the failed scan or dispatch CodeQL on the
+existing release tag, wait for `analyze` to succeed, then retry the release:
+
+```bash
+gh workflow run codeql.yml --repo openclaw/slacrawl --ref vX.Y.Z
+```
+
+CodeQL completes only after its uploaded results finish processing. A scan of
+newer `main` does not qualify an older release tag. Do not create or move a tag,
+or run the release workflow, merely to validate CodeQL.
 
 `make release` and `scripts/release.sh` fail closed and point to that workflow.
 Local commands never sign or notarize binaries or publish release artifacts. Use
