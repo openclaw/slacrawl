@@ -116,9 +116,13 @@ existing release tag, wait for `analyze` to succeed, then retry the release:
 gh workflow run codeql.yml --repo openclaw/slacrawl --ref vX.Y.Z
 ```
 
-CodeQL completes only after its uploaded results finish processing. A scan of
-newer `main` does not qualify an older release tag. Do not create or move a tag,
-or run the release workflow, merely to validate CodeQL.
+CodeQL normally waits for uploaded results to finish processing, but a
+processing-status API warning or timeout can still leave a green job. Before
+retrying the release, confirm the processed CodeQL analysis matches the frozen
+release SHA and has no analysis error in **Security > Code scanning** or the
+code-scanning analyses API. A scan of newer `main` does not qualify an older
+release tag. Do not create or move a tag, or run the release workflow, merely to
+validate CodeQL.
 
 `make release` and `scripts/release.sh` fail closed and point to that workflow.
 Local commands never sign or notarize binaries or publish release artifacts. Use
