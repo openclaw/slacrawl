@@ -221,6 +221,11 @@ serialization. Capture establishes neither historical completeness nor successfu
 delivery. The private projection and local outbox below supply delivery data and
 durability contracts; binding activation and the receiver remain separate work.
 
+For private acquisition bootstrap, `acquire metadata-seed` creates an isolated
+native archive and delivery scope from the approved roster and fresh bot
+directory metadata. Workspace and channel rows form the initial seed. Message
+acquisition remains a separate operation. See [operator inputs and qualification](docs/configuration.md#prepare-an-approved-channel-metadata-seed).
+
 ### Bounded native seed capture
 
 `store.CaptureNativeSeed` reads the current six content tables at one real native
