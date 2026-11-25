@@ -32,3 +32,28 @@ func TestReconcilePreservesRetainedRevision(t *testing.T) {
 		t.Fatal("actual edit accepted")
 	}
 }
+
+func TestRunWindowContinuesOrBackfills(t *testing.T) {
+	at := func(day int) *time.Time { v := time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC); return &v }
+	now := time.Date(2026, 11, 25, 6, 0, 0, 0, time.UTC)
+	if _, _, err := runWindow(Options{}, nil, now); err == nil {
+		t.Fatal("first run without --since accepted")
+	}
+	since, until, err := runWindow(Options{}, at(20), now)
+	if err != nil || !since.Equal(*at(20)) || !until.Equal(now) {
+		t.Fatal("continuation window", since, until, err)
+	}
+	if _, _, err = runWindow(Options{Since: at(10)}, at(20), now); err == nil {
+		t.Fatal("earlier --since without --until accepted")
+	}
+	if _, _, err = runWindow(Options{Since: at(1), Until: at(25)}, at(20), now); err == nil {
+		t.Fatal("window overlapping the completed horizon accepted")
+	}
+	since, until, err = runWindow(Options{Since: at(1), Until: at(5)}, at(20), now)
+	if err != nil || !since.Equal(*at(1)) || !until.Equal(*at(5)) {
+		t.Fatal("backfill window", since, until, err)
+	}
+	if _, _, err = runWindow(Options{Since: at(5), Until: at(1)}, at(20), now); err == nil {
+		t.Fatal("reversed window accepted")
+	}
+}
