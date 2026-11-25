@@ -274,6 +274,10 @@ func (e *nativeDiagnosticError) Error() string {
 func (e *nativeDiagnosticError) Unwrap() error { return e.cause }
 
 func (c *Client) postSlackForm(ctx context.Context, token string, method string, values url.Values, target any) (http.Header, error) {
+	return c.postSlackFormLimit(ctx, token, method, values, target, 0)
+}
+
+func (c *Client) postSlackFormLimit(ctx context.Context, token string, method string, values url.Values, target any, limit int64) (http.Header, error) {
 	values.Set("token", token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL+method, strings.NewReader(values.Encode()))
 	if err != nil {
@@ -299,7 +303,14 @@ func (c *Client) postSlackForm(ctx context.Context, token string, method string,
 	if resp.StatusCode != http.StatusOK {
 		return nil, &nativeDiagnosticError{method: method, phase: "HTTP status", status: resp.StatusCode, cause: slack.StatusCodeError{Code: resp.StatusCode, Status: resp.Status}}
 	}
-	body, err := io.ReadAll(resp.Body)
+	var reader io.Reader = resp.Body
+	if limit > 0 {
+		reader = io.LimitReader(reader, limit+1)
+	}
+	body, err := io.ReadAll(reader)
+	if limit > 0 && int64(len(body)) > limit {
+		return nil, &nativeDiagnosticError{method: method, phase: "response size"}
+	}
 	if err != nil {
 		return nil, &nativeDiagnosticError{method: method, phase: "response body", cause: err}
 	}

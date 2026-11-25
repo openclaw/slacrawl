@@ -4,6 +4,34 @@
 
 - Reject negative or overflowing native API retry delays instead of retrying with a negative or wrapped duration.
 
+- Update Crawlkit, Slack API, SQLite, terminal and Go support dependencies, and keep the TruffleHog action and scanner pinned together at 3.99.9. Thanks @dependabot.
+
+- Create fresh SQLite schemas in one transaction to reduce initialization work
+  and roll back new schema objects if setup fails.
+
+- Reduce repeated schema lookups when validating the native change journal on
+  archive opens, status reads and captures, preserving journal repair checks.
+
+- Add native remote login with an explicitly selected GitHub token, storing the
+  returned session in the OS keyring. Remote identity, status and message reads
+  resolve that session without opening SQLite or falling back to local data.
+
+- Read cloud-mode status and doctor results from the archive API, preserving
+  its snapshot, capabilities and coverage warnings without opening SQLite.
+
+- Keep command help and argument validation available when the config file is malformed.
+
+- Add explicit PostgreSQL message list and retained-thread reads with pinned
+  pagination; cloud mode refuses unsupported commands and SQLite fallback.
+
+- Switch the inactive acquisition service template to PostgreSQL-owned `acquire`,
+  with separate provider/publisher credentials and bounded server-checkpoint resume.
+  The scheduled scope is channel message creations, not full Slack synchronization.
+
+- Collect channel message creations directly through a prepared PostgreSQL API,
+  with resumable server checkpoints, full raw fields and retained enrichment.
+  Bot and user-token horizons remain separate; no local SQLite is opened.
+
 ## 0.11.0 - 2026-11-15
 
 **Highlights:** Add bounded, resumable archive delivery and incremental API sync, fetch bot-only thread replies, and fix the Go net/http security vulnerability.

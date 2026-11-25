@@ -87,10 +87,11 @@ work across restarts and token changes. Explicit `--since` and Tail repair leave
 that backlog alone. See [Retained API threads](docs/configuration.md#retained-api-threads)
 for scope and partial-coverage behavior.
 
-Inactive [Linux acquisition templates](docs/configuration.md#scheduled-incremental-acquisition)
-are available under `operations/`; installation and source qualification are separate.
+Inactive [Linux acquisition templates](docs/configuration.md#scheduled-postgresql-acquisition)
+run PostgreSQL-owned `acquire` under `operations/`; installation and source
+qualification are separate. They cover message creations only.
 
-For recurring API acquisition, `sync --incremental` requires explicit workspace
+For local SQLite API acquisition, `sync --incremental` requires explicit workspace
 and channels, disabled joining/media and no automatic Git-share imports. It
 refuses missing local history checkpoints instead of starting a backfill; see
 [qualified incremental acquisition](docs/configuration.md#archive-schema-upgrades).
@@ -162,6 +163,58 @@ resume. Use an external source/outbox lock when scheduling; the command itself
 does not install or enable a timer. Inactive Linux units under
 `operations/` require separate source, limit and credential qualification before
 installation.
+
+## Read a cloud archive
+
+Exchange a local GitHub credential for an archive session. Only the explicitly
+named environment variable is read; the returned session is stored in the OS
+keyring, bound to the endpoint, archive and selected config. Config promotion is
+atomic; a failed save preserves the previous session. Existing local settings remain.
+
+```sh
+slacrawl --config cloud.toml remote login --endpoint https://archive.example.com \
+  --archive SOURCE --github-token-env GITHUB_TOKEN
+slacrawl --config cloud.toml remote whoami --json
+slacrawl --config cloud.toml remote status --json
+slacrawl --config cloud.toml messages --channel CHANNEL --limit 50
+slacrawl --config cloud.toml messages --channel CHANNEL --thread TIMESTAMP
+```
+
+Cloud `status`, `doctor` and message reads use the configured session. Explicit
+`remote.auth.token_source = "keyring"` never falls back to an environment token
+if the keyring is unavailable. Existing environment-token configs remain valid.
+Cloud search and unsupported local commands fail explicitly; they do not open
+SQLite. Login grants only the permissions returned by the existing archive API.
+Acquisition still takes its separately selected publisher token via `--token-env`.
+
+## Collect directly into PostgreSQL
+
+For an already admitted and explicitly prepared PostgreSQL Slack source:
+
+```sh
+slacrawl --json acquire --origin https://archive.example.com --archive SOURCE \
+  --workspace WORKSPACE --channel CHANNEL --source api-bot \
+  --since 2026-11-19T00:00:00Z --until 2026-11-20T00:00:00Z \
+  --max-pages 20 --timeout 10m
+```
+
+The publisher token comes from `CRAWL_REMOTE_TOKEN` (or `--token-env`). Slack
+credentials use the existing `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN` configuration.
+Select `api-bot` or `api-user` explicitly; there is no credential fallback.
+An explicit global `--config` can supply existing workspace credential mappings.
+This command does not discover or open a local archive, outbox, cache or notifier.
+
+The first channel/API-class interval requires `--since`. Later invocations use
+its server checkpoint. Interrupted runs resume their original window and cursor;
+conflicting explicit flags are rejected. A bounded result retains unfinished
+work in PostgreSQL. Transport uncertainty stops the command: rerun the same
+scope to reconcile server state, rather than generating a replacement request.
+
+Only completed runs become visible. Existing message revisions and richer file
+fields are preserved through the scoped API lookup. Changed message revisions
+stop with an explicit refresh requirement. This is channel message-creation
+collection: it does not traverse replies or certify edits, deletions, historical
+completeness, or visibility under a different token class. No schedule is enabled.
 
 ## Keep it current
 

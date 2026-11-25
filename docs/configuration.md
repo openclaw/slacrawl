@@ -205,56 +205,69 @@ separately reviewed recovery preserves them. Do not lower `user_version` or
 attempt an in-place downgrade. A data-only snapshot readable by an older binary
 does not make old-version syncing or opening an upgraded database safe.
 
-## Scheduled incremental acquisition
+## Scheduled PostgreSQL acquisition
 
-`operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates.
-They run the qualified `sync --incremental` profile above with one worker and
-without channel joining or media downloads. They do not install themselves or
-bootstrap history. Keep the current collector until its exact replacement is
-qualified and the writer transition is separately approved.
+`operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates
+for the SQLite-free `acquire` command. They replace the old template's local
+`sync --incremental` invocation. Installing source code does not update an
+installed unit: review and install the exact unit before enabling its timer.
+Leave the native SQLite sync and delivery timers stopped for the selected source
+once its PostgreSQL acquisition writer takes over.
 
-Each instance runs as `slacrawl` in `/var/lib/slacrawl/<instance>`. Before
-installation, qualify its existing `native.sqlite`, local API completion state,
-source identity and current channel membership. The root-owned, group-readable
-`/etc/slacrawl/acquire-<instance>.toml` must set `db_path` to that exact native
-file, with `cache_dir`, `log_dir` and `[share].repo_path` inside the instance
-directory. Even with sharing disabled, runtime setup creates the share path's
-parent; leaving its home-derived default can fail under the service sandbox.
-Set `[share].auto_update = false` and leave `[share].remote` empty; this collector
-must not import a Git snapshot.
-Use the existing approved token environment names in its Slack/workspace config.
-The `bot` alias still uses the normal bot-first/user-fallback API selection;
-qualify the actual selected identity and its own local completion records.
+Each instance selects **one channel and one API identity class** (`api-bot` or
+`api-user`) on an already prepared PostgreSQL source. Before activation, qualify
+the source admission, publisher endpoint, provider identity and existing
+per-channel checkpoint. Use one shared instance lock per source, including for
+manual acquisitions: the backend permits only one active run per source.
+Do not schedule separate channel instances against the same source concurrently.
+Bot and user horizons remain separate; changing identity does not fill the other
+identity's history.
 
-The root-owned mode-0600 `/etc/slacrawl/acquire-<instance>.env` supplies those
-provider credentials plus:
+Provision `/var/lib/slacrawl/<instance>` writable only by `slacrawl`; it contains
+only `acquire.lock`, not an archive or outbox. The root-owned, group-readable
+`/etc/slacrawl/acquire-<instance>.toml` supplies the existing Slack token environment
+names and workspace configuration. `acquire` loads this configuration without
+opening `db_path`, resolving Desktop credentials or running sharing hooks.
 
-- `SLACRAWL_WORKSPACE`: the single qualified workspace ID.
-- `SLACRAWL_CHANNELS`: the explicit comma-separated admitted channel IDs.
+The root-owned mode-0600 `/etc/slacrawl/acquire-<instance>.env` supplies:
 
-Keep provider credentials separate from the archive publisher token used by
-`slacrawl-delivery@.service`. Tokens stay in environment/configuration and never
-appear in the unit's command line. Missing scope, an incompatible config, or an
-unqualified history checkpoint fails through the existing CLI admission.
+- `SLACRAWL_ORIGIN`: the qualified HTTPS API origin (HTTP only for loopback).
+- `SLACRAWL_ARCHIVE`: the prepared PostgreSQL source ID.
+- `SLACRAWL_WORKSPACE`: the admitted workspace ID.
+- `SLACRAWL_CHANNEL`: one admitted channel ID.
+- `SLACRAWL_SOURCE`: exactly `api-bot` or `api-user`, without fallback.
+- `SLACRAWL_PUBLISHER_TOKEN`: the acquisition publisher credential, never a reader token.
 
-The persistent `acquire.lock` serializes acquisition for this instance; manual
-sync must take the same lock. Do not map two instances to one database or let
-an older collector write it concurrently. Delivery has its own `delivery.lock`
-and can read committed native changes through the existing snapshot contract.
-Acquisition does not depend on archive availability, and its success does not
-imply delivery success. Measure both source and service watermarks.
+A separate root-owned mode-0600 `/etc/slacrawl/provider-<instance>.env` contains
+only the provider credentials named by the TOML configuration (for example,
+`SLACK_BOT_TOKEN`). Keep those credentials separate from the archive publisher
+credential. Neither token value appears in the command line.
+
+The recurring command deliberately omits `--since`, `--until` and `--run-id`.
+A first acquisition must be run manually with an explicitly qualified `--since`,
+using the same config, scope, credentials and lock. After that, the server supplies
+its completed horizon; an unfinished run retains its original identity, horizon
+and cursor. A missing initial checkpoint fails visibly, without inventing a
+history boundary. A bounded result is incomplete work for the next invocation;
+an uncertain acknowledgement stops and resumes from server state next time.
+Never reset that state to make a timer succeed.
 
 The timer runs two minutes after boot and five minutes after completion, with
-up to15seconds jitter. The service has a four-minute execution limit,30-second
-stop limit,512MiB memory cap and one-core CPU quota. These are bounded starting
-settings: qualify the actual source workload and host capacity before activation.
-Repeated timeout requires investigation; do not reset checkpoints or silently
-increase limits. No immediate restart loop is configured.
+up to 15 seconds jitter. Each invocation allows 20 provider pages and a 90-second
+CLI deadline; systemd limits the whole process to 120 seconds, then a 30-second
+stop timeout. Memory is capped at 512 MiB and CPU at one core. There is no restart
+loop. Exit 75 indicates lock contention. Qualify these bounds on the selected
+workload rather than treating a timer firing or exit zero as proof of freshness:
+inspect `complete`, the published sequence and the channel's completed horizon.
+
+This collector covers channel **message creations only**. It preserves richer
+retained rows and full raw fields, but does not establish reply traversal,
+edit/delete synchronization, workspace metadata refresh or full history coverage.
+Those remain separate owners; do not describe this timer as complete Slack sync.
 
 Validate exact units with `systemd-analyze verify --man=no` before installation.
-Enable only after configuration, credentials, coverage, writer ownership and
-recovery are qualified. Inspect completed history horizons and service-visible
-watermarks across real cycles; a timer firing does not prove freshness.
+Activation and retirement of the old writer require separate operational review;
+these templates do not enable themselves or bootstrap a source.
 
 ## Workspace Selection
 
@@ -1408,3 +1421,32 @@ path = ""
 repair_every = "30m"
 desktop_refresh_every = "5m"
 ```
+
+## PostgreSQL message reader
+
+Select a remote reader explicitly; it never downloads a SQLite copy:
+
+```toml
+[remote]
+mode = "cloud"
+endpoint = "https://archive.example.test"
+archive = "slack-source"
+token_env = "SLACK_ARCHIVE_READER_TOKEN"
+```
+
+The token is a reader credential, separate from acquisition publisher and Slack
+provider credentials. `messages --workspace T1 --channel C1 --limit 50` reads the
+current completed source pin. `messages --workspace T1 --channel C1 --thread
+1700000000.000000` selects that exact root and retained replies. List and thread
+results retain native field names, labels and mention display behavior. A query
+stays pinned across byte-limited pages, and limits are 1 through 500 rows.
+This is retained thread reading, not a claim that reply collection is complete.
+
+Cloud mode supports `messages` (including `--thread`), `status` and `doctor`.
+Status and doctor report the archive API's snapshot, capabilities and coverage
+warnings; they do not inspect local Slack credentials or certify upstream
+completeness. Search, FTS syntax, TUI, analytics and other local commands fail
+explicitly; they do not open SQLite, import a Git share or fall back when the API
+is unavailable.
+Use `remote.mode = "local"` for explicit existing local workflows. The separate
+`acquire` command continues to use its explicit publisher API arguments.

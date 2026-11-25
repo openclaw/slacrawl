@@ -37,6 +37,9 @@ func loadConfigOrDefault(path string) (config.Config, error) {
 }
 
 func (a *App) openStore(cfg config.Config) (*store.Store, error) {
+	if cfg.Remote.Mode == "cloud" {
+		return nil, errors.New("local archive access is disabled in cloud mode")
+	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return nil, err
 	}
@@ -58,6 +61,9 @@ func (a *App) openAutoUpdatingStore(ctx context.Context, cfg config.Config) (*st
 // openReadableStore preserves automatic share imports when configured, but keeps
 // ordinary local archive queries from changing database state or permissions.
 func (a *App) openReadableStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
+	if cfg.Remote.Mode == "cloud" {
+		return nil, errors.New("local archive access is disabled in cloud mode")
+	}
 	if cfg.ShareEnabled() && cfg.Share.AutoUpdate {
 		st, err := a.openAutoUpdatingStore(ctx, cfg)
 		if err != nil {

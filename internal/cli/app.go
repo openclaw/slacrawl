@@ -83,6 +83,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return normalizeCommandHelp(a.runExport(ctx, rest[1:], format))
 	}
 
+	if rest[0] == "acquire" {
+		format, err := resolveOutputFormat(global.Format, global.JSON)
+		if err != nil {
+			return err
+		}
+		a.setColorEnabled(format, global.NoColor)
+		return normalizeCommandHelp(a.runAcquire(ctx, rest[1:], global.Config, format))
+	}
+
 	if rest[0] == "delivery" {
 		if global.Config != nil {
 			return errors.New("delivery does not accept --config; supply explicit --db and --scope")
@@ -115,6 +124,25 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	a.outputFormat = outputFormat
 	a.setColorEnabled(outputFormat, global.NoColor)
 
+	if rest[0] == "remote" {
+		return a.runRemote(ctx, configPath, rest[1:], outputFormat)
+	}
+
+	// Cloud selection must precede notification, local archive creation and share
+	// imports. Unsupported commands fail rather than silently reading old SQLite.
+	if _, err := os.Stat(configPath); err == nil {
+		cfg, err := loadConfig(configPath)
+		// Let the command parse help and arguments before reporting config errors.
+		if err == nil && cfg.Remote.Mode == "cloud" {
+			switch rest[0] {
+			case "status", "doctor":
+				return a.runRemoteHealth(ctx, cfg, rest[0], rest[1:], outputFormat)
+			case "messages":
+			default:
+				return errors.New("command is not supported in cloud mode; no local SQLite fallback")
+			}
+		}
+	}
 	a.maybeNotifyRelease(ctx, rest)
 
 	switch rest[0] {

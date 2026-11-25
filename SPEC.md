@@ -54,7 +54,7 @@ Out of scope for V1:
 An agent should assume:
 
 - shell: `zsh`
-- Go `1.27.0+` is installed; the preferred build toolchain is `1.27.2`
+- Go `1.27.0+` is installed; the preferred build toolchain is `1.27.4`
 - desktop-local Slack data may exist under:
   - `~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack`
   - `${XDG_CONFIG_HOME}/Slack`
@@ -579,11 +579,14 @@ and reconcile through their existing owners rather than deleting/recreating them
 ### Scheduled acquisition
 
 `operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates
-for the explicit API `sync --incremental` profile. They use a separately qualified
-native source/configuration, provider credentials, workspace/channel set and
-persistent acquisition lock. They do not replace or activate a collector.
-See [scheduled incremental acquisition](docs/configuration.md#scheduled-incremental-acquisition)
-for admission, bounded execution, relationship to delivery and freshness proof.
+for the SQLite-free `acquire` command. Each instance uses one admitted channel,
+an explicit `api-bot` or `api-user` identity, separate provider/publisher credentials
+and a persistent source acquisition lock. The server owns checkpoints and resumes
+unfinished runs; the first horizon requires manual qualification. The template
+allows 20 pages and a 90-second CLI deadline, with a 120-second systemd bound.
+It covers message creations only, not replies, edits, deletes or metadata refresh.
+See [scheduled PostgreSQL acquisition](docs/configuration.md#scheduled-postgresql-acquisition)
+for admission, writer cutover, bounded execution and freshness proof.
 
 ### Explicit pending delivery
 
@@ -1540,3 +1543,43 @@ internal/store/storedb/   # generated sqlc wrappers
 internal/search/
 internal/syncer/
 ```
+
+
+## PostgreSQL-owned channel acquisition
+
+The explicit `acquire` command operates independently of local SQLite. It uses
+an already prepared source's publisher API for run identities, current-row
+lookups, atomic pages and per-channel/API-class checkpoints. Native Slack HTTP
+and message normalization remain owned by the existing Slack client.
+
+Run/state/page requests use `slack-acquisition/v1`, preserving complete typed
+message, file and mention rows and original provider JSON. Each provider page
+must fit 500 changes and a 4 MiB request; metadata lookups fit 128 KiB. Oversized,
+limited, missing, or inconsistent pages fail without completing coverage.
+Slack requests are bounded to 4 MiB and the overall invocation deadline.
+
+A run starts with an explicit UTC microsecond interval; subsequent channel runs
+start at its completed horizon. `api-bot` and `api-user` progress are separate.
+Only terminal complete pages publish. The server retains uncertain writes and
+incomplete runs; retries resume its exact identity/cursor without local journals.
+Existing rows retain their exact richer fields; an actual message edit requires
+an independent refresh owner. This contract does not establish thread traversal,
+edit/delete synchronization or full upstream history coverage.
+
+### PostgreSQL message reads
+
+`remote.mode = "cloud"` binds native `messages` to one configured API archive
+and reader token environment name. Exact list filters and thread-root selection
+execute in PostgreSQL; the CLI never scans raw source tables. Descending timestamp
+and channel ordering, immutable pagination pins, joined labels and mention display
+match the native message projection. `--thread` requires explicit workspace and
+channel. This reads existing replies without claiming collection completeness.
+
+`status` and `doctor` read the archive API's status, preserving its snapshot,
+capabilities and coverage warnings. They do not inspect local Slack credentials,
+desktop caches or SQLite. Doctor describes archive connectivity and reported
+state; it does not certify upstream completeness.
+
+Other normal commands, including SQLite FTS search, fail before local archive or
+share initialization. API failure never selects local state. Local mode remains
+explicit and unchanged.

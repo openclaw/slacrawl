@@ -35,6 +35,26 @@ func journalGeneration(t *testing.T, st *Store) string {
 	return generation
 }
 
+func BenchmarkNativeJournalValidation(b *testing.B) {
+	st, err := Open(filepath.Join(b.TempDir(), "archive.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := validateNativeChanges(ctx, st.DB()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestNativeJournalWritesAndRollback(t *testing.T) {
 	st := openBatchTestStore(t)
 	ctx := context.Background()
@@ -199,6 +219,7 @@ func TestNativeJournalUpgradeAndRepair(t *testing.T) {
 	for _, damage := range []string{
 		`drop trigger native_changes_sync_state_u`,
 		`drop trigger native_changes_sync_state_u; create trigger native_changes_sync_state_u after update on sync_state begin select 1; end`,
+		`create trigger native_changes_unexpected after insert on workspaces begin select 1; end`,
 		`delete from native_change_state`,
 		`drop table native_changes`,
 	} {
@@ -223,4 +244,14 @@ func TestNativeJournalUpgradeAndRepair(t *testing.T) {
 		require.Contains(t, string(body), `"generation_id":"`+next+`"`)
 	}
 	require.NoError(t, st.Close())
+}
+
+func TestNativeJournalValidationIgnoresUnrelatedObjects(t *testing.T) {
+	st := openBatchTestStore(t)
+	_, err := st.DB().Exec(`
+create table native_changes_notes (note text);
+create trigger unrelated_workspace_insert after insert on workspaces begin select 1; end;
+`)
+	require.NoError(t, err)
+	require.NoError(t, validateNativeChanges(context.Background(), st.DB()))
 }

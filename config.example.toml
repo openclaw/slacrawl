@@ -93,3 +93,10 @@ branch = "main"
 # Set false to query/sync locally when sync.include_dms=false blocks legacy share imports.
 auto_update = true
 stale_after = "15m"
+
+# Optional PostgreSQL message reader. No local archive fallback in cloud mode.
+[remote]
+mode = "local" # set "cloud" only with a qualified reader endpoint and archive
+endpoint = ""
+archive = ""
+token_env = "CRAWL_REMOTE_TOKEN"

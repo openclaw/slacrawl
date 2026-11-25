@@ -428,6 +428,23 @@ where mm.mention_type = 'user'
 	return nil
 }
 
+// ResolveMessageMentions reuses the native presentation rule for API-supplied,
+// snapshot-pinned mention metadata. It does not access a local database.
+func ResolveMessageMentions(value string, pairs [][2]string) string {
+	mentions := make([]messageMentionDisplay, 0, len(pairs))
+	for _, pair := range pairs {
+		target, display := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
+		if target == "" || display == "" || strings.EqualFold(target, display) {
+			continue
+		}
+		mentions = append(mentions, messageMentionDisplay{target: target, display: display})
+	}
+	if len(mentions) == 0 {
+		return value
+	}
+	return replaceUserMentions(value, mentions)
+}
+
 func replaceUserMentions(value string, mentions []messageMentionDisplay) string {
 	value = strings.TrimSpace(value)
 	if value == "" || len(mentions) == 0 {

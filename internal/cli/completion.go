@@ -13,6 +13,7 @@ var (
 		"version",
 		"check-update",
 		"metadata",
+		"remote",
 		"doctor",
 		"report",
 		"digest",
@@ -91,7 +92,7 @@ _slacrawl()
     local i
     for ((i=1; i < ${#words[@]}; i++)); do
         case "${words[i]}" in
-            init|version|check-update|metadata|doctor|report|digest|analytics|publish|subscribe|update|sync|import|export|delivery|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
+            init|version|check-update|metadata|remote|doctor|report|digest|analytics|publish|subscribe|update|sync|import|export|delivery|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
                 command="${words[i]}"
                 break
                 ;;

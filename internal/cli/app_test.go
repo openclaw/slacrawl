@@ -600,6 +600,31 @@ func TestSubcommandHelpDoesNotLoadConfig(t *testing.T) {
 	}
 }
 
+func TestCloudModeRejectsLocalCommandsBeforeSideEffects(t *testing.T) {
+	for _, command := range []string{"init", "sync", "publish", "users"} {
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			cfg := config.Default()
+			cfg.DBPath = filepath.Join(dir, "archive.db")
+			cfg.Remote.Mode = "cloud"
+			cfg.Remote.Endpoint = "http://127.0.0.1:8123"
+			cfg.Remote.Archive = "fixture"
+			require.NoError(t, cfg.Save(path))
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+			err = app.Run(context.Background(), []string{"--config", path, command})
+			require.ErrorContains(t, err, "command is not supported in cloud mode")
+			require.NoFileExists(t, cfg.DBPath)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
 func TestCommandHelpDoesNotLoadConfigAndReturnsSuccess(t *testing.T) {
 	commands := []string{
 		"report",

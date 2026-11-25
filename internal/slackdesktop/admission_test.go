@@ -32,6 +32,11 @@ func admissionState(channelID string, flags map[string]any) map[string]any {
 
 func writeAdmissionBlob(t *testing.T, root, name string, value any) {
 	t.Helper()
+	writeBlob(t, root, name, serializeAdmissionBlob(t, value))
+}
+
+func serializeAdmissionBlob(t *testing.T, value any) []byte {
+	t.Helper()
 	requireNode(t)
 	body, err := json.Marshal(value)
 	require.NoError(t, err)
@@ -39,7 +44,7 @@ func writeAdmissionBlob(t *testing.T, root, name string, value any) {
 	cmd.Stdin = strings.NewReader(string(body))
 	payload, err := cmd.Output()
 	require.NoError(t, err)
-	writeBlob(t, root, name, payload)
+	return payload
 }
 
 func admissionStore(t *testing.T) *store.Store {
@@ -106,53 +111,57 @@ func TestDesktopAdmissionNativeKinds(t *testing.T) {
 
 func TestDesktopAdmissionAllBlobEvidence(t *testing.T) {
 	for _, kind := range []string{"dm", "unknown", "conflicting", "missing selected", "missing id dm", "missing id unknown", "primitive unknown"} {
-		for _, reverse := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/reverse=%v", kind, reverse), func(t *testing.T) {
-				root := t.TempDir()
-				selected := admissionState("CONE", map[string]any{"is_channel": true})
-				selected["channels"].(map[string]any)["CFILLER"] = map[string]any{"id": "CFILLER", "is_channel": true}
-				flags := map[string]any{}
-				switch kind {
-				case "dm", "missing id dm":
-					flags["is_im"] = true
-				case "conflicting":
-					flags["is_channel"] = true
-					flags["is_private"] = true
-				case "missing selected":
-					flags["is_channel"] = true
-					delete(selected["channels"].(map[string]any), "CONE")
-				}
-				older := admissionState("CONE", flags)
-				older["messages"] = map[string]any{}
-				if strings.HasPrefix(kind, "missing id") {
-					delete(older["channels"].(map[string]any)["CONE"].(map[string]any), "id")
-				} else if kind == "primitive unknown" {
-					older["channels"].(map[string]any)["CONE"] = true
-				}
-				names := []string{"a", "z"}
-				if reverse {
-					names = []string{"z", "a"}
-				}
-				writeAdmissionBlob(t, root, names[0], selected)
-				writeAdmissionBlob(t, root, names[1], older)
-				for _, policy := range []admission.DMPolicy{admission.Default, admission.Include, admission.Exclude} {
-					st := admissionStore(t)
-					source, err := Ingest(context.Background(), st, root, IngestOptions{DMPolicy: policy})
-					require.NoError(t, err)
-					require.Equal(t, 2, source.IndexedDB.DecodedBlobCount)
-					require.Equal(t, 1, source.IndexedDB.DecodedStateCount)
-					rows, err := st.Messages(context.Background(), "", "CONE", "", 10)
-					require.NoError(t, err)
-					if policy == admission.Exclude {
-						require.Empty(t, rows)
-						requireNoDesktopCanary(t, st, "CONE", "intake-canary")
-					} else {
-						require.Len(t, rows, 1)
-						require.Contains(t, rows[0].Text, "intake-canary")
+		t.Run(kind, func(t *testing.T) {
+			selected := admissionState("CONE", map[string]any{"is_channel": true})
+			selected["channels"].(map[string]any)["CFILLER"] = map[string]any{"id": "CFILLER", "is_channel": true}
+			flags := map[string]any{}
+			switch kind {
+			case "dm", "missing id dm":
+				flags["is_im"] = true
+			case "conflicting":
+				flags["is_channel"] = true
+				flags["is_private"] = true
+			case "missing selected":
+				flags["is_channel"] = true
+				delete(selected["channels"].(map[string]any), "CONE")
+			}
+			older := admissionState("CONE", flags)
+			older["messages"] = map[string]any{}
+			if strings.HasPrefix(kind, "missing id") {
+				delete(older["channels"].(map[string]any)["CONE"].(map[string]any), "id")
+			} else if kind == "primitive unknown" {
+				older["channels"].(map[string]any)["CONE"] = true
+			}
+			selectedPayload := serializeAdmissionBlob(t, selected)
+			olderPayload := serializeAdmissionBlob(t, older)
+			for _, reverse := range []bool{false, true} {
+				t.Run(fmt.Sprintf("reverse=%v", reverse), func(t *testing.T) {
+					root := t.TempDir()
+					names := []string{"a", "z"}
+					if reverse {
+						names = []string{"z", "a"}
 					}
-				}
-			})
-		}
+					writeBlob(t, root, names[0], selectedPayload)
+					writeBlob(t, root, names[1], olderPayload)
+					for _, policy := range []admission.DMPolicy{admission.Default, admission.Include, admission.Exclude} {
+						st := admissionStore(t)
+						source, err := Ingest(context.Background(), st, root, IngestOptions{DMPolicy: policy})
+						require.NoError(t, err)
+						require.Equal(t, 2, source.IndexedDB.DecodedBlobCount)
+						require.Equal(t, 1, source.IndexedDB.DecodedStateCount)
+						rows, err := st.Messages(context.Background(), "", "CONE", "", 10)
+						require.NoError(t, err)
+						if policy == admission.Exclude {
+							require.Empty(t, rows)
+							requireNoDesktopCanary(t, st, "CONE", "intake-canary")
+						} else {
+							require.Len(t, rows, 1)
+							require.Contains(t, rows[0].Text, "intake-canary")
+						}
+					}
+				})
+			}
+		})
 	}
 }
 

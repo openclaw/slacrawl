@@ -161,9 +161,13 @@ func TestDeliveryCycleResumesBeforeCapture(t *testing.T) {
 		st, err := store.Open(db)
 		require.NoError(t, err)
 		defer st.Close()
+		writes := make([]store.MessageWrite, 0, count)
 		for i := range count {
-			require.NoError(t, st.UpsertMessage(ctx, store.Message{ChannelID: "C1", TS: fmt.Sprintf("1710000000.%06d", i+100), WorkspaceID: "T1", UserID: "U1", Text: text, SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: time.Unix(1710000100, 0).UTC()}, nil))
+			writes = append(writes, store.MessageWrite{Message: store.Message{ChannelID: "C1", TS: fmt.Sprintf("1710000000.%06d", i+100), WorkspaceID: "T1", UserID: "U1", Text: text, SourceRank: 2, SourceName: "api-bot", RawJSON: "{}", UpdatedAt: time.Unix(1710000100, 0).UTC()}})
 		}
+		result, err := st.ApplyWriteBatch(ctx, store.WriteBatch{Messages: writes})
+		require.NoError(t, err)
+		require.Equal(t, count, result.MessagesWritten)
 	}
 	stageChanges := func() {
 		t.Helper()

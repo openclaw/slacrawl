@@ -155,20 +155,35 @@ func validateNativeChanges(ctx context.Context, q storedb.DBTX) error {
 	}
 	objects["native_changes"] = nativeChangesSchema
 	objects["native_change_state"] = nativeChangeStateSchema
-	for name, expected := range objects {
-		matches, err := nativeObjectMatches(ctx, q, name, expected)
-		if err != nil {
+	// Read the journal definitions together instead of preparing one catalog
+	// query per object on every open, status read and capture.
+	rows, err := q.QueryContext(ctx, `select name, sql from sqlite_schema
+ where name in ('native_changes', 'native_change_state')
+ or (type = 'trigger' and name glob 'native_changes_*')`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	actual := make(map[string]string, len(objects))
+	for rows.Next() {
+		var name, definition string
+		if err := rows.Scan(&name, &definition); err != nil {
 			return err
 		}
-		if !matches {
+		actual[name] = definition
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for name, expected := range objects {
+		if normalizedNativeSQL(actual[name]) != normalizedNativeSQL(expected) {
 			return fmt.Errorf("native journal structure %s differs; open writable to repair and reconcile the new generation", name)
 		}
 	}
-	var count int
-	if err := q.QueryRowContext(ctx, `select count(*) from sqlite_schema where type = 'trigger' and name glob 'native_changes_*'`).Scan(&count); err != nil {
-		return err
-	}
-	if count != len(objects)-2 {
+	if len(actual) != len(objects) {
 		return errors.New("native journal has unexpected triggers; open writable to repair")
 	}
 	var valid bool
