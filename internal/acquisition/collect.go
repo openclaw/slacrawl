@@ -49,24 +49,9 @@ func Collect(ctx context.Context, api *Client, provider *slackapi.Client, o Opti
 			return result, errors.New("active acquisition run differs from requested scope or window")
 		}
 	} else {
-		var since time.Time
-		switch {
-		case o.Since != nil:
-			since = *o.Since
-		case state.CompletedThrough != nil:
-			since = *state.CompletedThrough
-		default:
-			return result, errors.New("first acquisition requires explicit --since")
-		}
-		until := time.Now().UTC().Truncate(time.Microsecond)
-		if o.Until != nil {
-			until = *o.Until
-		}
-		if !validTime(since) || !validTime(until) || !since.Before(until) || until.After(time.Now()) {
-			return result, errors.New("acquisition window requires past UTC microsecond boundaries")
-		}
-		if state.CompletedThrough != nil && !state.CompletedThrough.Equal(since) {
-			return result, errors.New("since differs from completed source horizon")
+		since, until, e := runWindow(o, state.CompletedThrough, time.Now())
+		if e != nil {
+			return result, e
 		}
 		id := o.RunID
 		if id == "" {
@@ -167,6 +152,34 @@ func Collect(ctx context.Context, api *Client, provider *slackapi.Client, o Opti
 	}
 	result.Status = "bounded"
 	return result, nil
+}
+
+// runWindow picks a new run's window. A run continues from the completed
+// horizon, or, with explicit --since and --until that end at or before it,
+// backfills earlier history; the server admits only a backfill that ends
+// exactly where the channel's completed coverage starts.
+func runWindow(o Options, completed *time.Time, now time.Time) (time.Time, time.Time, error) {
+	var since time.Time
+	switch {
+	case o.Since != nil:
+		since = *o.Since
+	case completed != nil:
+		since = *completed
+	default:
+		return since, since, errors.New("first acquisition requires explicit --since")
+	}
+	until := now.UTC().Truncate(time.Microsecond)
+	if o.Until != nil {
+		until = *o.Until
+	}
+	if !validTime(since) || !validTime(until) || !since.Before(until) || until.After(now) {
+		return since, until, errors.New("acquisition window requires past UTC microsecond boundaries")
+	}
+	backfill := o.Since != nil && o.Until != nil && completed != nil && !until.After(*completed)
+	if completed != nil && !completed.Equal(since) && !backfill {
+		return since, until, errors.New("since differs from completed source horizon")
+	}
+	return since, until, nil
 }
 
 func validTime(t time.Time) bool {

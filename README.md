@@ -205,7 +205,10 @@ An explicit global `--config` can supply existing workspace credential mappings.
 This command does not discover or open a local archive, outbox, cache or notifier.
 
 The first channel/API-class interval requires `--since`. Later invocations use
-its server checkpoint. Interrupted runs resume their original window and cursor;
+its server checkpoint. To collect history from before the first interval, pass
+an explicit `--since` and an `--until` that equals the start of the channel's
+earliest completed interval; the server rejects a window that leaves a gap or
+overlaps collected time, and the completed checkpoint does not move. Interrupted runs resume their original window and cursor;
 conflicting explicit flags are rejected. A bounded result retains unfinished
 work in PostgreSQL. Transport uncertainty stops the command: rerun the same
 scope to reconcile server state, rather than generating a replacement request.

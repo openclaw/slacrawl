@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let `acquire` backfill history before a channel's first completed interval with an explicit `--since` and an `--until` at that interval's start, against a receiver that admits backfill runs.
+
 ## 0.12.0 - 2026-11-26
 
 **Highlights:** Add PostgreSQL-owned Slack acquisition and cloud reads, native remote login through the OS keyring, and faster SQLite archive initialization and validation.
