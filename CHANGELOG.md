@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject negative or overflowing native API retry delays instead of retrying with a negative or wrapped duration.
+
 ## 0.12.0 - 2026-11-26
 
 **Highlights:** Add PostgreSQL-owned Slack acquisition and cloud reads, native remote login through the OS keyring, and faster SQLite archive initialization and validation.

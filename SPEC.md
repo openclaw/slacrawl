@@ -1076,6 +1076,11 @@ status error; only rate limits with Retry-After use the existing bounded retry
 policy. Typed catalog decoding still precedes success validation; this does not
 certify complete payload shape.
 
+Native Retry-After delays must be nonnegative integer seconds that fit a Go
+duration. Negative or overflowing values fail as rate-limit header diagnostics
+without sleeping or retrying. Zero and representable positive delays retain the
+existing retry policy.
+
 After native success, page admission requires a present array: `messages` for
 history/replies, `channels` for conversation catalogs, and `members` for user
 catalogs. Missing or null collections leave the page uncertified; nonarrays fail
