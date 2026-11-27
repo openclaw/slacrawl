@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prepare private delivery metadata seeds from an approved bot and channel inventory, preserving native Slack sharing flags.
+
 ## 0.12.0 - 2026-11-26
 
 **Highlights:** Add PostgreSQL-owned Slack acquisition and cloud reads, native remote login through the OS keyring, and faster SQLite archive initialization and validation.

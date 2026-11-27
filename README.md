@@ -87,6 +87,8 @@ work across restarts and token changes. Explicit `--since` and Tail repair leave
 that backlog alone. See [Retained API threads](docs/configuration.md#retained-api-threads)
 for scope and partial-coverage behavior.
 
+A [metadata seed](docs/configuration.md#prepare-an-approved-channel-metadata-seed) prepares an approved workspace and its channels for private delivery.
+
 Inactive [Linux acquisition templates](docs/configuration.md#scheduled-postgresql-acquisition)
 run PostgreSQL-owned `acquire` under `operations/`; installation and source
 qualification are separate. They cover message creations only.

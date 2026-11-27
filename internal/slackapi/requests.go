@@ -16,11 +16,22 @@ import (
 )
 
 func (c *Client) authTest(ctx context.Context, token string) (*slack.AuthTestResponse, error) {
-	return retry(ctx, c.sleep, 3, func() (*slack.AuthTestResponse, error) {
-		var response struct {
-			slack.SlackResponse
-			slack.AuthTestResponse
-		}
+	identity, err := c.authTestIdentity(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return &identity.AuthTestResponse, nil
+}
+
+type authIdentity struct {
+	slack.SlackResponse
+	slack.AuthTestResponse
+	AppID string `json:"app_id"`
+}
+
+func (c *Client) authTestIdentity(ctx context.Context, token string) (*authIdentity, error) {
+	return retry(ctx, c.sleep, 3, func() (*authIdentity, error) {
+		var response authIdentity
 		headers, err := c.postSlackForm(ctx, token, "auth.test", url.Values{}, &response)
 		if err != nil {
 			return nil, err
@@ -29,7 +40,7 @@ func (c *Client) authTest(ctx context.Context, token string) (*slack.AuthTestRes
 			return nil, err
 		}
 		response.AuthTestResponse.Header = headers.Clone()
-		return &response.AuthTestResponse, nil
+		return &response, nil
 	})
 }
 
@@ -81,8 +92,12 @@ func (c *Client) joinConversation(ctx context.Context, channelID string) error {
 }
 
 func (c *Client) getConversations(ctx context.Context, token string, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+	return getConversationsPage[slack.Channel](ctx, c, token, params)
+}
+
+func getConversationsPage[T any](ctx context.Context, c *Client, token string, params *slack.GetConversationsParameters) ([]T, string, error) {
 	type result struct {
-		channels   []slack.Channel
+		channels   []T
 		nextCursor string
 	}
 	res, err := retry(ctx, c.sleep, 3, func() (result, error) {
@@ -104,7 +119,7 @@ func (c *Client) getConversations(ctx context.Context, token string, params *sla
 		}
 		var response struct {
 			slack.SlackResponse
-			Channels []slack.Channel `json:"channels"`
+			Channels []T `json:"channels"`
 			Metadata struct {
 				NextCursor string `json:"next_cursor"`
 			} `json:"response_metadata"`

@@ -14,6 +14,9 @@ import (
 )
 
 func (a *App) runAcquire(ctx context.Context, args []string, configPath *string, format OutputFormat) error {
+	if len(args) > 0 && args[0] == "metadata-seed" {
+		return a.runMetadataSeed(ctx, args[1:], configPath, format)
+	}
 	fs := flag.NewFlagSet("acquire", flag.ContinueOnError)
 	origin := fs.String("origin", "", "PostgreSQL acquisition API origin")
 	archive := fs.String("archive", "", "registered source ID")
@@ -58,14 +61,10 @@ func (a *App) runAcquire(ctx context.Context, args []string, configPath *string,
 	if err != nil {
 		return err
 	}
-	cfg := config.Default()
-	if configPath != nil {
-		cfg, err = config.Load(*configPath)
-		if err != nil {
-			return errors.New("cannot read explicit acquisition credential config")
-		}
+	provider, err := a.acquisitionProvider(*workspace, configPath)
+	if err != nil {
+		return err
 	}
-	provider := slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(*workspace), a.apiURL, a.httpClient)
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	result, err := acquisition.Collect(ctx, api, provider, acquisition.Options{Workspace: *workspace, Channel: *channel, SourceName: *source, RunID: *runID, Since: since, Until: until, MaxPages: *maxPages})
@@ -76,4 +75,16 @@ func (a *App) runAcquire(ctx context.Context, args []string, configPath *string,
 		return fmt.Errorf("acquire stopped: %w", err)
 	}
 	return nil
+}
+
+func (a *App) acquisitionProvider(workspace string, configPath *string) (*slackapi.Client, error) {
+	cfg := config.Default()
+	if configPath != nil {
+		var err error
+		cfg, err = config.Load(*configPath)
+		if err != nil {
+			return nil, errors.New("cannot read explicit acquisition credential config")
+		}
+	}
+	return slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(workspace), a.apiURL, a.httpClient), nil
 }

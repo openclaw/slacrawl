@@ -205,6 +205,35 @@ separately reviewed recovery preserves them. Do not lower `user_version` or
 attempt an in-place downgrade. A data-only snapshot readable by an older binary
 does not make old-version syncing or opening an upgraded database safe.
 
+## Prepare an approved channel metadata seed
+
+For a newly registered private source, prepare the workspace and channels from
+a frozen operator-approved `slack-approved-channel-inventory/v1` inventory
+using policy `slack-report-channels/v1`. Supply the SHA-256 of the exact
+approved bytes through a trusted channel. Set the configured bot token through
+the provider environment. The inventory identifies `workspace`, `readerApp`,
+`readerUser` and a `channels` array with the approved `id`, `name`, `kind`,
+`member`, `archived`, `shared`, `external` and `orgShared` facts.
+
+```sh
+slacrawl acquire metadata-seed --manifest "$inventory" \
+  --manifest-sha256 "$approved_sha256" --output-dir "$new_private_dir" --timeout 2m
+```
+
+The reader checks its workspace, bot user and app with `auth.test` and, when
+needed, a `bots.info` lookup of its own bot ID. It pages the public/private
+channel directory and matches each approved ID, name, kind, membership,
+archive and sharing flags. A discrepancy stops preparation. The resulting
+`source.sqlite` contains one workspace and the admitted channel metadata.
+Member lists, topic/purpose text, messages, files and users are excluded.
+The private `scope.json` is the version-1 input for `delivery init` and
+`delivery stage-seed`. These commands and the subsequent `delivery deliver`
+use the separately qualified private destination and publisher identity.
+
+The output directory must be new. A disk error during writing can leave an
+incomplete directory. Use a fresh path on retry. A successful delivery receipt qualifies the
+metadata baseline. Message and thread coverage require separate acquisition.
+
 ## Scheduled PostgreSQL acquisition
 
 `operations/slacrawl-acquire@.service` and `.timer` are inactive Linux templates

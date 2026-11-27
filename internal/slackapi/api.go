@@ -337,28 +337,35 @@ func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack
 }
 
 func (c *Client) fetchChannelsWithToken(ctx context.Context, token string, workspaceID string) ([]slack.Channel, error) {
-	var (
-		cursor   string
-		channels []slack.Channel
-		seen     = map[string]bool{}
-	)
+	var channels []slack.Channel
+	err := visitWorkspaceChannels(ctx, c, token, workspaceID, func(page []slack.Channel) error {
+		channels = append(channels, page...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return channels, nil
+}
+
+func visitWorkspaceChannels[T any](ctx context.Context, c *Client, token, workspaceID string, visit func([]T) error) error {
+	var cursor string
+	seen := map[string]bool{}
 	for {
-		page, nextCursor, err := c.getConversations(ctx, token, &slack.GetConversationsParameters{
-			Cursor:          cursor,
-			ExcludeArchived: false,
-			Limit:           200,
-			Types:           []string{"public_channel", "private_channel"},
-			TeamID:          workspaceID,
+		page, nextCursor, err := getConversationsPage[T](ctx, c, token, &slack.GetConversationsParameters{
+			Cursor: cursor, Limit: 200, Types: []string{"public_channel", "private_channel"}, TeamID: workspaceID,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
-		channels = append(channels, page...)
+		if err := visit(page); err != nil {
+			return err
+		}
 		if nextCursor == "" {
-			return channels, nil
+			return nil
 		}
 		if seen[nextCursor] {
-			return nil, errors.New("conversations.list repeated cursor")
+			return errors.New("conversations.list repeated cursor")
 		}
 		seen[nextCursor] = true
 		cursor = nextCursor
