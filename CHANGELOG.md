@@ -4,6 +4,12 @@
 
 - Let `acquire` backfill history before a channel's first completed interval with an explicit `--since` and an `--until` at that interval's start, against a receiver that admits backfill runs.
 
+## 0.12.0 - 2026-11-26
+
+**Highlights:** Add PostgreSQL-owned Slack acquisition and cloud reads, native remote login through the OS keyring, and faster SQLite archive initialization and validation.
+
+- Update Gorilla WebSocket to fix GO-2026-6278 in Socket Mode client-frame masking.
+
 - Update Crawlkit, Slack API, SQLite, terminal and Go support dependencies, and keep the TruffleHog action and scanner pinned together at 3.99.9. Thanks @dependabot.
 
 - Create fresh SQLite schemas in one transaction to reduce initialization work
