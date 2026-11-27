@@ -7,7 +7,7 @@ toolchain go1.27.4
 require (
 	github.com/alecthomas/kong v1.17.0
 	github.com/golang/snappy v1.0.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/openclaw/crawlkit v0.18.0
 	github.com/slack-go/slack v0.36.0
